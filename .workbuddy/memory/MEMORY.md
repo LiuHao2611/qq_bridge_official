@@ -55,3 +55,19 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 
 * 部署命令：`docker compose -f docker-compose.official.yml up -d --build`；
   健康检查 `docker ps --filter name=qq-bridge-official`。
+
+## 战斗系统口径（2026-11-16 确立）
+* **属性↔战斗强关联是硬要求**（用户原话：不能人物卡摆一堆数字、战斗只播成败）。
+  六维战斗作用**唯一源**是 `config.STAT_BATTLE_ROLE`，人物卡 / 战报归因 / cmd_panel
+  三处共用；改这一处即可同步，别在三处各写一份文案。
+* 机缘的战斗落点 = `core.hero_aid_rate()` / `roll_hero_aid()`，开场掷一次，基础 0.3%、
+  硬顶 2%——**刻意压低以免改变 TTK/胜率**，不许为了"彩蛋好看到处触发"而调高。
+  触发时一招制敌、毫发无伤，仍走正常胜负结算，`res["hero_aid"]` 供文案标注因果。
+* 战报内联归因统一走 `commands._battle_line()`。dot / reflect / miss / taken / aid
+  等特殊 log 条目**字段不齐，一律 `.get`**，禁止硬取 `it['crit']`（2026-11-16 回包 SENT=0 事故）。
+* 人物卡六维格子右端的「→战斗作用」短标有几何守门：
+  `test_battle_depth.py::test_statcell_label_role_no_overlap` 用模板同一套 text_width
+  校验 label+role 不超过 `cell_w-40`。改战斗作用文案前先看这条会不会红。
+* **PVP 已拍板方向**：无惩罚切磋；自动随机放技（不做同时回合报招）；仅本群；
+  不要赛季；真实损失机制虽被认可但先不启用。`core.duel()` 是现成双人模拟器底座，
+  别重写战斗内核；切磋只更新荣誉战绩，不扣血不掉钱。
