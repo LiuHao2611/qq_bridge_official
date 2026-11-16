@@ -37,5 +37,21 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 官方通道身份是 **openid**，与 NapCat 的 QQ 号不是同一命名空间，旧档不继承。
 * 官方 msg_type 互斥：0=文本 / 2=markdown+keyboard / 7=富媒体图片；
   图片与按钮合并必须「素材上传 → 内嵌 markdown + keyboard 同段」，GIF 无法合并。
+* **图片+按钮绝不分离（2026-11-16 用户硬要求）**：`official.py` 的
+  `OFFICIAL_MERGE_FALLBACK_MODE=image_only`（默认）——素材上传失败合并不了时只发纯图片、
+  绝不另发按钮条。想回退两条设 `two_messages`。异火：无传承宗门纯文本一句、无图无按钮
+  （`commands.has_tradition_flame`），有传承才出完整面板。
+
+## 🚨 铁律：GitHub API 推送缓存必须用内容指纹（2026-11-16 事故后确立）
+* `tmp/push_via_api.py` 走 Git Data API 绕过 git HTTPS CONNECT 502。
+  blob 缓存 key **必须**是 `hashlib.sha1(raw)`（内容指纹），**绝不能用路径+长度**——
+  改动前后字节数碰巧不变会命中旧 sha，改动推不上去但脚本仍报 PUSH_OK。
+* **验收远端必须比对内容特征**：curl `raw.githubusercontent.com/<owner>/<repo>/main/<path>?t=<时间戳>`
+  后 grep 本轮改动的**标志性字符串**（如新函数名/开关名）。**只信 PUSH_OK = 假通过**。
+  ⚠️ 别用 `git hash-object` 对比 GitHub tree 的 blob sha——autocrlf 会把工作区 LF 转成
+  CRLF 算 sha，与脚本 POST 的 LF raw 得到的 GitHub sha 必然不同，会产生"远端是旧内容"的假象。
+  内容特征 grep 才是唯一可靠判据（加 `?t=时间戳` 破 CDN 缓存）。
+* 缓存污染时 `echo {} > tmp/blob_sha.json` 清空全量重推（642 文件约 15 分钟），别做"迁移"。
+
 * 部署命令：`docker compose -f docker-compose.official.yml up -d --build`；
   健康检查 `docker ps --filter name=qq-bridge-official`。
