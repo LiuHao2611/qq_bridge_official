@@ -68,6 +68,7 @@ nonebot.load_plugin("src.plugins.game_router")
 
 cfg = sys.modules["src.plugins.doupo.config"]
 core = sys.modules["src.plugins.doupo.core"]
+fac = sys.modules["src.plugins.doupo.factions"]
 cmds = sys.modules["src.plugins.doupo.commands"]
 card = sys.modules["src.plugins.doupo.card"]
 p_mod = sys.modules["src.plugins.doupo"]
@@ -273,6 +274,12 @@ def _p_feed(p):
     core.add_item(p, "药渣", 100000)
 
 
+def _p_flames(p):
+    # 异火「出图」用例必须在有传承宗门上验证（2026-11-16：无传承只出纯文本）。
+    p["faction"] = "xiaojia"
+    p["faction_name"] = fac.FACTIONS["xiaojia"]["name"]
+
+
 def _p_buy(p):
     p["gold"] = 1000000
 
@@ -314,7 +321,7 @@ def _p_give(p):
 
 PREPS = {
     "break": _p_break, "fight": _p_fight, "enhance": _p_enhance,
-    "skillup": _p_skillup, "feed": _p_feed, "buy": _p_buy,
+    "skillup": _p_skillup, "feed": _p_feed, "flames": _p_flames, "buy": _p_buy,
     "craft": _p_craft, "use": _p_use, "taccept": _p_taccept,
     "tsubmit": _p_tsubmit, "main": _p_main, "rob": _p_rob, "give": _p_give,
 }
@@ -339,7 +346,8 @@ CASES = [
     dict(id="09_skills", text="斗技", img="png", must=[], ban=[]),
     dict(id="10_skillup", text="升级 龙吟碎", img=None, must=["升至"],
          ban=["不足", "已至"], prep="skillup"),
-    dict(id="11_flames", text="异火", img="png", must=[], ban=[]),
+    # 异火出图只在有传承宗门验证（prep 设萧家）；无传承宗门改用 31_flames_none 验纯文本
+    dict(id="11_flames", text="异火", img="png", must=[], ban=[], prep="flames"),
     dict(id="12_feed", text="养火 青莲地心火", img=None, must=["晋为", "投入"],
          ban=["没有药渣"], prep="feed"),
     dict(id="13_shop", text="宝库", img="png", must=[], ban=[]),
@@ -376,6 +384,10 @@ CASES = [
     dict(id="28_sect", text="宗门", img="png", must=[], ban=[]),
     dict(id="29_switch", text="转宗 云岚宗", img=None,
          must=["已转投", "你已在", "没有这个宗门", "尚无"], ban=[]),
+    # 31：2026-11-16 硬要求——29 转宗到云岚宗（无传承）后，异火只回纯文本一句，
+    # 无图无按钮。img=None + ban 图片由 runner 通用判据保证「纯文本口令夹带图片段」即 FAIL。
+    dict(id="31_flames_none", text="异火", img=None, must=["本宗无传承异火"],
+         ban=["可自行收服", "青莲地心火"]),
 ]
 
 
@@ -455,8 +467,11 @@ async def static_checks():
     # 菜单唯一源 = 29 条，且每条口令都要出现在纯文本菜单里（格式无缺失）
     menu_txt = cmds.menu_text()
     total = cmds.menu_total()
-    ok = total == len(CASES)
-    record("STATIC 菜单条数 = 验收用例数", ok, f"menu_total={total} cases={len(CASES)}")
+    # 用例数可多于菜单条数：同一口令按状态分流会有多条用例（如异火「有传承出图」+
+    # 「无传承纯文本」= 11_flames / 31_flames_none）。但每条菜单口令必须有用例覆盖，
+    # 由下方 missing 检查守门，故此处只要求 cases >= menu_total。
+    ok = len(CASES) >= total
+    record("STATIC 验收用例数 >= 菜单条数", ok, f"menu_total={total} cases={len(CASES)}")
     fe = check_text(menu_txt)
     record("STATIC 菜单纯文本格式", not fe, "；".join(fe) or f"{len(menu_txt)} 字")
     missing = [c["text"].split()[0] for c in CASES

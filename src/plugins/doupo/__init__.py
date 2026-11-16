@@ -421,13 +421,17 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, flames)
     qq = str(event.user_id)
-    # 纯文本兜底（与图片同源）
+    p = await store.get_player(qq)
+    # 2026-11-16 用户硬要求：本宗无传承异火 → 纯文本一句提示，
+    # 绝不渲染卡片 / 挂按钮（避免本宗没异火却发一张异火图 + 分离的按钮条）。
+    if not p or not commands.has_tradition_flame(p):
+        await flames.finish(await commands.cmd_flames(store, qq))
+        return
+    # 有传承：先渲染卡片；渲染失败才降级纯文本（与纯文本同源）
     msg = await commands.cmd_flames(store, qq)
     png = None
     try:
-        p = await store.get_player(qq)
-        if p:
-            png = await card.render_flames(p)
+        png = await card.render_flames(p)
     except Exception as e:  # noqa: BLE001
         logger.warning("斗破异火卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:

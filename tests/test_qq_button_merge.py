@@ -497,8 +497,48 @@ def test_send_has_merge_and_fallback_branches():
     src = _OFFICIAL.read_text(encoding="utf-8")
     assert "_build_merged_card_segment" in blob, "send() 未接图片+按钮合一"
     assert "official_merge_fallback_two_messages" in src, \
-        "send() 缺素材失败降级回两条的分支（会静默吞错/丢图）"
+        "send() 缺素材失败降级分支（会静默吞错/丢图）"
     assert '"merged_card"' in src, "合并段未登记 merged_card kind"
+
+
+def test_merge_fallback_never_sends_separate_buttons_by_default():
+    """2026-11-16 用户硬要求：图+按钮不能分开发。
+
+    素材上传失败降级时，默认 image_only 模式只发图片段、绝不另发按钮段。
+    AST 守门：降级分支里 append('keyboard') 必须受
+    `has_buttons and (not wanted_card or not _MERGE_FALLBACK_IMAGE_ONLY)` 守卫，
+    即『本意是图+按钮卡 + image_only』时按钮段绝不 append。
+    注入反例（把守卫删成 `if has_buttons:`）本守门必须 FAIL。
+    """
+    src = _OFFICIAL.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    send = next((n for n in ast.walk(tree)
+                 if isinstance(n, ast.AsyncFunctionDef) and n.name == "send"), None)
+    assert send is not None, "official.py 找不到 send()"
+    # 模块级开关默认必须 image_only（非 two_messages）
+    assert "_MERGE_FALLBACK_IMAGE_ONLY" in src, "缺 image_only 降级开关"
+    assert 'OFFICIAL_MERGE_FALLBACK_MODE' in src and 'image_only' in src, \
+        "降级开关默认值不是 image_only"
+
+    # 找降级分支里含 _build_button_segment 的 if：其 test 必须同时含
+    # has_buttons 与 _MERGE_FALLBACK_IMAGE_ONLY 两个守卫词。
+    btn_guards = [
+        n for n in ast.walk(send)
+        if isinstance(n, ast.If) and "_build_button_segment" in ast.unparse(n)
+    ]
+    assert btn_guards, "降级分支找不到按钮段构造"
+    ok = any(
+        "has_buttons" in ast.unparse(n.test)
+        and "_MERGE_FALLBACK_IMAGE_ONLY" in ast.unparse(n.test)
+        for n in btn_guards
+    )
+    assert ok, (
+        "降级按钮段缺 image_only 守卫：合并失败时仍会另发按钮条，"
+        "用户端出现『图片一条 + 快捷指令一条』分离（2026-11-16 事故）"
+    )
+    # 确认有 image_only 的日志标记，便于真机排查
+    assert "official_merge_fallback_image_only" in src, \
+        "缺 image_only 降级日志标记，无法证明走了纯图片路径"
 
 
 def _guard_zero_button_no_empty_keyboard(src: str):
@@ -706,6 +746,7 @@ if __name__ == "__main__":
         test_markdown_image_syntax,
         test_merge_segment_wiring,
         test_send_has_merge_and_fallback_branches,
+        test_merge_fallback_never_sends_separate_buttons_by_default,
         test_zero_button_no_empty_keyboard,
         test_merge_segment_has_markdown_and_keyboard_same_message,
         test_injection_guards,
