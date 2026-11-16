@@ -264,6 +264,9 @@ def _p_enhance(p):
 
 def _p_skillup(p):
     core.add_item(p, cfg.SKILL_UP_ITEM, 500)
+    # 新模型：升级只能升已领悟的技；本用例验升级流程，先确保龙吟碎已领悟
+    if isinstance(p.get("learned"), list) and "龙吟碎" not in p["learned"]:
+        p["learned"].append("龙吟碎")
 
 
 def _p_feed(p):
@@ -364,6 +367,9 @@ CASES = [
     dict(id="26_skillinfo", text="斗技详情 狂狮怒罡", img=None,
          must=["出处：", "不属于你的宗门"], ban=[]),
     dict(id="27_loadout", text="上阵", img=None, must=["当前上阵"], ban=[]),
+    # 30：2026-11-16 新增「学斗技」随机领悟（入道只给1门后逐一学习的入口）
+    dict(id="30_insight", text="学斗技", img=None,
+         must=["领悟", "已领悟"], ban=["金币不足", "战力不足"]),
     # 28/29：宗门查看与转宗（2026-11-15 补，进阶池/隐世池 17 派的入口）
     # 28 同日卡片化（doupo_faction 模板）：宗门是基本固定内容，必须出卡片，
     # 断言改为「返回 PNG 图片」；纯文本只作为渲染异常时的降级兜底。

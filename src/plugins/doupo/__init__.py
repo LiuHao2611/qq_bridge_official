@@ -8,8 +8,9 @@
   3) 调 commands.cmd_* 把结果文字回群
 
 ⚠️ 优先级：主插件聊天处理器是 on_message(priority=10, block=False)。
-本插件全部 matcher 用 priority=5 + block=True —— 先于聊天处理器运行，
-且命中后阻断后续处理器，避免"口令被 LLM 抢答/双重回复"。
+本插件全部 matcher 用 block=True —— 先于聊天处理器运行，命中即阻断，
+避免"口令被 LLM 抢答/双重回复"。优先级绝大多数为 5；仅精确口令
+「斗技详情」用 4（PRI-1）抢在「斗技」列表口令之前，避免被列表吃掉。
 
 ⚠️ 模式隔离：斗破 / 修仙 现在都用纯中文口令，靠「按用户记录的当前模式」分流。
    谁发「斗破菜单」→ 他后续口令走斗破；发「修仙菜单」→ 走修仙（菜单是唯一切换口）。
@@ -277,10 +278,11 @@ async def _(event: Event):
     await enh.finish(await commands.cmd_enhance(store, str(event.user_id)))
 
 
-# 学斗技必须排在 skills_cmd 之前（PRI-1 抢先），否则「学斗技」里含「斗技」
-# 会被列表口令 skills_cmd 吃掉。与「斗技详情」同属需要抢先的精确口令。
+# 学斗技必须注册在 skills_cmd 之前（同 PRI 下先注册者先拦），否则「学斗技」
+# 里含「斗技」会被列表口令 skills_cmd 吃掉。与「斗技详情」同属需要抢先的精确
+# 口令，但保持 priority=PRI（不额外降优先级），与全部 matcher 一致。
 insight_cmd = on_regex(_pat(r"(?:学斗技|领悟斗技|悟技)"),
-                       priority=PRI - 1, block=True, rule=_mode_is("doupo"))
+                       priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
 @insight_cmd.handle()
