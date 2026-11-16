@@ -39,6 +39,50 @@ def _fmt(n) -> str:
     return str(n)
 
 
+def _battle_line(it: dict, who: str = "p") -> str:
+    """把一条战报 log 渲染成「行动 + 伤害 + 属性归因」的内联文案。
+
+    2026-11-16 用户诉求：人物卡每个属性要和战斗强关联，不能「卡上摆数字、
+    战斗只播成败」。故每条行动后括注真正起作用的那项属性/机制，让玩家一眼
+    看懂「我堆的属性换来了什么」。特殊条目（持续伤害/反伤/被控/闪避）字段
+    不齐，一律用 .get 取值，杜绝 KeyError（见 2026-11-16 战斗回包崩溃事故）。
+
+    :param who: "p"=PVE 我方视角；"v"=PVP 对手视角（前缀用「对方」）。
+    """
+    if it == "...":
+        return "　…"
+    kind = str(it.get("kind") or "出手")
+    dmg = int(it.get("dmg") or 0)
+    pre = "　→ " if who != "v" else "　对方 "
+
+    # 贵人相助：机缘彩蛋，一招制敌
+    if it.get("aid"):
+        helper = str(it.get("helper") or "无名斗皇")
+        return f"✨ {helper}破空而至，一招制敌！（机缘）"
+
+    # 被控 / 闪避：都不造成伤害，归因到控场斗技 / 敏捷
+    if it.get("miss"):
+        if kind == "被控":
+            return f"{pre}{kind}，无法出手（斗技·控场）"
+        return f"{pre}身形一晃，避开了兽击（敏捷·闪避）"
+
+    # 持续伤害 / 反伤：斗技余威与反击
+    if it.get("dot"):
+        return f"{pre}{kind} {dmg}（斗技·持续）"
+    if it.get("reflect"):
+        return f"{pre}{kind} {dmg}（斗技·反伤）"
+
+    # 兽击（敌方命中我方）：归因到我方防御减伤
+    if it.get("taken"):
+        return f"　← {kind} {dmg}（防御减伤）"
+
+    # 我方出手：技能=力量+斗气；普攻=力量+武器；暴击再点敏捷
+    via = "力量·斗气" if it.get("skill") else "力量·武器"
+    if it.get("crit"):
+        via += "·暴击(敏捷)"
+    return f"{pre}{kind} {dmg}（{via}）"
+
+
 def _chance_lines(ch: dict | None) -> list[str]:
     """把任务途中触发的机遇拼成回复末尾独立小段。
 
@@ -222,10 +266,13 @@ async def cmd_panel(store, qq) -> str:
         wp[k] = cfg.weapon_stat(base, w) if w < 9 else cfg.WEAPON["max_stats"][k]
     rows.append(f"　力量 {wp['力量']}　敏捷 {wp['敏捷']}")
     rows.append(f"　斗气 {wp['斗气']}　防御 {wp['防御']}")
+    role = cfg.STAT_BATTLE_ROLE
     rows += [
         "",
         f"　力量 {st['力量']}　敏捷 {st['敏捷']}　斗气 {st['斗气']}",
         f"　防御 {st['防御']}　机缘 {st['机缘']}　体力 {st['体力']}",
+        "　战斗："
+        + "／".join(f"{k}→{role[k]}" for k in cfg.PANEL_ORDER),
         "",
         f"❤️ 气血 {_bar(p['hp'], st['体力'])} {p['hp']}/{st['体力']}",
         f"💠 斗气 {_bar(p['mp'], core.mp_max(p))} {p['mp']}/{core.mp_max(p)}",
@@ -317,26 +364,16 @@ async def cmd_fight(store, qq) -> str:
         chance = core.advance_task(p, kinds)
     await store.put_player(p)
 
-    # 战报：只取前 3 回合 + 末回合，避免刷屏
+    # 战报：只取前 3 回合 + 末回合，避免刷屏；每条内联标注起作用的属性。
     seq = res["log"]
     show = seq if len(seq) <= 6 else seq[:3] + ["..."] + seq[-2:]
     lines = [f"⚔️ 你遭遇【{mon['name']}】（{mon['lv']} 级）"]
     for it in show:
-        if it == "...":
-            lines.append("　…")
-        elif it.get("miss"):
-            lines.append("　→ 你身形一晃，避开了兽击")
-        elif it.get("taken"):
-            lines.append(f"　← 兽击 {it['dmg']}")
-        else:
-            # 战报里除「出手」条目外，还有持续伤害/反伤/被控等特殊条目——
-            # 它们没有 crit 键（见 core.fight 的 dmg_log.append）。硬取 it['crit']
-            # 会在这些条目上 KeyError，导致整条战斗回包发不出去（2026-11-16 事故：
-            # 新技能模型下入道只学 1 门低阶技，触发了此前没走到的持续伤害分支）。
-            tag = f"{it['kind']}" + ("（暴击！）" if it.get("crit") else "")
-            lines.append(f"　→ {tag} {it['dmg']}")
+        lines.append(_battle_line(it, who="p"))
 
     if res["win"]:
+        if res.get("hero_aid"):
+            lines.append("🍀 机缘际会，贵人相助——此战不伤分毫。")
         lines.append(f"🏆 斩获！{res['rounds']} 回合，受伤 {res['taken']}")
         lines.append(f"　修为 +{_fmt(res['exp'])}　金币 +{res['gold']}")
         if res["drops"]:

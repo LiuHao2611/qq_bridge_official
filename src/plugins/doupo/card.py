@@ -122,6 +122,9 @@ def build_data(p: dict) -> dict:
         "alch_name": alch_name, "alch_exp": alch_exp, "alch_need": alch_need,
         "weapon_name": wname, "weapon_level": wlv, "weapon_stats": wp,
         "stats": st,
+        # 六维的战斗作用（2026-11-16 用户诉求：卡上属性与战斗强关联，不能只摆数字）。
+        # 与 commands 战报内联归因、core 实际计算公式三者同源，杜绝图文说两回事。
+        "stat_roles": dict(cfg.STAT_BATTLE_ROLE),
         "hp": int(p.get("hp", 0)), "hp_max": int(st["体力"]),
         "mp": int(p.get("mp", 0)), "mp_max": core.mp_max(p),
         "gold": int(p.get("gold", 0)),
