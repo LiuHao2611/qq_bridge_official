@@ -135,6 +135,11 @@ def test_cmd_skills_shows_flame_group_without_duplication():
 
 def test_cmd_flames_shows_active_passive_and_source():
     p = _p()
+    # 2026-11-16 需求变更：无传承异火的宗门，异火口令只给纯文本提示。
+    # 这里要验的是「有传承宗门才展开养成面板」，所以显式落到萧家，
+    # 不能再用随机宗门（可能落到云岚宗等无传承派，功能早退属正确行为）。
+    p["faction"] = "xiaojia"
+    p["faction_name"] = "萧家"
     p["flames"]["青莲地心火"] = 2
     out = asyncio.run(commands.cmd_flames(MemStore(p), "10001"))
     assert "主动【青莲火】" in out, "异火面板没显示主动技"

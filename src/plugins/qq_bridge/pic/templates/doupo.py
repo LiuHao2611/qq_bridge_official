@@ -193,8 +193,13 @@ def _headshot(b64: str):
 
 
 def _statcell(c: Canvas, x: int, y: int, w: int, p: dict[str, str],
-              value: str, label: str, size: int = FS_STAT) -> None:
-    """六维单元：圆角底 + 大数值 + 小标签（数值按可用宽度自动降字号）。"""
+              value: str, label: str, size: int = FS_STAT,
+              role: str = "") -> None:
+    """六维单元：圆角底 + 大数值 + 小标签（数值按可用宽度自动降字号）。
+
+    role 为战斗作用短标（如「伤害」「闪避·暴击」），渲染在标签行右侧，
+    让每个属性一眼可见它换来了什么（2026-11-16 用户诉求）。
+    """
     c.rounded_rect((x, y, x + w, y + CELL_H), radius=12,
                    fill=p["cell_bg"], outline=p["cell_line"], width=1)
     # 数值（上方，左对齐）：大字加粗；度量与绘制同 role，避免右对齐漂移
@@ -211,8 +216,11 @@ def _statcell(c: Canvas, x: int, y: int, w: int, p: dict[str, str],
     if _w(txt, sz, _role(sz)) > avail:
         txt = _fit(txt, avail, sz, _role(sz))
     S.key(c, (x + 20, y + 22), txt, size=sz, color=p["text_color"])
-    # 标签（下方）：小字明确不加粗
+    # 标签（下方）：小字明确不加粗；右端附战斗作用短标（属性↔战斗强关联）
     S.small(c, (x + 20, y + CELL_H - 20), label, size=FS_TINY, color=p["dim_color"])
+    if role:
+        S.small(c, (x + w - 20, y + CELL_H - 20), "→" + role,
+                size=FS_TINY, color=p["dim_color"], anchor="rm")
 
 
 def _bar(c: Canvas, x: int, y: int, w: int, pct: int,
@@ -352,6 +360,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
     # ---- 六维 3×2 网格 ----
     st = data.get("stats") or {}
+    roles = data.get("stat_roles") or {}
     cells = [
         ("力量", str(int(st.get("力量", 0)))),
         ("敏捷", str(int(st.get("敏捷", 0)))),
@@ -368,7 +377,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         row = i // 3
         cx = x0 + col * (cell_w + cell_gap)
         cy = grid_y + row * (CELL_H + cell_gap)
-        _statcell(c, cx, cy, cell_w, p, val, lab, size=FS_STAT)
+        _statcell(c, cx, cy, cell_w, p, val, lab, size=FS_STAT,
+                  role=str(roles.get(lab) or ""))
     y += H_GRID
 
     # ---- 气血 / 斗气 条 ----

@@ -549,6 +549,35 @@ def set_loadout(p, names) -> list[str]:
     return sk_mod.ensure_loadout(p)
 
 
+# ---------------------------------------------------------------------------
+# 机缘·贵人相助（2026-11-16 用户设计，让机缘与战斗强关联）
+# ---------------------------------------------------------------------------
+def hero_aid_rate(p) -> float:
+    """本场战斗遇贵人相助的概率：极低基础 + 随机缘加成，硬顶 2%。
+
+    * 机缘的战斗关联点之一——人物卡「机缘」不再是摆设：
+      机缘越高，越容易在绝境时遇到无名斗皇一招制敌（符合原著气运设定）。
+    * 默认概率极低（≤2%），不改变 TTK/胜率平衡；纯稀有彩蛋。
+    """
+    luck = max(0, int(p.get("luck", 0)))
+    rate = float(cfg.HERO_AID_BASE_RATE) + luck / float(cfg.HERO_AID_LUCK_SCALE)
+    return min(float(cfg.HERO_AID_MAX_RATE), max(0.0, rate))
+
+
+def roll_hero_aid(p, rng=random.random) -> dict | None:
+    """战斗开场掷一次机缘：命中则返回贵人信息，未命中返回 None。
+
+    独立消耗一次 rng（调用方在回合循环之前调用，不影响战斗内随机序列的语义）。
+    返回 ``{"name","rate","luck"}``；名字从 ``HERO_AID_NAMES`` 按 rng 取。
+    """
+    rate = hero_aid_rate(p)
+    if rng() >= rate:
+        return None
+    names = cfg.HERO_AID_NAMES
+    name = names[min(len(names) - 1, int(rng() * len(names)))]
+    return {"name": name, "rate": rate, "luck": max(0, int(p.get("luck", 0)))}
+
+
 def fight(p, mon, rng=random.random) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
 
@@ -570,7 +599,15 @@ def fight(p, mon, rng=random.random) -> dict:
     p_fx, m_fx = fx.new_state(), fx.new_state()
     m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
 
-    while rounds < 15 and m_hp > 0 and hp > 0:
+    # 机缘·贵人相助：开场掷一次（极低概率），命中则无名强者一招制敌。
+    # 放在回合循环之前、只消耗一次 rng，不影响战斗内随机序列的可复现性。
+    aid = roll_hero_aid(p, rng)
+    if aid:
+        m_hp = 0
+        dmg_log.append({"dmg": int(mon["hp"]), "kind": "贵人相助", "source": "机缘",
+                        "helper": aid["name"], "aid": True, "skill": False})
+
+    while not aid and rounds < 15 and m_hp > 0 and hp > 0:
         rounds += 1
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
@@ -622,9 +659,12 @@ def fight(p, mon, rng=random.random) -> dict:
     p["hp"] = max(0 if not win else 1, hp)
     p["mp"] = mp_max(p)
 
+    # 贵人相助：毫发无伤、1 回合速胜，胜负结算照常走下方 win 分支。
+    shown_rounds = max(1, rounds)
     res = {
-        "win": win, "rounds": rounds, "log": dmg_log,
+        "win": win, "rounds": shown_rounds, "log": dmg_log,
         "taken": taken, "mon": mon, "mon_hp_left": max(0, m_hp),
+        "hero_aid": aid,  # None 或 {name,rate,luck}，文案层据此标注机缘因果
     }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1
