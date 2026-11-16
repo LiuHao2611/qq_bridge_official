@@ -260,7 +260,8 @@ async def main():
     await fire("升级 未领悟斗技（提示先学）", mk_group(A, "升级 龙吟碎"), "还没领悟")
     # 用户诉求「学斗技口令看不到」：该口令必须在真实 matcher 链路里命中并回包。
     await fire("学斗技 口令命中并回包", mk_group(A, "学斗技"), None)
-    await fire("异火", mk_group(A, "异火"), None, expect_image=True)
+    # 2026-11-16 硬要求：A 是无传承宗门（云岚宗），异火只回纯文本一句，无图无按钮。
+    await fire("异火 无传承→纯文本", mk_group(A, "异火"), "本宗无传承异火")
     await fire("养火 青莲地心火", mk_group(A, "养火 青莲地心火"), "药渣")
     await fire("宝库", mk_group(A, "宝库"), None, expect_image=True)
     await fire("买 血灵草 2", mk_group(A, "买 血灵草 2"), "血灵草")
@@ -323,9 +324,12 @@ async def main():
     # 21:16:08 实测：距上一条出图 18 秒命中 25s 冷却，卡片渲染了却只发文字。
     # 下面整串口令全部落在旧 USER_GAP 窗口内，且用户先建号（有角色才能出人物卡），
     # 因此只要有人把限流 / 降级接回链路，这些断言就会立刻失败。
+    # 注：「异火」不在此矩阵——2026-11-16 起它按本宗是否有传承异火分流
+    # （无传承=纯文本、有传承=出图），不是无条件出图口令，另在上方 A 用例与
+    # menu_full 的 11_flames/31_flames_none 双向覆盖。
     E = 10021
     await fire("建号 入道 必须出图", mk_private(E, "入道"), None, expect_image=True)
-    for kw in ("人物", "斗技", "宝库", "背包", "排行", "异火"):
+    for kw in ("人物", "斗技", "宝库", "背包", "排行"):
         SENT.clear()
         await handle_event(BOT, mk_private(E, kw))
         imgs = sum(1 for s in SENT if has_image(s))

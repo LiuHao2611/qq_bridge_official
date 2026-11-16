@@ -638,22 +638,38 @@ async def cmd_loadout(store, qq, args) -> str:
     return "✅ 已上阵：" + "、".join(f"{e['name']}[{e['tier']}]" for e in core.loadout_entries(p))
 
 
+def has_tradition_flame(p: dict) -> bool:
+    """本宗是否有传承异火（与宗门卡/异火卡同一口径：factions[fid]['flames']）。
+
+    2026-11-16 用户硬要求：无传承异火的宗门，「异火」口令只给纯文本一句提示，
+    不渲染卡片、不挂按钮；有传承才展示完整异火面板供收服/养成。
+    """
+    fid = str(p.get("faction") or "")
+    return bool(list(fac.FACTIONS.get(fid, {}).get("flames", []) or []))
+
+
+def no_tradition_flame_msg(p: dict) -> str:
+    """无传承异火时的纯文本提示（无图无按钮）。"""
+    fid = str(p.get("faction") or "")
+    fname = str(p.get("faction_name") or fac.FACTIONS.get(fid, {}).get("name") or "本宗")
+    return f"🔥 {fname}本宗无传承异火，暂无异火可展示或养成。"
+
+
 async def cmd_flames(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
+    # 2026-11-16 用户硬要求：无传承异火 → 纯文本一句，不出图不挂按钮。
+    if not has_tradition_flame(p):
+        return no_tradition_flame_msg(p)
     fl = p.get("flames") or {}
-    # 2026-11-16 修复：先说清「本宗传承异火」，避免本宗无传承却看到养成列表的矛盾感
     fid = str(p.get("faction") or "")
     trad = list(fac.FACTIONS.get(fid, {}).get("flames", []) or [])
     fname = str(p.get("faction_name") or fac.FACTIONS.get(fid, {}).get("name") or "本宗")
     out = [f"🔥 异火　药渣 ×{core.count_item(p, '药渣')}"]
-    if trad:
-        out.append(f"　【{fname}·本宗传承】")
-        for t in trad:
-            out.append(f"　　{t}")
-    else:
-        out.append(f"　【{fname}】本宗无传承异火。")
+    out.append(f"　【{fname}·本宗传承】")
+    for t in trad:
+        out.append(f"　　{t}")
     out.append("　以下为游历中可自行收服、喂养的异火（与本宗传承无关）：")
     for f in cfg.FLAMES:
         name = f["name"]

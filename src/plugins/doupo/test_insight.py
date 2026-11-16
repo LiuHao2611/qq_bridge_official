@@ -183,23 +183,63 @@ def test_cmd_insight_text():
 
 
 def test_flames_shows_faction_tradition():
-    # 云岚宗：无传承异火 → 明确提示
+    # 云岚宗：无传承异火 → 纯文本一句提示，无图无按钮、无养成列表
+    # （2026-11-16 用户硬要求：没异火传承的宗门不要展示任何异火）
     p = core.create_player("flame-none", "云", "g1")
     p["faction"] = "yunlanzong"
     p["faction_name"] = fac.FACTIONS["yunlanzong"]["name"]
+    check("无传承判定为 False", commands.has_tradition_flame(p) is False, str(p.get("faction")))
     out = asyncio.run(commands.cmd_flames(MemStore(p), "x"))
     check("本宗无传承异火提示", "本宗无传承异火" in out, out[:100])
-    check("养成列表仍在", "可自行收服" in out, out[:100])
-    d = card.build_flames_data(p)
-    check("异火卡含传承行", any("本宗传承" in str(r.get("title", ""))
-                            for r in d["rows"]), str([r["title"] for r in d["rows"]]))
+    check("无传承不列养成列表（纯文本一句）", "可自行收服" not in out and "青莲地心火" not in out,
+          out[:160])
+    check("无传承提示不含按钮/图片引导", "上阵" not in out and "斗技详情" not in out, out[:160])
 
-    # 萧家：有传承异火 → 列出来
+    # 萧家：有传承异火 → 列出来（完整养成面板）
     p2 = core.create_player("flame-has", "萧", "g1")
     p2["faction"] = "xiaojia"
     p2["faction_name"] = fac.FACTIONS["xiaojia"]["name"]
+    check("有传承判定为 True", commands.has_tradition_flame(p2) is True, str(p2.get("faction")))
     out2 = asyncio.run(commands.cmd_flames(MemStore(p2), "x"))
     check("本宗有传承异火列出", "萧玄" in out2 and "本宗传承" in out2, out2[:120])
+    check("有传承仍列养成列表", "可自行收服" in out2, out2[:120])
+
+
+def test_flames_handler_no_card_without_tradition():
+    """守门：异火 handler 必须先判 has_tradition_flame，无传承直接纯文本 finish，
+    绝不走 render_flames/finish_card（2026-11-16「没传承不要展示任何异火/无图无按钮」）。
+
+    用 AST 检查，防止有人把『无传承也出图』的旧逻辑接回来。
+    """
+    import ast as _ast
+    from pathlib import Path as _Path
+
+    init_py = _Path(__file__).with_name("__init__.py").read_text(encoding="utf-8")
+    tree = _ast.parse(init_py)
+    flames_fn = None
+    # flames handler 是注册在 flames matcher 上的装饰器函数体：找含
+    # has_tradition_flame 调用的那个 async 函数
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.AsyncFunctionDef):
+            blob = _ast.unparse(node)
+            if "cmd_flames" in blob and "get_player" in blob:
+                flames_fn = node
+                break
+    check("找到异火 handler", flames_fn is not None, "AST 未定位 cmd_flames handler")
+    if flames_fn is None:
+        return
+    blob = _ast.unparse(flames_fn)
+    check("handler 调用 has_tradition_flame", "has_tradition_flame" in blob, blob[:200])
+    # 关键：render_flames 必须在 has_tradition_flame 的『有传承』分支之后，
+    # 即 handler 里存在 if not ...has_tradition_flame ... finish / return 的早退守卫。
+    early_return = any(
+        isinstance(n, _ast.If)
+        and "has_tradition_flame" in _ast.unparse(n.test)
+        and "return" in _ast.unparse(n)
+        for n in _ast.walk(flames_fn)
+    )
+    check("无传承早退守卫（不渲染卡片）", early_return,
+          "handler 缺『无传承→纯文本早退』守卫，可能又发异火图+按钮")
 
 
 def _run():

@@ -42,6 +42,14 @@ _IMAGE_BUTTON_MERGE = os.getenv("OFFICIAL_IMAGE_BUTTON_MERGE", "true").strip().l
     "false", "0", "no", "off",
 )
 
+#: 素材上传失败（COS ConnectError 等）导致合并不了时的降级策略（2026-11-16 用户硬要求）。
+#: 用户原话「图片和按钮分开了，不要再出现这种问题」「如果输出图片和按钮，就不要分开发送」。
+#: 默认 image_only：合并失败只发纯图片段、绝不另发按钮段——用户端永远不会看到
+#: 「图片一条 + 快捷指令按钮一条」的分离形态。设 two_messages 可回退到旧的两条行为。
+_MERGE_FALLBACK_IMAGE_ONLY = os.getenv(
+    "OFFICIAL_MERGE_FALLBACK_MODE", "image_only"
+).strip().lower() != "two_messages"
+
 #: 官方通道身份前缀：与 NapCat 的 "u:%d"/"g:%d" 明确区分，避免串号
 USER_PREFIX = "official:u:"
 GROUP_PREFIX = "official:g:"
@@ -375,7 +383,9 @@ class OfficialChannel(Channel):
                              cmd=btn_cmd))
             has_buttons = False
 
-        # ---- 图片 + 按钮合一（默认开；失败降级两条；零按钮时跳过）----
+        # ---- 图片 + 按钮合一（默认开；失败见下方降级策略；零按钮时跳过）----
+        # 「本意是图+按钮卡」：图片、按钮口令、按钮都齐，才谈得上合并/降级。
+        wanted_card = bool(image_datas and btn_cmd and has_buttons)
         merged_done = False
         if _IMAGE_BUTTON_MERGE and image_datas and btn_cmd and has_buttons:
             try:
@@ -392,16 +402,22 @@ class OfficialChannel(Channel):
                                  images=len(image_datas), cmd=btn_cmd))
 
         if not merged_done:
-            # 降级路径（或本就没有图片/口令）：图片走 msg_type=7 富媒体独立段
+            # 降级路径：图片走 msg_type=7 富媒体独立段（绝不丢图）。
             for data in image_datas:
                 m = QQMessage()
                 m += QQSegment.file_image(data, file_name="image.png")
                 segments.append((m, "image"))
-            # 按钮走 markdown+keyboard（msg_type=2）独立段；零按钮卡不发这段。
-            if has_buttons:
+            # 2026-11-16 用户硬要求：图+按钮不能分开发。若本意是图+按钮卡但合并失败，
+            # image_only 模式只发图片、不另发按钮段（用户端只见一条纯图卡）。
+            # 仅当「非图+按钮卡」或显式 two_messages 回退模式才在降级里发按钮段。
+            # 保留 has_buttons 字面守卫：零按钮卡任何模式都不发空按钮段。
+            if has_buttons and (not wanted_card or not _MERGE_FALLBACK_IMAGE_ONLY):
                 btn_seg, btn_labels = _build_button_segment(btn_cmd, QQMessage, QQSegment)
                 if btn_seg is not None:
                     segments.append((btn_seg, "keyboard"))
+            elif wanted_card and _MERGE_FALLBACK_IMAGE_ONLY:
+                log.info(jlog("official_merge_fallback_image_only",
+                              images=len(image_datas), cmd=btn_cmd))
 
         if not segments:
             return {"ok": True, "skipped": True}
