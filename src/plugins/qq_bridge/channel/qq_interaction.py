@@ -211,8 +211,41 @@ async def handle_interaction(bot: QQBot, event: QQEvent) -> None:  # type: ignor
     # （event_id 被动回复、模式锁定 doupo），业务零分叉、NapCat 零影响。
     # 判定用 doupo_buttons.ALL_BUTTON_CMDS（AST 派生真实口令集，零编造）。
     try:
-        from ...doupo.button_dispatch import dispatch_button as _doupo_dispatch  # noqa: PLC0415
+        from ...doupo.button_dispatch import (  # noqa: PLC0415
+            dispatch_button as _doupo_dispatch,
+            dispatch_page as _doupo_page_dispatch,
+            dispatch_quiz as _doupo_quiz_dispatch,
+            parse_page_cmd as _parse_page_cmd,
+            parse_quiz_cmd as _parse_quiz_cmd,
+        )
         from .doupo_buttons import ALL_BUTTON_CMDS as _DOUPO_CMDS  # noqa: PLC0415
+
+        # 2026-11-16 有奖竞猜选项按钮：data = doupo:quiz:<token>:<idx>，先于静态
+        # 口令判定（它不是 canonical 口令，不在 ALL_BUTTON_CMDS）。判定/发奖走
+        # commands.cmd_answer_quiz，答对方得奖、一次性消费。
+        if _parse_quiz_cmd(cmd) is not None:
+            from .base import attach_official_ctx, detach_official_ctx  # noqa: PLC0415
+
+            token_q = attach_official_ctx(full_ctx)
+            try:
+                handled = await _doupo_quiz_dispatch(bot, full_ctx, cmd)
+            finally:
+                detach_official_ctx(token_q)
+            log.info(jlog("official_doupo_quiz_dispatch", handled=bool(handled)))
+            return
+
+        # 2026-11-16 炼药丹方卡翻页按钮：data = doupo:page:<n>，先于静态口令判定。
+        # 渲染目标页炼药卡并挂新页按钮，业务零分叉（card.render_recipes）。
+        if _parse_page_cmd(cmd) is not None:
+            from .base import attach_official_ctx, detach_official_ctx  # noqa: PLC0415
+
+            token_pg = attach_official_ctx(full_ctx)
+            try:
+                handled = await _doupo_page_dispatch(bot, full_ctx, cmd)
+            finally:
+                detach_official_ctx(token_pg)
+            log.info(jlog("official_doupo_page_dispatch", cmd=cmd, handled=bool(handled)))
+            return
 
         if cmd in _DOUPO_CMDS:
             from .base import attach_official_ctx, detach_official_ctx  # noqa: PLC0415

@@ -202,7 +202,7 @@ async def main():
     check("战斗写入 last_fight", float(p.get("last_fight", 0)) > 0)
     r = await commands.cmd_fight(store, A)
     check("战斗 CD 生效", "调息" in r, r[:40])
-    # 清 CD 后必须仍能打（斗气每战回满，不能第二场就只能普攻）
+    # 清 CD 后必须仍能打（斗气见底也只是转普攻，战斗照常开打）
     p = await store.get_player(A)
     p["last_fight"] = 0
     await store.put_player(p)
@@ -327,7 +327,12 @@ async def main():
     # 9. 炼药 / 炼制 / 服丹 / 背包
     # ------------------------------------------------------------------
     r = await commands.cmd_recipes(store, A)
-    check("炼药 列出丹方", "回灵丹" in r and "灭神丹" in r)
+    # 2026-11-16：等级不够的丹药不展示。A 为低境界，应见一~四品常用丹方，
+    # 且帝品「灭神丹/九幽散」不得出现（min_lv 按品阶映射到斗帝境界）。
+    check("炼药 列出丹方（等级过滤）",
+          "回灵丹" in r and "炼药师" in r
+          and "灭神丹" not in r and "九幽散" not in r,
+          r[:80])
     p = await store.get_player(A)
     p["hp"] = 1
     core.add_item(p, "回灵丹", 3)

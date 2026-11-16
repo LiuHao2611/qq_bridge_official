@@ -27,7 +27,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 # Event 从兼容层取（运行时有真 Event；纯业务单测的 _stub_nonebot 无此属性时回退 object）
 # finish_card（2026-11-16）：官方通道出图时挂对应功能按钮，NapCat 行为不变。
-from src.game_compat import Event, finish_card, image_seg, is_official, view
+from src.game_compat import Event, finish_card, finish_text, image_seg, is_official, view
 
 from . import commands
 from . import card
@@ -173,7 +173,17 @@ helper = on_regex(_pat(r"(?:帮助|玩法|攻略|规则)"), priority=PRI, block=
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, helper)
-    await helper.finish(commands.cmd_help())
+    msg = commands.cmd_help()
+    # 玩法细则是 44 行全静态内容 → 卡片化；任何异常降级为纯文本（绝不丢消息）
+    png = None
+    try:
+        png = await card.render_help()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("斗破玩法卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+    if png:
+        await finish_card(helper, event, png, "help", "doupo_help.png")
+        return
+    await helper.finish(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +272,7 @@ fight = on_regex(_pat(r"(?:战斗|打怪|历练|出战)"), priority=PRI, block=T
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, fight)
-    await fight.finish(await commands.cmd_fight(store, str(event.user_id)))
+    await finish_text(fight, event, await commands.cmd_fight(store, str(event.user_id)))
 
 
 # ---------------------------------------------------------------------------
@@ -275,13 +285,16 @@ enh = on_regex(_pat(r"强化"), priority=PRI, block=True, rule=_mode_is("doupo")
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, enh)
-    await enh.finish(await commands.cmd_enhance(store, str(event.user_id)))
+    await finish_text(enh, event, await commands.cmd_enhance(store, str(event.user_id)))
 
 
 # 学斗技必须注册在 skills_cmd 之前（同 PRI 下先注册者先拦），否则「学斗技」
 # 里含「斗技」会被列表口令 skills_cmd 吃掉。与「斗技详情」同属需要抢先的精确
 # 口令，但保持 priority=PRI（不额外降优先级），与全部 matcher 一致。
-insight_cmd = on_regex(_pat(r"(?:学斗技|领悟斗技|悟技)"),
+# 2026-11-16 扩展：同一 matcher 兼收「学习 <技名>」定向领悟（用户截图明确诉求，
+# 不新增 matcher 以免破坏菜单/matcher 数守门）。「学习」不含「斗技」二字，
+# 不会被 skills_cmd 吃；也不同于「学斗技」（无「习」字）。
+insight_cmd = on_regex(_pat(r"(?:学斗技|领悟斗技|悟技|学习\s*\S+)"),
                        priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
@@ -289,7 +302,12 @@ insight_cmd = on_regex(_pat(r"(?:学斗技|领悟斗技|悟技)"),
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, insight_cmd)
-    await insight_cmd.finish(await commands.cmd_insight(store, str(event.user_id)))
+    txt = _plain(event)
+    qq = str(event.user_id)
+    # 「学习 X」→ 定向领悟 X；「学斗技/领悟斗技/悟技」→ 随机领悟。
+    if "学习" in txt:
+        await insight_cmd.finish(await commands.cmd_learn_named(store, qq, _arg(event, "学习")))
+    await insight_cmd.finish(await commands.cmd_insight(store, qq))
 
 
 # 斗技详情必须排在 skills_cmd 之前（同一 PRI 下先注册者先拦），否则「斗技详情 X」
@@ -448,7 +466,7 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, feed)
     arg = _arg(event, "养火") if "养火" in _plain(event) else _arg(event, "喂火")
-    await feed.finish(await commands.cmd_feed(store, str(event.user_id), arg))
+    await finish_text(feed, event, await commands.cmd_feed(store, str(event.user_id), arg))
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +503,7 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, buy)
     arg = _arg(event, "购买") if "购买" in _plain(event) else _arg(event, "买")
-    await buy.finish(await commands.cmd_buy(store, str(event.user_id), arg))
+    await finish_text(buy, event, await commands.cmd_buy(store, str(event.user_id), arg))
 
 
 recipes = on_regex(_pat(r"(?:炼药|丹方)"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -495,7 +513,26 @@ recipes = on_regex(_pat(r"(?:炼药|丹方)"), priority=PRI, block=True, rule=_m
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, recipes)
-    await recipes.finish(await commands.cmd_recipes(store, str(event.user_id)))
+    qq = str(event.user_id)
+    # 2026-11-16 分页：手打「炼药2/丹方3」翻页，无数字默认第 1 页。
+    # 页码夹取与卡片/文本共用 core.recipes_page（越界落末页，不吐空页）。
+    page = _num(event, 1)
+    msg = await commands.cmd_recipes(store, qq, page)
+    # 炼药丹方是近乎固定的清单 → 卡片化（等级过滤 + 两列 + 分页）；任何异常降级文本
+    png = None
+    total_pages = 1
+    try:
+        p = await store.get_player(qq)
+        if p:
+            _chunk, page, total_pages = core.recipes_page(p, page)
+            png = await card.render_recipes(p, page)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("斗破炼药卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+    if png:
+        await finish_card(recipes, event, png, "recipes", "doupo_recipes.png",
+                          page=page, total_pages=total_pages)
+        return
+    await recipes.finish(msg)
 
 
 craft = on_regex(_pat(r"(?:炼制|炼丹)") + r"\s*(.*)", priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -506,7 +543,7 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, craft)
     arg = _arg(event, "炼制") if "炼制" in _plain(event) else _arg(event, "炼丹")
-    await craft.finish(await commands.cmd_craft(store, str(event.user_id), arg))
+    await finish_text(craft, event, await commands.cmd_craft(store, str(event.user_id), arg))
 
 
 bag = on_regex(_pat(r"(?:背包|包裹|行囊)"), priority=PRI, block=True, rule=_mode_is("doupo"))

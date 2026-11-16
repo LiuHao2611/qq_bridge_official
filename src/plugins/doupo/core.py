@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import random
+import re
 import time
 
 from . import config as cfg
@@ -540,6 +541,26 @@ def skill_pool_sorted(p) -> list[dict]:
     return sorted(pool, key=lambda e: (tier_order.get(e["tier"], 9),))
 
 
+def equippable_names(p) -> set[str]:
+    """可上阵技名 = 已领悟 ∪ 已收服异火主动技（老档视为全会，单一口径）。
+
+    供 cmd_loadout 在按序号/技名上阵时校验「未领悟先学」，避免把未领悟技
+    静默过滤成默认四槽（用户 2026-11-16 照名录卡序号上阵时暴露的体验问题）。
+    """
+    return set(sk_mod.equippable_names(p))
+
+
+def roster_no_map(p) -> dict[int, str]:
+    """名录卡序号 → 技名（1-based，与卡片显示顺序严格同源）。
+
+    card.build_roster_data 的 ``no`` 与 doupo_roster 卡上的序号圆，都来自
+    skill_pool_sorted 的同一顺序；这里把该顺序编成 {1: name, 2: name, ...}，
+    供「上阵 1 3 5 7」按号选技。序号含未解锁项（卡片也画未解锁），
+    上阵解锁校验由 cmd_loadout 照旧执行。
+    """
+    return {i: e["name"] for i, e in enumerate(skill_pool_sorted(p), 1)}
+
+
 def loadout_entries(p) -> list[dict]:
     """公开版：当前上阵四槽的完整技能对象。"""
     return _loadout_entries(p)
@@ -581,15 +602,24 @@ def roll_hero_aid(p, rng=random.random) -> dict | None:
     return {"name": name, "rate": rate, "luck": max(0, int(p.get("luck", 0)))}
 
 
-def fight(p, mon, rng=random.random) -> dict:
+def fight(p, mon, rng=random.random, aid=None, roll_aid=True) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
 
-    斗气是「这一战能放几次斗技」的资源，每战回满、战后不结转：
-    否则连打第二场时是 0 蓝状态，单回合输出只剩 42%，几乎必输。
+    斗气是**跨战斗结转的资源**（2026-11-16 用户「去掉强制回满斗气，不然突破
+    就失去了意义」）：开战用玩家当前剩余 ``p["mp"]``，战中按技能阶位逐次扣减，
+    战后写回剩余值——不再每战白送满。斗气见底后自动转武器普攻（伤害约 42%），
+    仍有输出、能慢慢攒经验，但效率大降；要回满只能靠**突破/升级**（``_refill``）
+    或稀有回气手段。这让斗气上限成长（升级/青莲地心火 +25%）与突破真正有意义。
+
+    :param aid: 已掷好的机缘结果（dict）或 None。仅当 ``roll_aid=False`` 时生效。
+    :param roll_aid: 是否在开场自己掷机缘。**默认 True**——单敌直接调用
+      （PVP / 平衡脚本 / 既有测试）语义完全不变；多敌 ``encounter`` 传 False，
+      把掷骰权上收到整场一次，避免每敌各掷导致累积概率突破 2% 硬顶。
     """
     st = stats(p)
     hp = int(p.get("hp") or st["体力"])
-    mp = mp_max(p)
+    # 开战沿用当前斗气（结转），不再无条件满蓝；clamp 到上限防越界存档。
+    mp = max(0, min(mp_max(p), int(p.get("mp", mp_max(p)))))
     m_hp = int(mon["hp"])
     m_atk = int(mon["atk"])
     m_def = int(mon["def"])
@@ -602,9 +632,12 @@ def fight(p, mon, rng=random.random) -> dict:
     p_fx, m_fx = fx.new_state(), fx.new_state()
     m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
 
-    # 机缘·贵人相助：开场掷一次（极低概率），命中则无名强者一招制敌。
-    # 放在回合循环之前、只消耗一次 rng，不影响战斗内随机序列的可复现性。
-    aid = roll_hero_aid(p, rng)
+    # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
+    # 多敌 encounter 传 roll_aid=False + 传入整场预掷的 aid，把掷骰权上收到
+    # 整场一次——修复「每敌各掷 → 累积概率突破 2% 硬顶」的 bug（2026-11-16）。
+    # 无论哪种路径，都只消耗一次 rng，不影响战斗内随机序列的可复现性。
+    if roll_aid:
+        aid = roll_hero_aid(p, rng)
     if aid:
         m_hp = 0
         dmg_log.append({"dmg": int(mon["hp"]), "kind": "贵人相助", "source": "机缘",
@@ -660,7 +693,7 @@ def fight(p, mon, rng=random.random) -> dict:
 
     win = m_hp <= 0
     p["hp"] = max(0 if not win else 1, hp)
-    p["mp"] = mp_max(p)
+    p["mp"] = mp   # 斗气结转：写回本场消耗后的剩余值，不再强制回满
 
     # 贵人相助：毫发无伤、1 回合速胜，胜负结算照常走下方 win 分支。
     shown_rounds = max(1, rounds)
@@ -681,6 +714,136 @@ def fight(p, mon, rng=random.random) -> dict:
         p["hp"] = int(st["体力"] * (1 - cfg.LOSE_HP_ON_DEFEAT))
         res["hp_after"] = p["hp"]
     return res
+
+
+def roll_encounter_count(p, rng=random.random) -> int:
+    """本场遭遇几个敌人（1~5，用户 2026-11-16 需求）。
+
+    分布刻意偏向少敌（1 敌 ≈40%），多敌递减——5 连战是稀有"硬仗"，
+    不是日常。用「掷 5 次伯努利 + 至少 1 个」而非均匀随机，避免一半战斗
+    都是 5 连战把节奏拖垮。高等级/高机缘略有加成（见下的 luck 微调）。
+    """
+    lo = int(cfg.ENCOUNTER_MIN)
+    hi = int(cfg.ENCOUNTER_MAX)
+    luck = max(0, int(p.get("luck", 0)))
+    # 每个敌人出现概率：基础 0.42，随机缘每 20 点 +0.02（硬顶 0.60）
+    per = min(0.60, 0.42 + luck / 2000.0)
+    n = sum(1 for _ in range(hi) if rng() < per)
+    return max(lo, min(hi, n))
+
+
+def pick_encounter(p, n, rng=random.random) -> list[dict]:
+    """抽 n 个敌人 species：优先与玩家同档，且尽量跨类型（魔兽/悍匪/反派）。
+
+    复用 pick_monster 的"同大境界窗口"口径保证不会出现越级秒杀；
+    再去重 + 跨 kind，让一场遭遇读起来像"魔兽 + 山贼"而不是 5 只同种鼠。
+    """
+    n = max(1, int(n))
+    lv = int(p.get("lv", 1))
+    window = [m for m in cfg.MONSTERS if abs(int(m["lv"]) - lv) <= cfg.LV_PER_REALM]
+    pool = window or cfg.MONSTERS
+    # 等级贴近度排序后取一个稍大的候选池（同档至少 6 只），再随机抽
+    cand = sorted(pool, key=lambda m: abs(int(m["lv"]) - lv))
+    cand = cand[:max(n * 2, 6)]
+    out: list[dict] = []
+    used: set[str] = set()
+    # 第一轮：每个 kind 先拿一只，保证类型多样
+    kinds = sorted({str(m.get("kind", "魔兽")) for m in cand})
+    for kind in kinds:
+        if len(out) >= n:
+            break
+        same = [m for m in cand if str(m.get("kind", "魔兽")) == kind and m["name"] not in used]
+        if same:
+            pick = rng_choice(same, rng)
+            out.append(pick)
+            used.add(pick["name"])
+    # 第二轮：补足数量（允许重复 kind，但物种不重复）
+    rest = [m for m in cand if m["name"] not in used]
+    while len(out) < n and rest:
+        pick = rng_choice(rest, rng)
+        out.append(pick)
+        used.add(pick["name"])
+        rest = [m for m in rest if m["name"] not in used]
+    # 候选池耗尽（极端：n=5 但同档只有 3 种）——允许同种再来一只
+    while len(out) < n and cand:
+        out.append(rng_choice(cand, rng))
+    return out[:n]
+
+
+def encounter(p, rng=random.random) -> dict:
+    """一场遭遇战：连续打 1~5 个敌人，逐个调用 ``fight``（单敌内核零改动）。
+
+    设计要点（守既有纪律）：
+      * **逐个结算**：每个敌人都是一次完整 ``fight`` —— 斗气/气血跨战结转、
+        伤害/DoT/控制/机缘全复用同一套内核，不在本层复制战斗逻辑（业务零分叉）。
+      * **斗气结转**：开战用玩家当前剩余斗气，逐敌扣减、不再每战回满；见底转普攻。
+      * **气血结转**：上一战剩多少血就带多少进下一战；每放倒一个敌人回复
+        18% 最大气血（ENCOUNTER_REST_HEAL），避免 5 连战必死但不回满。
+      * **连战衰减**：第 i 个敌人的 atk/hp 按 ENCOUNTER_FADE 递减（≤20%），
+        让"多敌硬仗"总难度可控，不至于越打越必输。
+      * **败即收兵**：任一战败，整场判负（不继续打后面的敌人）。
+      * **聚合**：rounds/log/taken/exp/gold/drops 全部累加，供展示层做高光剪辑；
+        ``detail`` 保留每个敌人的独立战报（名字/胜负/回合/ log），供战报分节。
+      * ``fight`` 内部已写 p 的 wins/losses/exp/gold/hp —— 本层不再重复结算，
+        只做气血结转与统计聚合（唯一的写入是 p["hp"] 的连战回血）。
+    """
+    specs = pick_encounter(p, roll_encounter_count(p, rng), rng)
+    st = stats(p)
+    fade = max(0.0, float(cfg.ENCOUNTER_FADE))
+    heal = max(0.0, float(cfg.ENCOUNTER_REST_HEAL))
+
+    # 机缘·贵人相助：**整场只掷一次**（2026-11-16 修正）。
+    # 旧实现让 fight() 每敌各掷一次，N 敌场累积概率 1-(1-2%)^N，5 敌≈9.6%，
+    # 突破「硬顶 2%」设计口径；且只要任一敌触发就报「此战毫发无伤」，
+    # 但其他敌照打、玩家照常受伤，文案自相矛盾。
+    # 现在：整场开场掷一次——命中则贵人把整场敌手一招全灭（每敌传 aid、
+    # roll_aid=False，各自 taken=0、正常结算），未命中则全程禁掷。
+    whole_aid = roll_hero_aid(p, rng)
+
+    detail: list[dict] = []
+    total_rounds = total_taken = total_exp = total_gold = 0
+    all_drops: list[tuple[str, int]] = []
+    win = True
+    hero_aid = whole_aid
+    for i, spec in enumerate(specs):
+        mon = dict(monster_scaled(p, spec))
+        # 连战第 i 敌削弱（首敌不削），只缩放 hp/atk，def 与产出不动
+        scale = max(0.8, 1.0 - i * fade)
+        if i:
+            mon["hp"] = max(1, int(mon["hp"] * scale))
+            mon["atk"] = max(1, int(mon["atk"] * scale))
+        # 战间回血：上一战 fight 已把 p["hp"] 写成剩余值，这里补一口
+        if i:
+            p["hp"] = min(int(st["体力"]),
+                          int(p.get("hp") or 0) + int(st["体力"] * heal))
+        # 整场机缘已预掷：传 aid + roll_aid=False，禁止每敌重复掷骰。
+        r = fight(p, mon, rng=rng, aid=whole_aid, roll_aid=False)
+        total_rounds += int(r["rounds"])
+        total_taken += int(r["taken"])
+        total_exp += int(r.get("exp") or 0)
+        total_gold += int(r.get("gold") or 0)
+        for name, cnt in (r.get("drops") or []):
+            all_drops.append((name, int(cnt)))
+        detail.append({
+            "name": spec["name"], "kind": str(spec.get("kind") or "魔兽"),
+            "lv": int(mon["lv"]), "win": bool(r["win"]),
+            "rounds": int(r["rounds"]), "taken": int(r["taken"]),
+            "log": r["log"], "index": i,
+        })
+        if not r["win"]:
+            win = False
+            break
+    # 汇总掉落（同名合并）
+    merged: dict[str, int] = {}
+    for name, cnt in all_drops:
+        merged[name] = merged.get(name, 0) + cnt
+    return {
+        "win": win, "rounds": total_rounds, "taken": total_taken,
+        "exp": total_exp, "gold": total_gold,
+        "drops": list(merged.items()), "log": [d for x in detail for d in x["log"]],
+        "detail": detail, "enemies": [x["name"] for x in detail],
+        "enemy_count": len(detail), "hero_aid": hero_aid,
+    }
 
 
 def duel(p, vic, rng=random.random) -> dict:
@@ -846,6 +1009,9 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # 2026-11-16：原著未载药方的丹药没有炼制路径，只能金币购买
+    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
+        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     now_ts = time.time() if now_ts is None else now_ts
     cd = craft_cd_left(p, now_ts)
     if cd > 0:
@@ -948,15 +1114,39 @@ def insight_power_need(learned_count: int) -> int:
     return 120 * max(0, int(learned_count))
 
 
+def migrate_legacy_learned(p) -> list[str]:
+    """老档（无 learned 字段）惰性迁移：用四槽里真实在用的技初始化 learned。
+
+    2026-11-16 用户诉求：老玩家发「学斗技」不该被「存档老版本、斗技已全会」
+    挡住——他其实只想继续学。老档历史上「全会」是兼容口径，但会让新玩法
+    （入道给 1 门、其余逐一领悟）对老档完全关闭。
+
+    迁移只认玩家**当前四槽里真实带的技**（loadout），不凭空给他全宗技能：
+      * 保留进度：loadout 里的技原样进 learned，不削弱；
+      * 开放后续：learned 变成 list 后 insight()/learn_named() 正常走候选；
+      * 惰性、单玩家、经 store.put_player 持久化，绝不批量改生产库。
+    """
+    if isinstance(p.get("learned"), list):
+        return list(p["learned"])
+    names = {e["name"] for e in sk_mod.learnable(p)}
+    keep = [str(n) for n in (p.get("loadout") or []) if str(n) in names]
+    migrated = list(dict.fromkeys(keep))
+    # 返回拷贝：调用方随后 append 新领悟的技时，不能让「迁移了几门」的
+    # 提示数字被一起撑大（否则 4 门老档会说成 5 门）。
+    p["learned"] = list(migrated)
+    return migrated
+
+
 def insight(p, rng=random.random) -> dict:
     """随机领悟一门「已达解锁等级、尚未领悟」的本宗/通用斗技。
 
     条件（用户 2026-11-16 定）：达到等级（候选已按 unlock 过滤）和战力门槛 + 金币足够；
     成功则从候选里随机取一门加入 p["learned"]。异火主动技「收服即会」不进领悟池。
-    老档无 learned 字段：视为全领会数 → 返回 already_all，不破坏老玩家。
+    老档无 learned 字段：惰性迁移（见 migrate_legacy_learned）后照常领悟，不再拒绝。
     """
+    migrated: list[str] | None = None
     if not isinstance(p.get("learned"), list):
-        return {"ok": False, "reason": "legacy"}
+        migrated = migrate_legacy_learned(p)
     learned = list(p["learned"])
     owned = set(learned) | set(sk_mod.learned_names(p))
     # 候选 = 已达解锁等级、未领悟、且非异火技
@@ -968,21 +1158,70 @@ def insight(p, rng=random.random) -> dict:
                if e["name"] not in owned and e.get("origin") != "异火"]
         if nxt:
             need = min(int(e["unlock"]) for e in nxt)
-            return {"ok": False, "reason": "level", "need_lv": need, "lv": cur_lv}
-        return {"ok": False, "reason": "all"}
+            return {"ok": False, "reason": "level", "need_lv": need, "lv": cur_lv,
+                    "migrated": migrated}
+        return {"ok": False, "reason": "all", "migrated": migrated}
 
     need_power = insight_power_need(len(learned))
     if power(p) < need_power:
-        return {"ok": False, "reason": "power", "need": need_power, "have": power(p)}
+        return {"ok": False, "reason": "power", "need": need_power, "have": power(p),
+                "migrated": migrated}
     cost = insight_cost(len(learned))
     if int(p.get("gold", 0)) < cost:
-        return {"ok": False, "reason": "gold", "need": cost, "have": int(p.get("gold", 0))}
+        return {"ok": False, "reason": "gold", "need": cost, "have": int(p.get("gold", 0)),
+                "migrated": migrated}
 
     pick = cand[int(rng() * len(cand)) % len(cand)]
     p["gold"] = int(p.get("gold", 0)) - cost
     p.setdefault("learned", []).append(pick["name"])
     return {"ok": True, "name": pick["name"], "tier": pick["tier"],
-            "cost": cost, "count": len(p["learned"])}
+            "cost": cost, "count": len(p["learned"]), "migrated": migrated}
+
+
+def learn_named(p, name: str) -> dict:
+    """定向领悟一门**指定的**斗技（用户 2026-11-16「学习 风灵分形剑」诉求）。
+
+    与 insight() 完全同一套门槛口径（解锁等级 / 战力 / 金币 / 已领悟去重），
+    区别只是「随机取一门」→「取玩家点名的那一门」。老档同样惰性迁移。
+
+    失败 reason：noskill（本宗没有这门/异火技）、learned（已会）、
+    level（等级不够）、power（战力不足）、gold（金币不足）。
+    """
+    name = str(name or "").strip()
+    migrated: list[str] | None = None
+    if not isinstance(p.get("learned"), list):
+        migrated = migrate_legacy_learned(p)
+    learned = list(p["learned"])
+    owned = set(learned) | set(sk_mod.learned_names(p))
+
+    # 只在本宗「可领悟池」里找（已解锁；异火技收服即会，不进池）
+    pool = [e for e in sk_mod.learnable(p) if e.get("origin") != "异火"]
+    hit = next((e for e in pool if e["name"] == name), None)
+    if hit is None:
+        # 本宗有这门但等级未到 → 明确告诉差几级；完全没有 → noskill
+        any_tier = next((e for e in sk_mod.entries_for(p)
+                         if e["name"] == name and e.get("origin") != "异火"), None)
+        if any_tier:
+            return {"ok": False, "reason": "level", "name": name,
+                    "need_lv": int(any_tier["unlock"]), "lv": int(p.get("lv", 1)),
+                    "migrated": migrated}
+        return {"ok": False, "reason": "noskill", "name": name, "migrated": migrated}
+    if name in owned:
+        return {"ok": False, "reason": "learned", "name": name, "migrated": migrated}
+
+    need_power = insight_power_need(len(learned))
+    if power(p) < need_power:
+        return {"ok": False, "reason": "power", "name": name,
+                "need": need_power, "have": power(p), "migrated": migrated}
+    cost = insight_cost(len(learned))
+    if int(p.get("gold", 0)) < cost:
+        return {"ok": False, "reason": "gold", "name": name,
+                "need": cost, "have": int(p.get("gold", 0)), "migrated": migrated}
+
+    p["gold"] = int(p.get("gold", 0)) - cost
+    p.setdefault("learned", []).append(name)
+    return {"ok": True, "name": name, "tier": hit["tier"],
+            "cost": cost, "count": len(p["learned"]), "migrated": migrated}
 
 
 def skill_up(p, name) -> dict:
@@ -1047,6 +1286,12 @@ def shop_list() -> list:
 def shop_buy(p, name, n=1) -> dict:
     n = max(1, int(n))
     item = next((x for x in shop_list() if x["name"] == name), None)
+    # 2026-11-16：原著丹药「无药方者纯金币卖」——丹药也能用「买」直接购得。
+    # 只在未命中药材时兜底查丹药表，不改药材购买的任何既有行为。
+    if item is None:
+        rec = cfg.RECIPE_BY_NAME.get(name)
+        if rec and int(rec.get("buy", 0)) > 0:
+            item = {"name": name, "price": int(rec["buy"]), "desc": str(rec.get("desc", ""))}
     if not item:
         return {"ok": False, "reason": "noitem"}
     total = int(item["price"]) * n
@@ -1055,6 +1300,35 @@ def shop_buy(p, name, n=1) -> dict:
     p["gold"] = int(p["gold"]) - total
     add_item(p, name, n)
     return {"ok": True, "name": name, "n": n, "total": total}
+
+
+def available_recipes(p: dict) -> list:
+    """按玩家境界等级过滤丹方：只返回 lv >= min_lv 的丹药（2026-11-16 用户要求）。
+
+    等级不够的丹药完全不展示（纯文本与卡片共用这一个过滤口，杜绝两处口径分叉）。
+    """
+    lv = int(p.get("lv", 1))
+    return [r for r in cfg.RECIPES if lv >= int(r.get("min_lv", 1))]
+
+
+def recipes_page(p: dict, page=1) -> tuple[list, int, int]:
+    """当前玩家可见丹方的「一页切片」——纯文本与卡片共用的唯一分页口径。
+
+    返回 ``(chunk, page, total_pages)``：
+      * chunk     当前页丹药（已按等级过滤，按 cfg.RECIPES 原序）
+      * page      收敛后的实际页码（越界自动夹到 [1, total_pages]）
+      * total_pages 至少为 1
+
+    「只显示当前境界可用丹药」由 :func:`available_recipes` 保证；本函数只在其上
+    做分页。page 越界做夹取是常规边界处理（不是失败降级）——手打「炼药99」时
+    落到最后一页，而不是报错或吐空页。
+    """
+    avail = available_recipes(p)
+    per = max(1, int(cfg.RECIPES_PER_PAGE))
+    total = max(1, (len(avail) + per - 1) // per)
+    page = max(1, min(total, int(page or 1)))
+    chunk = avail[(page - 1) * per: page * per]
+    return chunk, page, total
 
 
 # ---------------------------------------------------------------------------
@@ -1152,10 +1426,26 @@ def _apply_chance(p, ev: dict, rng) -> dict:
     text = str(ev.get("text") or "")
     tone = str(ev.get("tone") or "neutral")
 
-    # 竞猜：从原版 5 组问答里抽一题展示，奖励按原版 1000 金币
+    # 竞猜：改成真·选项按钮问答（2026-11-16 用户要求「不要默认正确」）。
+    # 这里只出题、不结算奖励、不显示答案；奖励/答案下移到命令层的答题会话，
+    # 由按钮点击回调判定答对后才发放。core 保持纯函数（不碰 store/会话）。
     quiz = ev.get("quiz")
     if quiz:
-        text = "《斗破苍穹》有奖竞猜！" + str(rng_choice(quiz, rng)) + " 答案正确，获得1000金币奖励。"
+        idx = min(len(quiz) - 1, int(rng() * len(quiz)))
+        raw_q = str(quiz[idx])
+        items = ev.get("quiz_items") or []
+        item = items[idx] if idx < len(items) else {}
+        # question 从原版文案去掉「（答案：X）」，逐字保留题干；干扰项/答案下标
+        # 来自 config.quiz_items（与原版 5 题一一对应），答案绝不进展示文本。
+        question = re.sub(r"（答案：[^）]*）\s*$", "", raw_q).strip()
+        options = [str(x) for x in (item.get("options") or [])]
+        answer = int(item.get("answer", 0))
+        return {"name": ev["name"], "text": "《斗破苍穹》有奖竞猜！" + question,
+                "tone": tone, "gain": "选项作答（答对得奖）", "src": ev.get("src", ""),
+                "reward": {}, "quiz": {"question": question, "options": options,
+                                       "answer": answer,
+                                       "reward": dict(ev.get("reward") or {})}}
+
 
     # 条件：需要交出丹药。原版「丹不够，老者悻悻走开」是真实分支，不扣不奖。
     need = ev.get("need") or {}

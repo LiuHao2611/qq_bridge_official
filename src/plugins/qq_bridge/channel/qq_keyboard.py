@@ -195,6 +195,13 @@ def _rank_button_data(head: str, rest: str) -> tuple[list[str], list[str]]:
 #: 哨兵含 ":" 且非真实口令，绝无可能与 inventory 口令冲突。
 DOUPO_CARD_PREFIX = "doupo:"
 
+#: 有奖竞猜选项按钮前缀（与 doupo_buttons 同源）。比 DOUPO_CARD_PREFIX 更具体，
+#: 必须在卡片前缀判断之前匹配，否则会被 "doupo:" 前缀吃掉当成空 card_key。
+DOUPO_QUIZ_PREFIX = "doupo:quiz:"
+
+#: 炼药卡翻页按钮前缀（2026-11-16）。与 quiz 同理，必须在通用 "doupo:" 前缀前匹配。
+DOUPO_PAGE_PREFIX = "doupo:page:"
+
 
 def buttons_for(text: str) -> tuple[Btn, ...]:
     """按当前回复所属卡取「同卡其他档位」按钮；无同卡下钻则返 ``()``（零按钮）。
@@ -223,11 +230,36 @@ def buttons_for(text: str) -> tuple[Btn, ...]:
         label, cmd = _RIVEN_FULL_BTN
         return (Btn(label, cmd, False),)
 
+    raw = (text or "").strip()
+
+    # 炼药卡翻页按钮（2026-11-16）：比卡片前缀更具体，先判。页码来自 per-task
+    # 上下文（发送层 arm），data 只带目标页码。零 nonebot 依赖，宿主可单测。
+    if raw.startswith(DOUPO_PAGE_PREFIX):
+        try:  # 同目录 channel/doupo_buttons.py
+            from .doupo_buttons import page_buttons_for as _page_buttons  # noqa: PLC0415
+        except ImportError:  # 单文件直载兜底
+            from doupo_buttons import page_buttons_for as _page_buttons  # type: ignore[no-redef] # noqa: PLC0415
+        try:
+            return tuple(Btn(b.label, b.cmd, b.primary) for b in _page_buttons(raw))
+        except Exception:  # noqa: BLE001 — 按钮增强失败只当零按钮，绝不阻断发送
+            return ()
+
+    # 有奖竞猜选项按钮（2026-11-16）：比卡片前缀更具体，先判。选项来自 per-task
+    # 上下文（命令层 arm），答案不在 data。零 nonebot 依赖，宿主可单测。
+    if raw.startswith(DOUPO_QUIZ_PREFIX):
+        try:  # 同目录 channel/doupo_buttons.py
+            from .doupo_buttons import quiz_buttons_for as _quiz_buttons  # noqa: PLC0415
+        except ImportError:  # 单文件直载兜底
+            from doupo_buttons import quiz_buttons_for as _quiz_buttons  # type: ignore[no-redef] # noqa: PLC0415
+        try:
+            return tuple(Btn(b.label, b.cmd, b.primary) for b in _quiz_buttons(raw))
+        except Exception:  # noqa: BLE001 — 按钮增强失败只当零按钮，绝不阻断发送
+            return ()
+
     # 斗破卡片按钮哨兵（2026-11-16）：前缀命中即委托斗破派生，彻底绕开
     # game_tools 的 command_inventory（斗破口令不在其中，走下面会零按钮）。
     # 延迟 import：doupo 插件 import nonebot，宿主单测无 nonebot 时由调用方
     # try 兜底；card_key 非法/派生失败一律保守返回 ()（宁可少按钮不误发）。
-    raw = (text or "").strip()
     if raw.startswith(DOUPO_CARD_PREFIX):
         card_key = raw[len(DOUPO_CARD_PREFIX):]
         try:  # 同目录 channel/doupo_buttons.py（零 nonebot 依赖，宿主可单测）

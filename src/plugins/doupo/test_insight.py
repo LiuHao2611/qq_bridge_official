@@ -130,11 +130,15 @@ def test_insight_gates_and_success():
     r = core.insight(high, rng=lambda: 0.0)
     check("战力不足被挡", r.get("reason") in ("power", "level", "all"), str(r))
 
-    # 老档无 learned → legacy，不破坏
+    # 老档无 learned → 惰性迁移后照常领悟（2026-11-16 用户「学斗技不要提示老版本」）
     legacy = core.create_player("legacy-x", "老", "g1")
     legacy.pop("learned", None)
+    loadout_before = list(legacy.get("loadout") or [])
     r = core.insight(legacy, rng=lambda: 0.0)
-    check("老档领悟被挡(legacy)", r.get("reason") == "legacy", str(r))
+    check("老档能领悟(不再legacy)", r.get("ok") is True and r.get("reason") != "legacy", str(r))
+    check("老档迁移保留在用技", all(n in legacy["learned"] for n in loadout_before),
+          f"learned={legacy.get('learned')} loadout={loadout_before}")
+    check("老档迁移有标记", isinstance(r.get("migrated"), list), str(r))
 
 
 def test_insight_random_candidate():
@@ -180,6 +184,90 @@ def test_cmd_insight_text():
     poor["gold"] = 0
     out2 = asyncio.run(commands.cmd_insight(MemStore(poor), "x"))
     check("学斗技金币不足提示", "金币不足" in out2, out2[:60])
+
+
+def test_learn_named_directed():
+    """学习 <技名>：定向领悟指定技，与学斗技同门槛（2026-11-16 用户截图诉求）。"""
+    p = _rich_player()
+    pool = [e["name"] for e in sk.learnable(p) if e.get("origin") != "异火"]
+    unlearned = next((n for n in pool if n not in p["learned"]), None)
+    check("存在可定向学习的未学技", unlearned is not None, str(pool))
+    if unlearned:
+        gold0 = int(p["gold"])
+        r = core.learn_named(p, unlearned)
+        check("定向领悟成功", r.get("ok") is True, str(r))
+        check("领悟的是点名的技", unlearned in p["learned"] and r["name"] == unlearned, str(r))
+        check("定向领悟扣金币", int(p["gold"]) == gold0 - r["cost"], f"{gold0}->{p['gold']}")
+        # 重复学同一门 → learned 拒绝
+        r2 = core.learn_named(p, unlearned)
+        check("已学会的技不重复领悟", r2.get("reason") == "learned", str(r2))
+    # 不存在的技 → noskill
+    r3 = core.learn_named(p, "不存在的斗技")
+    check("不存在的技报 noskill", r3.get("reason") == "noskill", str(r3))
+
+
+def test_legacy_migration_then_learn_named():
+    """老档（无 learned、有四槽）先迁移，再定向学习用户点名的技。"""
+    p = core.create_player("legacy-learn", "老", "g1")
+    p["lv"] = 50
+    p["gold"] = 100000
+    loadout_before = list(p.get("loadout") or [])
+    p.pop("learned", None)  # 造老档
+    pool = [e["name"] for e in sk.learnable(p) if e.get("origin") != "异火"]
+    target = next((n for n in pool if n not in loadout_before), None)
+    check("老档迁移目标技可用", target is not None, str(pool))
+    if target:
+        r = core.learn_named(p, target)
+        check("老档定向领悟成功(不报legacy)", r.get("ok") is True and r.get("reason") != "legacy", str(r))
+        check("老档标记迁移", isinstance(r.get("migrated"), list), str(r))
+        check("迁移保留原四槽技", all(n in p["learned"] for n in loadout_before),
+              f"learned={p['learned']}")
+        check("点名技也进 learned", target in p["learned"], str(p["learned"]))
+
+
+def test_cmd_learn_named_no_old_version_prompt():
+    """命令层：老档学斗技/定向学习都不再出现「老版本/无需领悟」提示。"""
+    p = _rich_player()
+    loadout_before = list(p.get("loadout") or [])
+    p.pop("learned", None)  # 老档
+    target = next((e["name"] for e in sk.learnable(p)
+                   if e.get("origin") != "异火" and e["name"] not in loadout_before), None)
+    if target:
+        out = asyncio.run(commands.cmd_learn_named(MemStore(p), "x", target))
+        check("定向学习无老版本提示",
+              "老版本" not in out and "无需领悟" not in out and "领悟了" in out, out[:120])
+        check("命令层带存档升级提示", "存档已升级" in out, out[:120])
+
+    # 随机学斗技的老档也不再出现老版本提示
+    p2 = _rich_player()
+    p2.pop("learned", None)
+    out2 = asyncio.run(commands.cmd_insight(MemStore(p2), "x"))
+    check("学斗技无老版本提示",
+          "老版本" not in out2 and "无需领悟" not in out2 and "领悟" in out2, out2[:120])
+
+
+def test_learn_named_gates():
+    """定向学习的等级/战力/金币门槛与学斗技一致。"""
+    p = _rich_player()
+    target = next((e["name"] for e in sk.learnable(p)
+                   if e.get("origin") != "异火" and e["name"] not in p["learned"]), None)
+    if not target:
+        check("定向门槛有可测目标", False, "无可学技")
+        return
+    # 金币不足
+    poor = _rich_player()
+    poor["gold"] = 0
+    check("定向学习金币不足", core.learn_named(poor, target).get("reason") == "gold")
+    # 等级不足（挑 unlock>1 的技，把等级压到 1）
+    gated = next((e for e in sk.entries_for(p)
+                  if int(e.get("unlock", 1)) > 1 and e.get("origin") != "异火"), None)
+    if gated:
+        low = _rich_player()
+        low["lv"] = 1
+        r = core.learn_named(low, gated["name"])
+        check("定向学习等级不足报level", r.get("reason") == "level", str(r))
+    else:
+        check("有可测的等级门槛技", False, "本宗无 unlock>1 的技")
 
 
 def test_flames_shows_faction_tradition():

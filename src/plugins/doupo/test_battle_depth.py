@@ -186,7 +186,15 @@ def test_cmd_fight_shows_causality():
 
 def test_cmd_fight_aid_text():
     p = _p(luck=500)
-    out = asyncio.run(commands.cmd_fight(MemStore(p), "depth-test"))  # 默认 rng 极低，不触发
+    # encounter 对每个敌人各掷一次机缘，luck=500 在多敌场有累积触发概率；
+    # 本用例只验「未触发时文案层不出现贵人字样」，故注入确定性关闭机缘，
+    # 消除随机抖动（概率/硬顶由 test_aid_* 系列覆盖，不在这里重复）。
+    saved = core.roll_hero_aid
+    try:
+        core.roll_hero_aid = lambda *_a, **_kw: None
+        out = asyncio.run(commands.cmd_fight(MemStore(p), "depth-test"))
+    finally:
+        core.roll_hero_aid = saved
     check("普通战斗文案无贵人误导", "贵人相助" not in out, out[:160])
 
 

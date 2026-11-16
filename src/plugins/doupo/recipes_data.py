@@ -1,0 +1,112 @@
+# -*- coding: utf-8 -*-
+"""斗破丹药数据扩充（2026-11-16 原著全文考据）。
+
+数据源：本地原著全文语料（1608 章索引）。每枚丹药的 grade/desc/src 严格取自原著；
+need（药方）只填原著明确列出药材者，其余 need={} 走纯金币购买(buy)。
+effect/value/buy 为游戏化数值映射（[调参]），不是原著数据；desc 保留原著功效原句。
+GRADE_MIN_LV 为丹药品阶→玩家境界等级门槛的游戏化映射，用于「等级不够不展示」。
+"""
+
+# 原著药材（有明确药方的丹药所需），与 config.HERBS 合并后进入宝库
+NOVEL_HERBS = [
+    {"name": "凝血草", "price": 60, "desc": "凝血散主药，止血生肌", "src": "凝血散·原著第72章"},
+    {"name": "活气果", "price": 70, "desc": "活血行气之果，疗伤药常用", "src": "凝血散·原著第72章"},
+    {"name": "罂粟花", "price": 55, "desc": "麻醉止痛，凝血散佐药", "src": "凝血散·原著第72章"},
+    {"name": "冰灵焰草", "price": 240, "desc": "极寒焰草，近身异火所需", "src": "血莲丹·原著第110章"},
+    {"name": "冰属性魔核", "price": 300, "desc": "四阶冰属性魔兽精核", "src": "血莲丹·原著第110章"},
+    {"name": "血蟒枝", "price": 520, "desc": "罕见药材，斗灵丹主材料", "src": "斗灵丹·原著第211章"},
+    {"name": "青焰草", "price": 180, "desc": "青焰凝练，三纹青灵丹所需", "src": "三纹青灵丹·原著第315章"},
+    {"name": "黑天麻", "price": 190, "desc": "黑纹天麻，三纹青灵丹所需", "src": "三纹青灵丹·原著第315章"},
+    {"name": "地心火芝", "price": 460, "desc": "地脉火芝，地灵丹主药", "src": "地灵丹·原著第317章"},
+    {"name": "龙须冰火果", "price": 480, "desc": "冰火同株之果，地灵丹所需", "src": "地灵丹·原著第317章"},
+    {"name": "青木仙藤", "price": 440, "desc": "千年仙藤，地灵丹所需", "src": "地灵丹·原著第317章"},
+    {"name": "水属性魔核", "price": 420, "desc": "六阶水属性魔兽精核", "src": "地灵丹·原著第317章"},
+    {"name": "青冥果", "price": 400, "desc": "带刺青果，浓香扑鼻", "src": "青冥寿丹·原著第702章"},
+    {"name": "寿王浆", "price": 520, "desc": "延寿灵浆，青冥寿丹所需", "src": "青冥寿丹·原著第702章"},
+    {"name": "万年青藤", "price": 460, "desc": "万年古藤，青冥寿丹所需", "src": "青冥寿丹·原著第702章"},
+    {"name": "清体草", "price": 380, "desc": "净化之草，清魂丹所需", "src": "清魂丹·原著第950章"},
+    {"name": "冰火融魂果", "price": 460, "desc": "冰火交融之果，清魂丹所需", "src": "清魂丹·原著第950章"},
+    {"name": "水灵莲子", "price": 420, "desc": "水灵莲之实，清魂丹所需", "src": "清魂丹·原著第950章"},
+    {"name": "还魂妖果", "price": 620, "desc": "起死回生之果，阴阳命魂丹所需", "src": "阴阳命魂丹·原著第1034章"},
+    {"name": "命魂鬼脸花", "price": 680, "desc": "凝聚命魂的奇花，阴阳命魂丹所需", "src": "阴阳命魂丹·原著第1034章"},
+    {"name": "三叶青芝", "price": 150, "desc": "三叶青芝，青芝火灵膏所需", "src": "青芝火灵膏·原著第482章"},
+    {"name": "火莲果", "price": 160, "desc": "火莲之果，青芝火灵膏所需", "src": "青芝火灵膏·原著第482章"},
+    {"name": "千灵草", "price": 150, "desc": "千灵之草，青芝火灵膏所需", "src": "青芝火灵膏·原著第482章"},
+    {"name": "火系魔核", "price": 220, "desc": "火系魔兽精核", "src": "青芝火灵膏·原著第482章"},
+    {"name": "速龙涎", "price": 160, "desc": "速龙之涎，速灵风丹所需", "src": "速灵风丹·原著第482章"},
+    {"name": "夜灵叶", "price": 150, "desc": "夜生灵叶，速灵风丹所需", "src": "速灵风丹·原著第482章"},
+    {"name": "风系魔核", "price": 210, "desc": "风系魔兽精核", "src": "速灵风丹·原著第482章"},
+    {"name": "黄泉血晶", "price": 900, "desc": "九幽黄泉之底所凝，九阴黄泉丹主材料", "src": "九阴黄泉丹·原著第1433章"},
+    {"name": "龙血芝", "price": 800, "desc": "龙血浸润之芝，天火融雪丹所需", "src": "天火融雪丹·原著第900章"},
+    {"name": "骨灵果", "price": 780, "desc": "骨灵所结之果，天火融雪丹所需", "src": "天火融雪丹·原著第900章"},
+    {"name": "玄天青藤", "price": 820, "desc": "玄天古藤，天火融雪丹所需", "src": "天火融雪丹·原著第900章"},
+    {"name": "魔兽精血", "price": 860, "desc": "七阶以上魔兽精血，天火融雪丹所需", "src": "天火融雪丹·原著第900章"},
+]
+
+# 丹药品阶 → 玩家境界等级门槛（开局 lv1 可见一~四品，随境界解锁高阶）
+GRADE_MIN_LV = {"一品": 1, "二品": 1, "三品": 1, "四品": 1, "五品": 19, "六品": 37, "七品": 55, "八品": 73, "九品": 91, "帝品": 103}
+
+# 分组顺序（高→低，与品阶门槛一致）
+GRADE_ORDER = ["帝品", "九品", "八品", "七品", "六品", "五品", "四品", "三品", "二品", "一品"]
+
+# 炼药卡每页丹药数（两列展示，每页 N 枚）
+RECIPES_PER_PAGE = 10
+
+# 新增丹药（与原 config.RECIPES 的 8 枚合并）
+NOVEL_RECIPES = [
+    {"name": "聚气散", "grade": "一品", "effect": "exp", "value": 200, "buy": 120, "min_lv": GRADE_MIN_LV["一品"], "need": {}, "desc": "让九段斗气者百分之百凝聚斗之气旋", "src": "原著第5章"},
+    {"name": "增气散", "grade": "二品", "effect": "stat", "value": 5, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "短时间拥有一名斗者的实力，代价是此后一月卧床", "src": "原著第41章"},
+    {"name": "筑基灵液", "grade": "二品", "effect": "hp", "value": 400, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "修复身体、辅助冲击斗气段位（药老以紫叶兰草、洗骨花配制）", "src": "原著第19章"},
+    {"name": "回春散", "grade": "一品", "effect": "hp", "value": 200, "buy": 120, "min_lv": GRADE_MIN_LV["一品"], "need": {}, "desc": "便宜高产的疗伤药，乌坦城佣兵最爱", "src": "原著第69章"},
+    {"name": "凝血散", "grade": "二品", "effect": "hp", "value": 350, "buy": 280, "min_lv": GRADE_MIN_LV["二品"], "need": {"凝血草": 1, "活气果": 1, "罂粟花": 2}, "desc": "疗伤药，药力胜过回春散", "src": "原著第72章"},
+    {"name": "龟息丹", "grade": "三品", "effect": "hp", "value": 600, "buy": 700, "min_lv": GRADE_MIN_LV["三品"], "need": {}, "desc": "服下后假死、气息沉寂，可诈死脱身", "src": "原著第90章"},
+    {"name": "回气丹", "grade": "二品", "effect": "mp", "value": 300, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "短时间内加速斗气回复", "src": "原著第109章"},
+    {"name": "血莲丹", "grade": "三品", "effect": "hp", "value": 700, "buy": 700, "min_lv": GRADE_MIN_LV["三品"], "need": {"冰灵焰草": 1, "冰属性魔核": 1}, "desc": "体表结能量血枷，抵御异火高温，近身异火必备", "src": "原著第110章"},
+    {"name": "化形丹", "grade": "七品", "effect": "stat", "value": 20, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "令魔兽化为人形（七品化形丹）", "src": "原著第131章"},
+    {"name": "护脉丹", "grade": "二品", "effect": "hp", "value": 400, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "保脉护体，吞噬紫火时保护经脉", "src": "原著第156章"},
+    {"name": "冰心丹", "grade": "二品", "effect": "hp", "value": 400, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "镇定心神，抵抗紫火狂暴之意侵扰", "src": "原著第156章"},
+    {"name": "落魂散", "grade": "二品", "effect": "exp", "value": 300, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "散发刺鼻气味，暂时封闭敌人视线感官，趁机逃生", "src": "原著第161章"},
+    {"name": "蓄力丹", "grade": "一品", "effect": "stat", "value": 3, "buy": 120, "min_lv": GRADE_MIN_LV["一品"], "need": {}, "desc": "短时间内增幅力量", "src": "原著第165章"},
+    {"name": "凝火丹", "grade": "一品", "effect": "mp", "value": 200, "buy": 120, "min_lv": GRADE_MIN_LV["一品"], "need": {}, "desc": "凝聚火焰的考核药方，辅助控火", "src": "原著第165章"},
+    {"name": "破厄丹", "grade": "五品", "effect": "exp", "value": 1200, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "破解封印、恢复封印所致的力量衰退", "src": "原著第230章"},
+    {"name": "斗灵丹", "grade": "六品", "effect": "exp", "value": 2600, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"血蟒枝": 1}, "desc": "斗王服下提升一星实力，一生只能服一枚", "src": "原著第211章"},
+    {"name": "复灵紫丹", "grade": "五品", "effect": "hp", "value": 1500, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "将因封印或体内残伤而衰退的实力完全修复", "src": "原著第251章"},
+    {"name": "三纹青灵丹", "grade": "四品", "effect": "exp", "value": 1000, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {"青焰草": 1, "黑天麻": 1}, "desc": "助斗师突破成大斗师；大斗师服下有几率升一星，无药效反噬", "src": "原著第315章"},
+    {"name": "二纹青灵丹", "grade": "四品", "effect": "exp", "value": 700, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "三纹青灵丹的较低阶形态（二道丹纹）", "src": "原著第315章"},
+    {"name": "青灵丹", "grade": "四品", "effect": "exp", "value": 500, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "提升实力的基础丹药（三纹青灵丹系）", "src": "原著第315章"},
+    {"name": "地灵丹", "grade": "六品", "effect": "hp", "value": 2800, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"地心火芝": 1, "龙须冰火果": 1, "青木仙藤": 1, "水属性魔核": 1}, "desc": "吞噬异火时护体的必备丹药", "src": "原著第317章"},
+    {"name": "紫心破障丹", "grade": "四品", "effect": "exp", "value": 1200, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "大斗师服下提升一星；同级可连服两枚而不产生太大抗性", "src": "原著第321章"},
+    {"name": "复容丹", "grade": "三品", "effect": "hp", "value": 600, "buy": 700, "min_lv": GRADE_MIN_LV["三品"], "need": {}, "desc": "令人返回少年时的面容（仅表面）", "src": "原著第312章"},
+    {"name": "阴阳玄龙丹", "grade": "七品", "effect": "stat", "value": 25, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "破后而立：重伤濒死时获蜕变机会，身体/灵魂/斗气更上一层楼", "src": "原著第395章"},
+    {"name": "洗髓寒灵液", "grade": "二品", "effect": "hp", "value": 500, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "浸泡修炼，清除体内残留火毒", "src": "原著第414章"},
+    {"name": "龙力丹", "grade": "五品", "effect": "stat", "value": 12, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "短时间拥有极其强横的纯粹力量（直接增幅实力）", "src": "原著第495章"},
+    {"name": "噬生丹", "grade": "七品", "effect": "exp", "value": 6000, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "强行将大斗师短时提升至斗王，代价是仅剩三年性命", "src": "原著第604章"},
+    {"name": "皇极丹", "grade": "六品", "effect": "exp", "value": 3200, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {}, "desc": "斗皇短时间提升一至两星，并固经炼骨强化身体", "src": "原著第624章"},
+    {"name": "生骨融血丹", "grade": "七品", "effect": "hp", "value": 8000, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "吊命超级灵丹，只要还有一口气吊着便能救活；炼药老躯体主药", "src": "原著第633章"},
+    {"name": "混元塑骨丹", "grade": "六品", "effect": "hp", "value": 3000, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {}, "desc": "对魔兽伤势有显著疗效", "src": "原著第670章"},
+    {"name": "青冥寿丹", "grade": "六品", "effect": "luck", "value": 3000, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"青冥果": 1, "寿王浆": 1, "万年青藤": 1}, "desc": "提升将近十年寿命，一人一生只能服一枚", "src": "原著第702章"},
+    {"name": "蛇髓蜕骨丹", "grade": "六品", "effect": "stat", "value": 15, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {}, "desc": "蛇人族滋养秘法的中阶主药引，激发美杜莎血脉潜力", "src": "原著第752章"},
+    {"name": "天魂血骨丹", "grade": "七品", "effect": "stat", "value": 22, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "蛇人族高等秘法丹药，最大化激发美杜莎婴儿潜力，丹成伴随丹劫", "src": "原著第752章"},
+    {"name": "天魂融血丹", "grade": "七品", "effect": "stat", "value": 28, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "改善体质、提高修炼天赋（炼药老躯体／给萧潇滋养用）", "src": "原著第752章"},
+    {"name": "天火融雪丹", "grade": "七品", "effect": "stat", "value": 30, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {"龙血芝": 1, "骨灵果": 1, "玄天青藤": 1, "魔兽精血": 1}, "desc": "改善体质、提高修炼天赋，需 77 种材料，比地灵丹更难", "src": "原著第900章"},
+    {"name": "破宗丹", "grade": "六品", "effect": "exp", "value": 3500, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {}, "desc": "斗皇巅峰冲击斗宗多一成成功率，失败亦可稳住实力不倒退", "src": "原著第798章"},
+    {"name": "返命丹", "grade": "七品", "effect": "hp", "value": 7000, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "救人一命：只要不砍头、不震碎心脏便能活命", "src": "原著第810章"},
+    {"name": "妖化丹", "grade": "六品", "effect": "stat", "value": 14, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {}, "desc": "魔兽局部变化形态、提升灵智，效果弱于化形丹", "src": "原著第911章"},
+    {"name": "清魂丹", "grade": "六品", "effect": "luck", "value": 2600, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"清体草": 1, "冰火融魂果": 1, "水灵莲子": 1}, "desc": "清洗体内一切不属于本身的灵魂之力，并温养灵魂", "src": "原著第950章"},
+    {"name": "气修丹", "grade": "五品", "effect": "mp", "value": 1400, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "消耗型丹药，加速斗气恢复（斗皇/斗宗亦有效）", "src": "原著第976章"},
+    {"name": "火菩丹", "grade": "七品", "effect": "mp", "value": 5000, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "百种药材炼制的高阶丹药，过程极繁琐", "src": "原著第1020章"},
+    {"name": "阴阳命魂丹", "grade": "七品", "effect": "hp", "value": 6500, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {"还魂妖果": 1, "命魂鬼脸花": 1}, "desc": "融魂还命，功效近似生骨融血丹，可替代之", "src": "原著第1034章"},
+    {"name": "避毒丹", "grade": "四品", "effect": "hp", "value": 1000, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "服下后毒物不主动侵扰", "src": "原著第1055章"},
+    {"name": "瞬气丹", "grade": "七品", "effect": "mp", "value": 4200, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "极短时间内恢复斗气，斗宗服下亦有效，可逆转战局", "src": "原著第1097章"},
+    {"name": "素心丹", "grade": "七品", "effect": "luck", "value": 3200, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "炼丹时服下稳定心神，提升炼丹成功率", "src": "原著第1114章"},
+    {"name": "一始丹", "grade": "八品", "effect": "exp", "value": 15000, "buy": 40000, "min_lv": GRADE_MIN_LV["八品"], "need": {}, "desc": "八品丹药，可引五色丹雷", "src": "原著第1363章"},
+    {"name": "玄菩筑基丹", "grade": "七品", "effect": "stat", "value": 40, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {}, "desc": "筑基之效，极适合萧潇", "src": "原著第1363章"},
+    {"name": "菩提丹", "grade": "八品", "effect": "exp", "value": 18000, "buy": 40000, "min_lv": GRADE_MIN_LV["八品"], "need": {}, "desc": "引九色丹雷；提升晋入斗圣成功率（约两成）", "src": "原著第1404章"},
+    {"name": "九品宝丹", "grade": "九品", "effect": "exp", "value": 30000, "buy": 90000, "min_lv": GRADE_MIN_LV["九品"], "need": {}, "desc": "九品丹药三阶之最低阶，已具灵性（活丹）", "src": "原著第1423章"},
+    {"name": "九品玄丹", "grade": "九品", "effect": "stat", "value": 60, "buy": 90000, "min_lv": GRADE_MIN_LV["九品"], "need": {}, "desc": "九品丹药中阶，可变异、可化形，极度稀有", "src": "原著第1423章"},
+    {"name": "炎魔清玄丹", "grade": "八品", "effect": "crit", "value": 30, "buy": 40000, "min_lv": GRADE_MIN_LV["八品"], "need": {}, "desc": "九色丹雷丹药；火属性斗气者服下有概率令斗气变异、增幅战力", "src": "原著第1426章"},
+    {"name": "菩提大还丹", "grade": "九品", "effect": "exp", "value": 45000, "buy": 90000, "min_lv": GRADE_MIN_LV["九品"], "need": {}, "desc": "突破半圣成功率提升两倍（达五成）", "src": "原著第1420章"},
+    {"name": "九阴黄泉丹", "grade": "九品", "effect": "luck", "value": 35000, "buy": 90000, "min_lv": GRADE_MIN_LV["九品"], "need": {"黄泉血晶": 1}, "desc": "极阴之力削弱净莲妖火，增加降服成功率", "src": "原著第1433章"},
+    {"name": "雷劫丹", "grade": "九品", "effect": "stat", "value": 80000, "buy": 90000, "min_lv": GRADE_MIN_LV["九品"], "need": {}, "desc": "以丹雷为主料炼成的奇特丹药，可助人突破", "src": "原著第1590章"},
+    {"name": "帝品雏丹", "grade": "帝品", "effect": "stat", "value": 100000, "buy": 200000, "min_lv": GRADE_MIN_LV["帝品"], "need": {}, "desc": "内含本源帝气，可突破斗帝；陀舍古帝洞府唯一一枚", "src": "原著第1573章"},
+]

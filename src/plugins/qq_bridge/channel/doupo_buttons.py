@@ -37,6 +37,7 @@ import 会触发 ``doupo/__init__.py`` 顶层的 on_regex 注册（nonebot 未�
 from __future__ import annotations
 
 import ast
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,89 @@ _COMMANDS_PY = Path(__file__).resolve().parents[2] / "doupo" / "commands.py"
 
 #: 主菜单 / 切换口口令：任何卡片按钮都不得出现（用户「去掉主菜单按钮」）。
 MENU_CMDS = frozenset({"斗破菜单", "斗破口令", "修仙菜单", "帮助"})
+
+#: 有奖竞猜选项按钮的哨兵前缀（2026-11-16）。命令层注册答题后把
+#: ``keyboard_cmd = DOUPO_QUIZ_PREFIX + token`` 交给发送层；按钮 data 形如
+#: ``doupo:quiz:<token>:<idx>``，与卡片口令空间（ALL_BUTTON_CMDS）完全隔离，
+#: 不污染 game_tools 档位族守门。选项文字随 per-task 上下文传进来（不写进 data）。
+DOUPO_QUIZ_PREFIX = "doupo:quiz:"
+
+#: 炼药丹方卡「翻页」按钮前缀（2026-11-16 用户「丹药多了分页 / 按钮切换」）。
+#: 与 quiz 同理：独立前缀，不进 CARD_ACTIONS / ALL_BUTTON_CMDS，不污染 canonical
+#: 口令守门。data = ``doupo:page:<page>``（page 1-based，由发送层按当前页派生
+#: 「上一页/下一页」）；点击后由 button_dispatch.dispatch_page 渲染对应页。
+DOUPO_PAGE_PREFIX = "doupo:page:"
+#: per-task 的炼药分页信息：{"page":cur, "total_pages":N}。发送层 arm，按钮派生读取。
+_page_state: ContextVar[dict] = ContextVar("doupo_page_state", default={})
+
+#: per-task 的竞猜选项表：token -> (label...)。NoneBot 每事件独立 task，天然隔离。
+_quiz_options: ContextVar[dict] = ContextVar("doupo_quiz_options", default={})
+
+
+def arm_quiz(token: str, options) -> object:
+    """登记本回合竞猜选项，返回 ContextVar token 供 handler detach。"""
+    return _quiz_options.set({str(token): [str(o)[:10] for o in options]})
+
+
+def disarm_quiz(token) -> None:
+    try:
+        _quiz_options.reset(token)
+    except (ValueError, TypeError):
+        pass
+
+
+def arm_page(page: int, total_pages: int) -> object:
+    """登记本回合炼药卡分页状态，返回 ContextVar token 供 handler detach。"""
+    return _page_state.set({"page": int(page), "total_pages": int(total_pages)})
+
+
+def disarm_page(token) -> None:
+    try:
+        _page_state.reset(token)
+    except (ValueError, TypeError):
+        pass
+
+
+def page_buttons_for(cmd: str) -> tuple[Btn, ...]:
+    """从 ``doupo:page:<page>`` 派生「上一页/下一页」按钮；非本前缀返 ``()``。
+
+    页码来自 ``_page_state``（发送层 arm 的当前页）；按钮 data 写字面目标页码，
+    如当前第 2/4 页 → [上一页 → doupo:page:1, 下一页 → doupo:page:3]。
+    单页（total_pages<=1）不挂翻页按钮（发送层此时也不设 page keyboard_cmd）。
+    """
+    raw = (cmd or "").strip()
+    if not raw.startswith(DOUPO_PAGE_PREFIX):
+        return ()
+    st = _page_state.get() or {}
+    page = int(st.get("page", 0) or 0)
+    total = int(st.get("total_pages", 0) or 0)
+    if page < 1 or total < 2:
+        return ()
+    out: list[Btn] = []
+    if page > 1:
+        out.append(Btn("上一页", "%s%d" % (DOUPO_PAGE_PREFIX, page - 1), False))
+    if page < total:
+        out.append(Btn("下一页", "%s%d" % (DOUPO_PAGE_PREFIX, page + 1), False))
+    return tuple(out)
+
+
+def quiz_buttons_for(cmd: str) -> tuple[Btn, ...]:
+    """从 ``doupo:quiz:<token>`` 派生 4 个选项按钮；非本前缀返 ``()``。
+
+    按钮 data = ``doupo:quiz:<token>:<idx>``；label = 选项文字。答案不在 data。
+    """
+    raw = (cmd or "").strip()
+    if not raw.startswith(DOUPO_QUIZ_PREFIX):
+        return ()
+    token = raw[len(DOUPO_QUIZ_PREFIX):].strip()
+    if not token:
+        return ()
+    opts = (_quiz_options.get() or {}).get(token) or []
+    out: list[Btn] = []
+    for i, label in enumerate(opts[:5]):
+        out.append(Btn(label=label[:10], cmd="%s%s:%d" % (DOUPO_QUIZ_PREFIX, token, i),
+                       primary=False))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -91,6 +175,8 @@ CARD_ACTIONS = {
     "shop": ("买", "炼药", "背包"),
     "bag": ("服丹", "炼药", "宝库"),
     "rank": ("战斗", "修炼", "人物"),
+    "recipes": ("服丹", "养火", "宝库"),
+    "help": ("人物", "炼药", "斗技"),
 }
 
 #: 卡片自身 canonical 触发口令（用于「按钮不含当前卡自己」守门）。
@@ -104,6 +190,8 @@ CARD_SELF = {
     "shop": "宝库",
     "bag": "背包",
     "rank": "排行",
+    "recipes": "炼药",
+    "help": "帮助",
 }
 
 #: 所有按钮 canonical 的并集 —— qq_interaction 据此识别「斗破按钮点击」。

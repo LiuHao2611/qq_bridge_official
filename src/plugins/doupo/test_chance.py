@@ -221,7 +221,10 @@ def _fight_with_patched_win(store, qq):
     """把战斗结果固定为胜利，去掉随机性，只验机遇段的拼接。"""
     orig = core.fight
 
-    def fake_fight(p, mon):
+    def fake_fight(p, mon, rng=None, aid=None, roll_aid=True):
+        # 2026-11-16 cmd_fight 改走 core.encounter → 内部 fight(..., rng=...,
+        # aid=..., roll_aid=False)（机缘掷骰上收到整场一次）；桩函数补齐这两个
+        # 可选关键字形参即可，返回值语义不变（固定胜利用例）。
         return {"win": True, "rounds": 3, "taken": 12, "exp": 100, "gold": 50,
                 "drops": [("血灵草", 1)],
                 "log": [{"kind": "普攻", "crit": False, "dmg": 10}]}

@@ -60,6 +60,7 @@ QQ 聊天窗显示宽度固定，卡片越宽被压得越狠（1080 宽缩到 72
   groups: [{
     "tier": "普通", "count": 12, "icon": "sword",
     "rows": [{
+      "no",                                   # 全局序号：即「上阵 <号>」的编号
       "name", "role", "state", "state_kind",   # state_kind: on/learn/lock
       "meta", "desc",
       "chips": [{"label","value"}],
@@ -103,6 +104,13 @@ BLOCK_PAD_X = 12
 BLOCK_PAD_Y = 11
 BLOCK_RADIUS = 10
 BAR_W = 4
+
+# ---- 序号徽章（2026-11-16 用户：「加序号方便输出上阵斗技口令」）----
+# 圆形序号画在块内左缘色条右侧、技能名左侧；序号即上阵编号，
+# 与 card.build_roster_data 的 no + core.skill_pool_sorted 严格同源。
+NO_D = 22                 # 序号圆直径（够放两位数 15）
+NO_GAP = 8                # 序号圆与技能名的显式间距（禁空格凑间距）
+FS_NO = 14                # 序号字号
 
 H_NAME = FS_NAME + 4      # 26
 GAP_NAME_META = 4
@@ -202,14 +210,14 @@ _DEMO = {
     "subtitle": "天冥宗 · 共 3 门 · 上阵 1/4",
     "groups": [
         {"tier": "普通", "count": 2, "icon": "sword", "rows": [
-            {"name": "血煞掌", "role": "异常", "state": "上阵", "state_kind": "on",
+            {"no": 1, "name": "血煞掌", "role": "异常", "state": "上阵", "state_kind": "on",
              "meta": "〔本宗〕玄阶高级 · 攻击 · 斗气 20%",
              "desc": "斗气凝血成掌，掌色暗红近黑；一掌拍出，血毒随掌力渗入，伤口不流血反而发黑。造成 140% 伤害，并附加血毒（每回合 5%，持续 2 回合，且治疗 -30%）。",
              "chips": [{"label": "伤害", "value": "×1.40"},
                        {"label": "血毒", "value": "5%·2回合"},
                        {"label": "减疗", "value": "30%·2回合"}],
              "gate": "气血虚时威力骤降，对无血之物无效"},
-            {"name": "碎石掌", "role": "功能", "state": "可学", "state_kind": "learn",
+            {"no": 2, "name": "碎石掌", "role": "功能", "state": "可学", "state_kind": "learn",
              "meta": "〔通用〕黄阶低级 · 攻击 · 斗气 20%",
              "desc": "斗气只往掌心一聚，不做花哨架势，抬手就拍。掌力沉而短，专砸护体斗气最薄的一点。造成 95% 伤害，20% 概率击破护体，令目标防御归零 1 回合。",
              "chips": [{"label": "伤害", "value": "×0.95"},
@@ -217,7 +225,7 @@ _DEMO = {
              "gate": "威力天花板低"},
         ]},
         {"tier": "高阶", "count": 1, "icon": "bolt", "rows": [
-            {"name": "九幽冥手", "role": "爆发", "state": "未解锁", "state_kind": "lock",
+            {"no": 3, "name": "九幽冥手", "role": "爆发", "state": "未解锁", "state_kind": "lock",
              "meta": "〔本宗〕天阶低级 · 攻击 · 斗气 34% · lv50 解锁",
              "desc": "斗气凝成一只漆黑大手，手指出处空间直接塌陷；大手不需飞行，而是穿过空间出现在目标面前，一把抓下。造成 200% 伤害，并无视目标 30% 防御。",
              "chips": [{"label": "伤害", "value": "×2.00"},
@@ -365,7 +373,8 @@ def _cols(width: int):
     """(content_w, col_w, inner_w, block_x0, block_x1) —— 两列固定起点。"""
     content_w = width - PAD * 2
     col_w = (content_w - BLOCK_GAP_COL) // 2
-    inner_w = col_w - BLOCK_PAD_X * 2 - BAR_W - 4
+    # 扣掉左缘色条 + 序号圆 + 间距，得到正文可用宽；序号与正文不重叠。
+    inner_w = col_w - BLOCK_PAD_X * 2 - BAR_W - 4 - NO_D - NO_GAP
     return content_w, col_w, inner_w, PAD, PAD + col_w + BLOCK_GAP_COL
 
 
@@ -514,19 +523,36 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             c.rounded_rect((bx + 1, by + 6, bx + 1 + BAR_W, by + rh - 6), radius=2,
                            fill=p[bar_key])
 
-            ix = bx + BLOCK_PAD_X + BAR_W + 4
+            ix = bx + BLOCK_PAD_X + BAR_W + 4       # 序号圆左缘
             iy = by + BLOCK_PAD_Y
             right = bx + bw - BLOCK_PAD_X
+            no_cx = ix + NO_D // 2                  # 序号圆心
+            ix_text = ix + NO_D + NO_GAP            # 正文起点（名字/meta/desc 统一）
 
             # ---- 名字行：技能名（左起固定）+ 定位胶囊 + 状态 pill（均右锚定）----
             # 状态 pill 必须在右侧：若放左侧，「上阵」与「未解锁」宽度不同会让
             # 同列技能名起点逐行漂移（card-design 红线 4 对齐漂移）。
             name_y = iy + H_NAME // 2
+
+            # ---- 序号圆：阶位色实底 + 浅字，即「上阵 <号>」的编号 ----
+            # 画在技能名左侧、左缘色条右侧；与名字同 y 居中对齐。
+            no = row.get("no")
+            if no is not None:
+                fill_key = TIER_STYLE.get(tier, ("chip_line", "sword"))[0]
+                no_fill = p[fill_key]
+                c.ellipse((ix, name_y - NO_D // 2, ix + NO_D, name_y + NO_D // 2),
+                          fill=no_fill, outline=p["border_color"], width=1)
+                no_txt = str(no)
+                c.text((no_cx, name_y), no_txt, size=FS_NO,
+                       color=p["card_color"], role="regular", bold=False, anchor="mm")
+                rec("%s.no" % name, no_txt, no_cx, name_y,
+                    FS_NO, "regular", "mm")
+
             st_w = _state_w(row)
             role_w = _role_w(row)
             tail = st_w + (CHIP_GAP + role_w if role_w else 0)
-            name_max = (right - tail - 6) - ix
-            ktext("%s.name" % name, ix, name_y, name, FS_NAME, p["text_color"],
+            name_max = (right - tail - 6) - ix_text
+            ktext("%s.name" % name, ix_text, name_y, name, FS_NAME, p["text_color"],
                   max_w=max(50, name_max))
             if st_w:
                 state = str(row.get("state") or "")
@@ -564,7 +590,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             cy = iy + H_NAME + GAP_NAME_META
             meta_lines = t_["meta_lines"] or [""]
             for mi, ml in enumerate(meta_lines):
-                stext("%s.meta%d" % (name, mi), ix,
+                stext("%s.meta%d" % (name, mi), ix_text,
                       cy + mi * H_META + H_META // 2, ml, FS_META, p["dim_color"])
             cy += H_META * len(meta_lines)
 
@@ -573,16 +599,16 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                 cy += GAP_META_DESC
                 for di, ln in enumerate(t_["desc_lines"]):
                     ly = cy + di * DESC_LH + DESC_LH // 2
-                    c.text((ix, ly), ln, size=FS_DESC, color=p["text_color"],
+                    c.text((ix_text, ly), ln, size=FS_DESC, color=p["text_color"],
                            role="regular", bold=False, anchor="lm")
-                    rec("%s.desc%d" % (name, di), ln, ix, ly, FS_DESC, "regular", "lm")
+                    rec("%s.desc%d" % (name, di), ln, ix_text, ly, FS_DESC, "regular", "lm")
                 cy += len(t_["desc_lines"]) * DESC_LH
 
             # ---- 效果 chip（每个维度一枚胶囊，超宽自动折行）----
             if t_["chip_rows"]:
                 cy += GAP_DESC_CHIP
                 for ri, chips in enumerate(t_["chip_rows"]):
-                    cx = ix
+                    cx = ix_text
                     for ch in chips:
                         label = str(ch.get("label") or "")
                         value = str(ch.get("value") or "")
@@ -615,7 +641,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                 cy += GAP_CHIP_GATE
                 for gi2, gl in enumerate(t_["gate_lines"]):
                     gy = cy + gi2 * GATE_LH + GATE_LH // 2
-                    stext("%s.g%d" % (name, gi2), ix, gy, gl, FS_GATE,
+                    stext("%s.g%d" % (name, gi2), ix_text, gy, gl, FS_GATE,
                           p["dim_color"], max_w=inner_w)
 
     # ---- 底部提示 ----

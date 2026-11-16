@@ -352,6 +352,10 @@ HERBS = [
     {"name": "白参", "price": 260, "desc": "千年白参，补气生血，复伤丹之君药"},
     {"name": "地心芝", "price": 320, "desc": "生于地心熔岩之侧，一株千百年，帝品丹方的引子"},
 ]
+# 2026-11-16 原著考据扩充：32 种原著药材（有明确药方的丹药所需）并入宝库
+from .recipes_data import NOVEL_HERBS, NOVEL_RECIPES, GRADE_MIN_LV, RECIPES_PER_PAGE  # noqa: E402
+
+HERBS = HERBS + list(NOVEL_HERBS)
 HERB_NAMES = [h["name"] for h in HERBS]
 HERB_BY_NAME = {h["name"]: h for h in HERBS}
 
@@ -385,9 +389,26 @@ RECIPES = [
      "price": 800, "effect": "luck", "value": 200,
      "desc": "九幽所凝，服之机缘 +200"},
 ]
+# 2026-11-16 原著考据扩充：55 枚原著丹药并入（有药方者走炼制，无药方者纯金币购买）
+# 原有 8 枚游戏自设丹方（回灵丹/破障丹…）保留不动，避免破坏既有存档与平衡。
+# 每枚补 min_lv（品阶→境界门槛）、buy（金币售价）、src（原著出处）、need 缺省为 {}。
+for _nr in NOVEL_RECIPES:
+    _nr.setdefault("price", _nr["buy"])   # 市场价沿用金币售价，供商店/备注展示
+RECIPES = RECIPES + list(NOVEL_RECIPES)
 RECIPE_NAMES = [r["name"] for r in RECIPES]
 RECIPE_BY_NAME = {r["name"]: r for r in RECIPES}
-GRADE_ORDER = ["帝品", "五品", "四品"]
+from .recipes_data import GRADE_ORDER  # noqa: E402  高→低全品阶
+
+# 缺字段补齐：游戏自设的 8 枚原本没有 min_lv/buy/src，给默认值让下游统一 .get。
+# 2026-11-16：min_lv 兜底不能一律 1——否则帝品「灭神丹/九幽散」、五品「复伤丹」
+# 等会在 lv1 卡上出现，违反「等级不够不展示」。按品阶套与原创丹药同一张门槛表；
+# 一~四品仍为 1（新手开局四品炼药师，常用回灵丹/破障丹照常可见）。
+for _r in RECIPES:
+    if "min_lv" not in _r:
+        _r["min_lv"] = GRADE_MIN_LV.get(_r.get("grade", ""), 1)
+    _r.setdefault("buy", int(_r.get("price", 0)))
+    _r.setdefault("src", "游戏自设丹方")
+    _r.setdefault("need", {})
 
 #: 炼药师品阶（实机：开局「四品炼药师 0/2080」）
 ALCHEMIST = [
@@ -419,15 +440,52 @@ CRAFT_EXP = 60
 #:   exp_mul / gold_mul 只影响产出，越凶的怪给得越多。
 #: lv 是「这个物种出现在哪一档玩家面前」，2026-11-14 补全 13 阶后按新等级轴重排
 #: （对应 斗之气九段 / 九星斗者 / 九星斗师 / 九星斗灵 / 九星斗皇 / 九星斗尊 / 九星斗圣）。
+#: 2026-11-16 扩充：每场遭遇 1~5 个敌人，物种分三类（魔兽 / 强盗 / 原著反派）。
+#:   * 名字全部考据原著（百度百科「斗破苍穹势力/魂殿」、B 站「全本资料·魔兽」、
+#:     头条「魔兽介绍」），不编造：魂殿等级 = 殿主>天尊>尊老>护法>魂使；
+#:     魔兽按一~九阶；穆蛇=狼头佣兵团团长二星斗师；韩枫=黑盟药皇；
+#:     地魔老鬼=魔炎谷首领；鹜护法/摘星老鬼=魂殿护法/天尊；魂灭生=魂殿殿主。
+#:   * kind 只影响战报文案（"魔兽/悍匪/魂殿"），不参与数值；hard/exp_mul/gold_mul
+#:     沿用原 7 只的档位规律（等级越高越难、产出越多），保证既有平衡测试不破。
+#:   * 数值仍由 monster_scaled 按玩家等级反解，表内 lv 只决定"在哪一档出现"。
 MONSTERS = [
-    {"name": "地鬼", "lv": 9, "hard": 0.92, "exp_mul": 1.00, "gold_mul": 0.80},
-    {"name": "巡山妖", "lv": 18, "hard": 0.90, "exp_mul": 1.00, "gold_mul": 1.00},
-    {"name": "赤炎狼", "lv": 27, "hard": 0.89, "exp_mul": 1.00, "gold_mul": 1.10},
-    {"name": "紫晶翼狮王", "lv": 45, "hard": 0.87, "exp_mul": 1.00, "gold_mul": 1.20},
-    {"name": "天山雪蟒", "lv": 63, "hard": 0.86, "exp_mul": 1.00, "gold_mul": 1.30},
-    {"name": "云岚山守山兽", "lv": 81, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.40},
-    {"name": "魂殿执事", "lv": 102, "hard": 0.83, "exp_mul": 1.00, "gold_mul": 1.60},
+    # ---- 魔兽（按原著阶位，低→高）----
+    {"name": "嗜血鼠", "lv": 9, "hard": 0.93, "exp_mul": 1.00, "gold_mul": 0.80, "kind": "魔兽"},
+    {"name": "岩蛇", "lv": 14, "hard": 0.92, "exp_mul": 1.00, "gold_mul": 0.85, "kind": "魔兽"},
+    {"name": "巡山妖", "lv": 18, "hard": 0.90, "exp_mul": 1.00, "gold_mul": 1.00, "kind": "魔兽"},
+    {"name": "暴雪魔猿", "lv": 24, "hard": 0.90, "exp_mul": 1.00, "gold_mul": 1.05, "kind": "魔兽"},
+    {"name": "狮翼兽", "lv": 30, "hard": 0.89, "exp_mul": 1.00, "gold_mul": 1.10, "kind": "魔兽"},
+    {"name": "赤炎狼", "lv": 33, "hard": 0.89, "exp_mul": 1.00, "gold_mul": 1.10, "kind": "魔兽"},
+    {"name": "双头火灵蛇", "lv": 42, "hard": 0.88, "exp_mul": 1.00, "gold_mul": 1.15, "kind": "魔兽"},
+    {"name": "紫晶翼狮王", "lv": 45, "hard": 0.87, "exp_mul": 1.00, "gold_mul": 1.20, "kind": "魔兽"},
+    {"name": "黑焰紫云雕", "lv": 57, "hard": 0.87, "exp_mul": 1.00, "gold_mul": 1.25, "kind": "魔兽"},
+    {"name": "天山雪蟒", "lv": 63, "hard": 0.86, "exp_mul": 1.00, "gold_mul": 1.30, "kind": "魔兽"},
+    {"name": "八翼黑蛇皇", "lv": 74, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.35, "kind": "魔兽"},
+    {"name": "云岚山守山兽", "lv": 81, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.40, "kind": "魔兽"},
+    {"name": "天毒蝎龙兽", "lv": 92, "hard": 0.84, "exp_mul": 1.00, "gold_mul": 1.50, "kind": "魔兽"},
+    # ---- 强盗 / 佣兵（原著早期反派，黑角域与魔兽山脉）----
+    {"name": "狼头佣兵穆蛇", "lv": 20, "hard": 0.90, "exp_mul": 1.05, "gold_mul": 1.20, "kind": "悍匪"},
+    {"name": "血战佣兵", "lv": 36, "hard": 0.89, "exp_mul": 1.05, "gold_mul": 1.25, "kind": "悍匪"},
+    {"name": "黑角域散修", "lv": 55, "hard": 0.87, "exp_mul": 1.05, "gold_mul": 1.35, "kind": "悍匪"},
+    {"name": "黑盟死士", "lv": 78, "hard": 0.85, "exp_mul": 1.05, "gold_mul": 1.45, "kind": "悍匪"},
+    # ---- 原著反派人物（魂殿体系 + 黑盟/魔炎谷）----
+    {"name": "魂殿鹜护法", "lv": 60, "hard": 0.86, "exp_mul": 1.20, "gold_mul": 1.40, "kind": "魂殿"},
+    {"name": "药皇韩枫", "lv": 69, "hard": 0.85, "exp_mul": 1.25, "gold_mul": 1.45, "kind": "黑盟"},
+    {"name": "地魔老鬼", "lv": 76, "hard": 0.85, "exp_mul": 1.25, "gold_mul": 1.50, "kind": "魔炎谷"},
+    {"name": "魂殿摘星老鬼", "lv": 90, "hard": 0.84, "exp_mul": 1.35, "gold_mul": 1.60, "kind": "魂殿"},
+    {"name": "魂殿执事", "lv": 102, "hard": 0.83, "exp_mul": 1.00, "gold_mul": 1.60, "kind": "魂殿"},
+    {"name": "魂灭生", "lv": 103, "hard": 0.83, "exp_mul": 1.50, "gold_mul": 1.80, "kind": "魂殿"},
 ]
+
+#: 遭遇战：每场随机遇敌数量 1~5（用户 2026-11-16 需求）。
+ENCOUNTER_MIN = 1
+ENCOUNTER_MAX = 5
+#: 连战中每放倒一个敌人，玩家回复一点气血（避免 5 连战必死，但不回满）。
+#: 比例是"最大气血"的百分比；斗气 2026-11-16 起跨战结转、不再回满，此处不动。
+ENCOUNTER_REST_HEAL = 0.18
+#: 连战中非首敌的属性削弱（每个敌人比单挑略弱一点，连战总难度可控）。
+#: 第 i 个敌人（0-based）的难度缩放 = 1 - i * ENCOUNTER_FADE，最多削弱到 80%。
+ENCOUNTER_FADE = 0.05
 
 #: 玩家斩杀怪物所需回合。血量按此反解，"几回合打完"是设计值而不是副产品。
 TTK_PLAYER = 4.5
@@ -537,12 +595,26 @@ CHANCE_EVENTS: list[dict] = [
     {
         "name": "有奖竞猜", "tone": "good", "weight": 12,
         "text": "《斗破苍穹》有奖竞猜！答案正确，获得1000金币奖励。",
+        # quiz 保留原版逐字文案（含「（答案：X）」），供 test_chance 逐字考据守门；
+        # 也作为 question/answer 的提取源，避免两处文案漂移。真正展示给玩家的是
+        # quiz_items 里拆好的题目（去掉答案） + 选项按钮，答案只留服务端判定。
         "quiz": [
             "玩家在本游戏中可拥有几种火？（答案：4种）",
             "萧炎为何要去云岚宗？（答案：三年之约）",
             "薰儿与萧炎的关系是？（答案：青梅竹马）",
             "斗破苍穹故事的主角是谁？（答案：萧炎）",
             "斗破苍穹里谁是萧炎的老师？（答案：药老）",
+        ],
+        # 2026-11-16 用户「机遇问答应该增加选项按钮，而不是默认正确」：
+        # question 从 quiz 去掉「（答案：X）」得到；options 是 4 选 1 的干扰项；
+        # answer 是正确选项在 options 里的下标。答案绝不进按钮 data。
+        # 干扰项均取自原著人物/设定，不编造无关词。
+        "quiz_items": [
+            {"options": ["1 种", "4 种", "3 种", "5 种"], "answer": 1},
+            {"options": ["三年之约", "复仇雪恨", "拜师学艺", "寻找异火"], "answer": 0},
+            {"options": ["青梅竹马", "同门师姐", "救命恩人", "宿世仇敌"], "answer": 0},
+            {"options": ["萧炎", "萧战", "萧厉", "萧薰儿"], "answer": 0},
+            {"options": ["药老", "韩枫", "云山", "魂灭生"], "answer": 0},
         ],
         "reward": {"gold": 1000},
         "src": "s__d0.hy.txt:87-139（5 组竞猜，奖励 [源码] 1000）",

@@ -1,0 +1,563 @@
+{
+ "source": "https://api.warframe.market/v2/riven/attributes",
+ "fetched_at": "2026-11-16",
+ "count": 50,
+ "attributes": [
+  {
+   "slug": "ammo_efficiency",
+   "game_ref": "WeaponAmmoEfficiency",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "弹药效率",
+   "en": "Ammo Efficiency"
+  },
+  {
+   "slug": "ammo_maximum",
+   "game_ref": "WeaponAmmoMaxMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "弹药最大值",
+   "en": "Ammo Maximum"
+  },
+  {
+   "slug": "base_damage_/_melee_damage",
+   "game_ref": "WeaponDamageAmountMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "伤害",
+   "en": "Damage"
+  },
+  {
+   "slug": "blast",
+   "game_ref": "WeaponBlastDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "爆炸伤害",
+   "en": "Blast"
+  },
+  {
+   "slug": "chance_to_gain_combo_count",
+   "game_ref": "WeaponMeleeComboPointsOnHitMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "的几率来获得连击数",
+   "en": "Chance to Gain Combo Count"
+  },
+  {
+   "slug": "chance_to_gain_extra_combo_count",
+   "game_ref": "WeaponMeleeComboBonusOnHitMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "额外连击数几率",
+   "en": "Additional Combo Count Chance"
+  },
+  {
+   "slug": "channeling_damage",
+   "game_ref": "WeaponMeleeComboInitialBonusMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "初始连击",
+   "en": "Initial Combo"
+  },
+  {
+   "slug": "channeling_efficiency",
+   "game_ref": "WeaponMeleeComboEfficiencyMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "重击效率",
+   "en": "Heavy Attack Efficiency"
+  },
+  {
+   "slug": "cold_damage",
+   "game_ref": "WeaponFreezeDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "冰冻伤害",
+   "en": "Cold"
+  },
+  {
+   "slug": "combo_duration",
+   "game_ref": "ComboDurationMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "连击持续时间",
+   "en": "Combo Duration"
+  },
+  {
+   "slug": "corrosive",
+   "game_ref": "WeaponCorrosiveDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "腐蚀伤害",
+   "en": "Corrosive"
+  },
+  {
+   "slug": "critical_chance",
+   "game_ref": "WeaponCritChanceMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "暴击率",
+   "en": "Critical Chance"
+  },
+  {
+   "slug": "critical_chance_on_slide_attack",
+   "game_ref": "SlideAttackCritChanceMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "滑行攻击暴击几率",
+   "en": "Critical Chance for Slide Attack"
+  },
+  {
+   "slug": "critical_damage",
+   "game_ref": "WeaponCritDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "暴击伤害",
+   "en": "Critical Damage"
+  },
+  {
+   "slug": "damage_to_orokin",
+   "game_ref": "WeaponFactionDamageOrokin",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对奥罗金的伤害",
+   "en": "Damage to Orokin"
+  },
+  {
+   "slug": "damage_to_scaldra",
+   "game_ref": "WeaponFactionDamageScaldra",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对炽蛇军的伤害",
+   "en": "Damage to Scaldra"
+  },
+  {
+   "slug": "damage_to_techrot",
+   "game_ref": "WeaponFactionDamageTechrot",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对科腐者的伤害",
+   "en": "Damage to Techrot"
+  },
+  {
+   "slug": "damage_vs_corpus",
+   "game_ref": "WeaponFactionDamageCorpus",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对 Corpus 的伤害",
+   "en": "Damage to Corpus"
+  },
+  {
+   "slug": "damage_vs_grineer",
+   "game_ref": "WeaponFactionDamageGrineer",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对 Grineer 的伤害",
+   "en": "Damage to Grineer"
+  },
+  {
+   "slug": "damage_vs_infested",
+   "game_ref": "WeaponFactionDamageInfested",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "对 Infested 的伤害",
+   "en": "Damage to Infested"
+  },
+  {
+   "slug": "electric_damage",
+   "game_ref": "WeaponElectricityDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "电击伤害",
+   "en": "Electricity"
+  },
+  {
+   "slug": "finisher_damage",
+   "game_ref": "WeaponMeleeFinisherDamageMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "处决伤害",
+   "en": "Finisher Damage"
+  },
+  {
+   "slug": "fire_rate_/_attack_speed",
+   "game_ref": "WeaponFireRateMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "射速/攻击速度",
+   "en": "Fire Rate / Attack Speed"
+  },
+  {
+   "slug": "gas",
+   "game_ref": "WeaponGasDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "毒气伤害",
+   "en": "Gas"
+  },
+  {
+   "slug": "heat_damage",
+   "game_ref": "WeaponFireDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "火焰伤害",
+   "en": "Heat"
+  },
+  {
+   "slug": "heavy_attack_wind_up_speed",
+   "game_ref": "WeaponMeleeHeavyAttackChargeMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "重击准备速度",
+   "en": "Heavy Attack Wind Up Speed"
+  },
+  {
+   "slug": "impact_damage",
+   "game_ref": "WeaponImpactDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "冲击伤害",
+   "en": "Impact"
+  },
+  {
+   "slug": "magazine_capacity",
+   "game_ref": "WeaponClipMaxMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "弹匣容量",
+   "en": "Magazine Capacity"
+  },
+  {
+   "slug": "magazine_reloaded_s_when_holstered",
+   "game_ref": "WeaponMagazineReloadHolstered",
+   "group": "default",
+   "exclusive_to": [
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "收起武器时弹匣每秒自动装填",
+   "en": "Magazine Reloaded/s when Holstered"
+  },
+  {
+   "slug": "magnetic",
+   "game_ref": "WeaponMagneticDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "磁力伤害",
+   "en": "Magnetic"
+  },
+  {
+   "slug": "melee_damage_on_heavy_attack",
+   "game_ref": "WeaponMeleeHeavyAttackDamageMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "在重击时的近战伤害",
+   "en": "Melee Damage on Heavy Attack"
+  },
+  {
+   "slug": "multishot",
+   "game_ref": "WeaponFireIterationsMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "多重射击",
+   "en": "Multishot"
+  },
+  {
+   "slug": "parry_angle",
+   "game_ref": "WeaponMeleeParryAngleMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "招架角度",
+   "en": "Parry Angle"
+  },
+  {
+   "slug": "projectile_speed",
+   "game_ref": "WeaponProjectileSpeedMod",
+   "group": "default",
+   "exclusive_to": [
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "投射物速度",
+   "en": "Projectile Speed"
+  },
+  {
+   "slug": "punch_through",
+   "game_ref": "WeaponPunctureDepthMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": true,
+   "zh": "穿透",
+   "en": "Punch Through"
+  },
+  {
+   "slug": "puncture_damage",
+   "game_ref": "WeaponArmorPiercingDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "穿刺伤害",
+   "en": "Puncture"
+  },
+  {
+   "slug": "radiation",
+   "game_ref": "WeaponRadiationDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "辐射伤害",
+   "en": "Radiation"
+  },
+  {
+   "slug": "range",
+   "game_ref": "WeaponMeleeRangeIncMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": false,
+   "zh": "攻击范围",
+   "en": "Range"
+  },
+  {
+   "slug": "recoil",
+   "game_ref": "WeaponRecoilReductionMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "武器后坐力",
+   "en": "Weapon Recoil"
+  },
+  {
+   "slug": "reload_speed",
+   "game_ref": "WeaponReloadSpeedMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "装填速度",
+   "en": "Reload Speed"
+  },
+  {
+   "slug": "slam_attack_damage",
+   "game_ref": "WeaponMeleeSlamDamageMod",
+   "group": "melee",
+   "exclusive_to": [
+    "melee",
+    "zaw"
+   ],
+   "positive_only": true,
+   "zh": "震地攻击伤害",
+   "en": "Slam Attack Damage"
+  },
+  {
+   "slug": "slash_damage",
+   "game_ref": "WeaponSlashDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "切割伤害",
+   "en": "Slash"
+  },
+  {
+   "slug": "status_chance",
+   "game_ref": "WeaponStunChanceMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "触发几率",
+   "en": "Status Chance"
+  },
+  {
+   "slug": "status_damage",
+   "game_ref": "WeaponStatusDamage",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "异常状态伤害",
+   "en": "Status Damage"
+  },
+  {
+   "slug": "status_duration",
+   "game_ref": "WeaponProcTimeMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": false,
+   "zh": "触发时间",
+   "en": "Status Duration"
+  },
+  {
+   "slug": "toxin_damage",
+   "game_ref": "WeaponToxinDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "毒素伤害",
+   "en": "Toxin"
+  },
+  {
+   "slug": "viral",
+   "game_ref": "WeaponViralDamageMod",
+   "group": "default",
+   "exclusive_to": [],
+   "positive_only": true,
+   "zh": "病毒伤害",
+   "en": "Viral"
+  },
+  {
+   "slug": "weak_point_critical_chance",
+   "game_ref": "WeaponWeakpointCriticalChance",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "弱点暴击几率",
+   "en": "Weak Point Critical Chance"
+  },
+  {
+   "slug": "weak_point_damage",
+   "game_ref": "WeaponWeakpointDamage",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "弱点伤害",
+   "en": "Weak Point Damage"
+  },
+  {
+   "slug": "zoom",
+   "game_ref": "WeaponZoomFovMod",
+   "group": "default",
+   "exclusive_to": [
+    "archgun",
+    "kitgun",
+    "pistol",
+    "rifle",
+    "shotgun"
+   ],
+   "positive_only": false,
+   "zh": "变焦",
+   "en": "Zoom"
+  }
+ ]
+}
