@@ -1,0 +1,726 @@
+# -*- coding: utf-8 -*-
+"""守门：紫卡全面分析卡「配卡 MOD 必须匹配真实武器类型」（官方副本，2026-11-11）。
+
+防的是用户图1：给近战武器（Coda Motovore）却配了「深层冷冻/病原弹头/致命洪流」
+等**枪械** MOD，且配卡标题写死「基于击杀效率配卡」。
+
+四条铁律：
+  1. 生产配卡主路径**按具体武器真实 build**（``builds.json`` / ``build_fetch`` 的
+     ``build_mods``，每项带 en 英文字段）经 ``_build_mods_from_build`` 装配，**不是固定
+     类别表**（2026-11-12 用户推翻 c22/c23「固定一套配卡」）；固定表 ``_BUILD``/
+     ``_MELEE_BUILD`` 降级为无真实 build 时的诚实兜底，且卡名须在 mod_full.json 的 zh
+     精确命中（旧「暗病打击 Prime/肉瘤 巨颚」是凭译名猜的、事实源里根本不存在）；
+  2. ``image`` 对每张配卡 MOD **运行时实时合成 + 内存缓存**
+     （``_live_mod_image_by_en``：真实 build 的 **en 名直接**喂 render_mod_card_wide，
+     **零 zh 反查**——c22 深色占位块根因即固定表 14/28 幽灵译名反查 en 失败、render
+     压根没被调用。生成器用真 DE 立绘 + 官方横版卡框出 370×185 深色满幅金属边框卡，
+     零外呼、零静态资产；紫卡同类词条经 ``_replaced_by_riven`` 精确标「替」角标）；
+     **禁止静态 PNG 硬编码**（用户 2026-11-12 明确「其他 mod 实时获取或从缓存拿，
+     禁止硬编码」）——磁盘不得有 riven_full_assets/mods/*.png 交付、源码不得有
+     _MELEE_MOD_IMAGE 卡图映射；合成失败诚实 None 走占位框，绝不张冠李戴；
+  2b. 第 8 格「当前紫卡」是**唯一**固定资产：母版 mod_1_3.png（紫色星标，用户认可），
+     紫卡无法由 MOD 数据表合成、不随武器变，故保留；其余参考样例母版不交付；
+  2c. 横版真卡视觉（2026-11-12 用户「我就要之前那个深色效果，别再乱改了」）：
+     **深色满幅不透明（四角 alpha=255）+ 四边金属色收边（非深色裸边/黑边）+
+     稀有度分档边框色 + 右上梯形耗能标签 + 底部等级点**。严禁退回第19轮
+     「圆角透明 + 浅灰白框 + 框外 alpha=0」方向。；
+  3. 类型未知/战甲名/外号 → 全部「需紫卡截图」占位，绝不默认套 Rifle 枪卡；
+  4. 图损坏/缺失 → 模板等比 contain 贴真图失败时回落占位框，不崩、不编造。
+
+类型归类（riven_disp.json 7 类 → riven_card 真表）：
+  Melee/Zaw→近战表；Pistol/Kitgun→手枪表；Rifle/Archgun→步枪表；Shotgun→霰弹表。
+
+锚定 official 副本根（parents[1]）。纯 AST + 隔离装配真模块，宿主可跑。
+"""
+from __future__ import annotations
+
+import ast
+import importlib.util
+import sys
+import types
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+# 数据层 _live_mod_image 会 lazy `from tools.gen_mod_cards import render_mod_card_wide`，
+# 需项目根在 sys.path（宿主/容器通用）。gen_mod_cards 只依赖标准库 + Pillow，无 nonebot/httpx。
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+_DATA = _REPO / "src" / "plugins" / "qq_bridge" / "game_tools" / "riven_full.py"
+_CARD = _REPO / "src" / "plugins" / "qq_bridge" / "game_tools" / "riven_card.py"
+
+_P = _F = 0
+_GUN_ONLY = ("深层冷冻", "病原弹头", "致命洪流", "黄蜂蛰刺",
+             "弹头扩散", "持续火力 Prime", "火焰装填 Prime")
+# 图2 Rabbit 病毒切割重击流近战表（2026-11-11 全量对齐、2026-11-12 修正两处错名）
+_MELEE_ONLY = ("热病打击 Prime", "北风", "邪恶蓄力", "震波", "肉碾虫 巨颚", "牺牲 斩铁", "肢解")
+# 旧状态流 / 旧凭译名猜的错卡名：仅用于反证「不再出现」
+_OLD_MELEE = ("压迫 Prime", "热毒 Prime", "渴血", "泣血", "角斗 威力", "粉碎者", "触手 Prime",
+              "暗病打击 Prime", "肉瘤 巨颚")
+_MOD_FULL = _REPO / "data" / "warframe_items" / "mod_full.json"
+_MOD_WIDE = _REPO / "src" / "plugins" / "qq_bridge" / "pic" / "templates" / "riven_full_assets" / "mods"
+# 图2 近战 7 张真图的 en slug（文件名，不含 .png）
+_MELEE_IMG_SLUG = ("primed_fever_strike", "north_wind", "corrupt_charge", "seismic_wave",
+                   "carnis_mandible", "sacrificial_steel", "organ_shatter")
+
+
+def ok(cond, name, detail=""):
+    global _P, _F
+    if cond:
+        _P += 1
+        print("PASS %-50s %s" % (name, detail))
+    else:
+        _F += 1
+        print("FAIL %-50s %s" % (name, detail))
+
+
+def _code_strings(node):
+    """执行代码里的字符串常量，排除各节点 docstring。"""
+    doc_ids = set()
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = getattr(n, "body", None)
+            if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant) \
+                    and isinstance(b[0].value.value, str):
+                doc_ids.add(id(b[0].value))
+    return {n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in doc_ids}
+
+
+def _fn(tree, name):
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            return n
+    return None
+
+
+def _load_isolated():
+    """隔离装配 riven_full + riven_card 真模块：只桩 nonebot.log / warframe，
+    保留 _BUILD/_MELEE_BUILD/_build_mods 真实现。挂在一个假包下让相对 import 生效。"""
+    pkg = types.ModuleType("qq_bridge.gt"); pkg.__path__ = []
+    nb = types.ModuleType("nonebot"); nbl = types.ModuleType("nonebot.log")
+
+    class _L:
+        def info(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+        def error(self, *a, **k): pass
+    nbl.logger = _L(); nb.log = nbl
+    sys.modules.setdefault("nonebot", nb); sys.modules.setdefault("nonebot.log", nbl)
+    sys.modules["qq_bridge"] = pkg
+    sys.modules["qq_bridge.gt"] = pkg
+
+    # riven_card 依赖 from . import warframe（只用到 _load_riven_tables 等，桩最小面）
+    wf = types.ModuleType("qq_bridge.gt.warframe")
+    wf._load_riven_tables = lambda: ({}, {}, {})
+    sys.modules["qq_bridge.gt.warframe"] = wf
+
+    def _load(modname, path):
+        spec = importlib.util.spec_from_file_location(modname, path)
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[modname] = m
+        spec.loader.exec_module(m)
+        return m
+
+    card = _load("qq_bridge.gt.riven_card", _CARD)
+    full = _load("qq_bridge.gt.riven_full", _DATA)
+    return full, card
+
+
+def section_a_static():
+    print("== A. 静态纪律：配卡名事实源单一 + 生产路径接线 ==")
+    src = _DATA.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    # A1 生产函数 riven_full_data 执行代码不含任何写死枪卡/近战卡名（只在 _MOD_NAMES 样例里）
+    f_rfd = _fn(tree, "riven_full_data")
+    ok(f_rfd is not None, "A1 找到 riven_full_data")
+    rfd_strings = _code_strings(f_rfd)
+    leaked = [s for s in rfd_strings if any(g in s for g in _GUN_ONLY + _MELEE_ONLY)]
+    ok(not leaked, "A2 riven_full_data 无写死 MOD 卡名", "leak=%s" % leaked[:3])
+
+    # A3 _build_mods 只从 riven_card 真表派生，不含手工卡名
+    f_bm = _fn(tree, "_build_mods")
+    ok(f_bm is not None, "A3 找到 _build_mods 唯一出口")
+    bm_src = ast.get_source_segment(src, f_bm) or ""
+    ok("rc._MELEE_BUILD" in bm_src and "rc._BUILD" in bm_src,
+       "A4 _build_mods 引用 riven_card 两张真表")
+    bm_strings = _code_strings(f_bm)
+    handmade = [s for s in bm_strings if any(g in s for g in _GUN_ONLY + _MELEE_ONLY)]
+    ok(not handmade, "A5 _build_mods 零手工卡名", "handmade=%s" % handmade[:3])
+
+    # A6 image 走 _live_mod_image **运行时实时合成**（2026-11-12 架构收敛：禁静态资产）
+    # 2026-11-13 第30轮：枪械改 **en 直喂** `_live_mod_image_by_en`（零 zh 反查），
+    # 近战仍走 zh 兼容入口 `_live_mod_image`。两者任一落地即满足「实时合成」。
+    ok("_live_mod_image_by_en(" in bm_src and "_live_mod_image(" in bm_src,
+       "A6 _build_mods 用 _live_mod_image(_by_en) 实时合成")
+    ok('_live_mod_image_by_en(en)' in bm_src.replace(" ", ""),
+       "A7 _build_mods 枪械 en 直喂出图（非全 None、非查静态路径）")
+    # 只看执行代码的标识符节点（docstring 里「不再引用 _MELEE_MOD_IMAGE」说明不算）
+    bm_names = {n.id for n in ast.walk(f_bm) if isinstance(n, ast.Name)}
+    ok("_mod_image" not in bm_names and "_MELEE_MOD_IMAGE" not in bm_names,
+       "A7b _build_mods 执行代码不再引用任何静态卡图映射")
+    # A7c~A7e 合成主出口 _live_mod_image_by_en：真实 build 的 en 名**直接**喂官方素材
+    # 生成器（2026-11-12 用户推翻 c22/c23 后重构）。**en 直喂、零 zh 反查**是本次根因
+    # 修复：c22 用固定类别表的幽灵译名反查 en，14/28 失败 → 模板画深色占位块。
+    f_lm = _fn(tree, "_live_mod_image_by_en")
+    lm_src = ast.get_source_segment(src, f_lm) or "" if f_lm else ""
+    ok(f_lm is not None and "_LIVE_MOD_CACHE" in lm_src,
+       "A7c _live_mod_image_by_en 用内存缓存（实时获取或从缓存拿）")
+    ok("render_mod_card_wide" in lm_src and "key" in lm_src
+       and "_zh_to_en_from_mod_full" not in lm_src,
+       "A7d _live_mod_image_by_en 用 en 直喂真生成器（零 zh 反查）")
+    ok(not any(x in lm_src for x in ("httpx", "urlopen", "requests", "http://", "https://")),
+       "A7e _live_mod_image_by_en 零网络外呼")
+    ok("return None" in lm_src and "b\"\"" in lm_src,
+       "A7f _live_mod_image_by_en 合成失败诚实返回 None")
+    # A7h 新链路：_build_mods_from_build 用真实 build 的 en 出图 + 精确「紫卡可替」标注，
+    #      riven_full_data 接受 build_mods/build_source（不再只走固定类别表）。
+    f_bmb = _fn(tree, "_build_mods_from_build")
+    bmb_src = ast.get_source_segment(src, f_bmb) or "" if f_bmb else ""
+    ok(f_bmb is not None and "_live_mod_image_by_en" in bmb_src
+       and "_replaced_by_riven" in bmb_src and "replace" in bmb_src,
+       "A7h _build_mods_from_build 真实 build en 出图 + 紫卡可替标注")
+    f_rfd = _fn(tree, "riven_full_data")
+    rfd_src = ast.get_source_segment(src, f_rfd) or "" if f_rfd else ""
+    ok("build_mods" in rfd_src and "build_source" in rfd_src,
+       "A7i riven_full_data 接受 build_mods/build_source（真实 build 注入）")
+    # A7j _STAT_CATEGORY 排除宽泛「伤害」类别（否则全场标替、误导）；只精确同类。
+    #     检查模块级常量表**执行字面**，不看 docstring（docstring 里「伤害」说明不算）。
+    f_cat = _fn(tree, "_stat_category")  # 确认函数仍在
+    cat_node = None
+    for _n in tree.body:
+        if isinstance(_n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "_STAT_CATEGORY" for t in _n.targets):
+            cat_node = _n.value
+            break
+        # 2026-11-12 生产 _STAT_CATEGORY 带类型标注 → ast.AnnAssign，须一并命中
+        if isinstance(_n, ast.AnnAssign) and isinstance(_n.target, ast.Name) \
+                and _n.target.id == "_STAT_CATEGORY":
+            cat_node = _n.value
+            break
+    cat_strings = _code_strings(cat_node) if cat_node else []
+    bad_cats = [s for s in cat_strings if s == "伤害"]
+    ok(f_cat is not None and cat_node is not None and not bad_cats,
+       "A7j 词条归类排除宽泛「伤害」（精确标替不误导）", "bad=%s" % bad_cats)
+    # A7g 事实源反查函数从 mod_full.json 派生、缓存，零手工 zh→en 映射
+    f_z2e = _fn(tree, "_zh_to_en_from_mod_full")
+    z2e_src = ast.get_source_segment(src, f_z2e) or "" if f_z2e else ""
+    ok(f_z2e is not None and "mod_full.json" in z2e_src and "_ZH_TO_EN" in z2e_src,
+       "A7g zh→en 由 mod_full.json 事实源反查并缓存（零硬编码映射）")
+
+    # A8 生产装配用 _build_mods/_build_label，不再回落 _mod_assets。
+    # 2026-11-13 第30轮：签名扩为 _build_mods(_wtype, _crit)（暴击/非暴击两变体），
+    # 故改用 AST 判「首个位置参数是 _wtype」，既容纳新签名又不放松「按类型派生」。
+    rfd_src = ast.get_source_segment(src, f_rfd) or ""
+    def _first_arg_is_wtype(fname):
+        # 注意：同一函数里 `_build_mods(None)`（未知类型占位分支）也合法存在，
+        # 故必须 `any` 遍历全部调用点，不能命中第一处就判负。
+        return any(
+            n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "_wtype"
+            for n in ast.walk(f_rfd)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == fname)
+    ok(_first_arg_is_wtype("_build_mods"), "A8 riven_full_data 按 _wtype 派生 mods")
+    # A9 标题同理：首个位置参数必须是 _wtype（不得写死文案）
+    _lbl_calls = [n for n in ast.walk(f_rfd) if isinstance(n, ast.Call)
+                  and isinstance(n.func, ast.Name) and n.func.id == "_build_label"]
+    ok(any(n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "_wtype"
+           for n in _lbl_calls), "A9 riven_full_data 按 _wtype 派生标题")
+    # 用 AST Call 节点判定真调用，避开注释里的「不调用 _mod_assets」字样（子串会误判）
+    rfd_calls = {n.func.id for n in ast.walk(f_rfd)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    ok("_mod_assets" not in rfd_calls, "A10 生产路径不调用样例专用 _mod_assets",
+       "calls_with_mod=%s" % sorted(rfd_calls & {"_mod_assets"}))
+
+    # A11 类型归类覆盖 7 类：字典在**模块级** _TYPE_TO_BUILD（不是 _build_key 函数体）
+    type_keys = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == "_TYPE_TO_BUILD" \
+                        and isinstance(node.value, ast.Dict):
+                    type_keys = [k.value for k in node.value.keys
+                                 if isinstance(k, ast.Constant)]
+    for t in ("Melee", "Zaw", "Pistol", "Kitgun", "Rifle", "Archgun", "Shotgun"):
+        ok(t in type_keys, "A11 类型归类含 %s" % t)
+    ok("riven_card._BUILD" in src or "rc._BUILD" in src,
+       "A12 真表来自 riven_card._BUILD（非本地复刻）")
+
+    # A13 卡名事实源（防再犯 2026-11-12「暗病打击/肉瘤」凭译名猜的错名）：
+    # 从 riven_card.py AST 取 _MELEE_BUILD 真值，逐卡在 mod_full.json 的 zh 字段精确命中。
+    import json as _json
+    card_tree = ast.parse(_CARD.read_text(encoding="utf-8"))
+    melee_build = None
+    for node in card_tree.body:
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == "_MELEE_BUILD":
+                    try:
+                        melee_build = ast.literal_eval(node.value)
+                    except Exception:
+                        pass
+    ok(isinstance(melee_build, list) and len(melee_build) == 7,
+       "A13 _MELEE_BUILD 是 7 张字面量表", "val=%r" % (melee_build,))
+    mf = _json.loads(_MOD_FULL.read_text(encoding="utf-8")).get("map", {})
+    zh_set = {str((v or {}).get("zh") or "").strip() for v in mf.values()}
+    unknown = [n for n in (melee_build or []) if n not in zh_set]
+    ok(not unknown, "A14 每张近战卡名在 mod_full.json zh 精确命中",
+       "unknown=%r" % unknown)
+    ok(not any(x in (melee_build or []) for x in ("暗病打击 Prime", "肉瘤 巨颚")),
+       "A15 旧凭译名猜的错卡名已全部移除")
+
+    # A16 静态资产彻底清除（用户「禁止硬编码」）：源码无 _MELEE_MOD_IMAGE /
+    # _MOD_WIDE_DIR / mods/*.png 交付路径；磁盘 mods/ 目录无任何 PNG。
+    top_assigns = {tgt.id: node.value for node in tree.body
+                   if isinstance(node, ast.Assign)
+                   for tgt in node.targets if isinstance(tgt, ast.Name)}
+    ok("_MELEE_MOD_IMAGE" not in top_assigns and "_MOD_WIDE_DIR" not in top_assigns,
+       "A16 源码无静态卡图映射 _MELEE_MOD_IMAGE / _MOD_WIDE_DIR")
+    # 只看执行代码的字符串常量（docstring/注释里「禁止 mods/*.png」说明不算）。
+    # 排除各 docstring 后收集全模块 string 常量，判断无静态交付路径字面。
+    doc_ids = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = getattr(n, "body", None)
+            if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant) \
+                    and isinstance(b[0].value.value, str):
+                doc_ids.add(id(b[0].value))
+    code_strings = {n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and id(n) not in doc_ids}
+    static_paths = [s for s in code_strings
+                    if ("mods/" in s and s.rstrip().endswith(".png"))
+                    or s in ("primed_fever_strike.png", "north_wind.png")]
+    ok(not static_paths, "A17 执行代码无 mods/*.png 静态交付路径",
+       "paths=%r" % static_paths[:4])
+    stray = list(_MOD_WIDE.glob("*.png")) if _MOD_WIDE.is_dir() else []
+    ok(not stray, "A17b 磁盘 mods/ 目录无静态 PNG（已删静态资产）",
+       "stray=%r" % [p.name for p in stray][:4])
+    # 唯一固定资产 = 母卡 mod_1_3.png；.gitignore 须精确放行它、且不再放行 mods/
+    gi = (_REPO / ".gitignore").read_text(encoding="utf-8")
+    ok("!src/plugins/qq_bridge/pic/templates/riven_full_assets/mod_1_3.png" in gi,
+       "A17c .gitignore 精确放行唯一母卡 mod_1_3.png")
+    ok("riven_full_assets/mods/*.png" not in gi,
+       "A17d .gitignore 不再放行 mods/*.png（禁静态资产交付）")
+    ok((_REPO / "src/plugins/qq_bridge/pic/templates/riven_full_assets/mod_1_3.png").is_file(),
+       "A17e 母卡 mod_1_3.png 实物存在")
+    ok(len(list(_MELEE_IMG_SLUG)) == 7, "A18 基准 en slug 7 张")
+
+
+def section_b_behavior():
+    print("== B. 真行为：按类型派生正确武器配卡（隔离装配真模块） ==")
+    full, card = _load_isolated()
+
+    # B1 每张真表都非空，作为基准
+    ok(bool(card._BUILD) and bool(card._MELEE_BUILD), "B1 riven_card 两张真表非空",
+       "gun_types=%s melee=%d" % (list(card._BUILD), len(card._MELEE_BUILD)))
+    rifle = card._BUILD["Rifle"]; pistol = card._BUILD["Pistol"]
+    shotgun = card._BUILD["Shotgun"]; melee = card._MELEE_BUILD
+
+    # B1b 近战表=图2 病毒切割重击流 7 张，旧状态流已整表移除（防回退）
+    ok(all(m in melee for m in _MELEE_ONLY), "B1b 近战含图2 重击流 7 张真名",
+       "n=%d" % len(melee))
+    ok(not any(m in melee for m in _OLD_MELEE), "B1c 旧状态流卡已全部移除")
+    ok(len(melee) == 7, "B1d 近战主卡 7 张（+当前紫卡=8格）", "n=%d" % len(melee))
+
+    # B2 近战武器（含 Zaw）配近战卡，绝不出现枪卡
+    for t in ("Melee", "Zaw"):
+        mods = full._build_mods(t)
+        names = [m["name"] for m in mods]
+        ok(names[:len(melee)] == list(melee), "B2 %s 配近战真表" % t, names[0])
+        ok(not any(g in names for g in _GUN_ONLY), "B3 %s 无枪卡混入" % t)
+        # B4 前 7 张近战卡必须是**运行时实时合成**的 BytesIO 真图（370×185 深色满幅），
+        # 不再是静态 PNG 路径（2026-11-12 架构收敛：禁静态资产、实时获取/缓存）。
+        from PIL import Image as _Image
+        import io as _io
+        live = [m["image"] for m in mods[:7]]
+        good = []
+        for b in live:
+            if not isinstance(b, _io.BytesIO):
+                good.append(False); continue
+            try:
+                im = _Image.open(b); im.load()
+                good.append(im.size == (370, 185) and len(b.getvalue()) > 500)
+            except Exception:  # noqa: BLE001
+                good.append(False)
+        ok(all(good), "B4 %s 前 7 张为运行时实时 BytesIO 真图" % t,
+           "good=%d/7" % sum(good))
+        # B4b 第 8 格「当前紫卡」= 唯一固定资产母版 mod_1_3.png（紫色星标）。
+        riven_img = mods[7]["image"]
+        ok(isinstance(riven_img, str) and Path(riven_img).is_file()
+           and Path(riven_img).name == "mod_1_3.png",
+           "B4b %s 第 8 格当前紫卡→母版紫卡星标 mod_1_3.png" % t,
+           "image=%r" % riven_img)
+        ok(len(mods) == 8, "B5 %s 配卡 8 格" % t, "n=%d" % len(mods))
+
+    # B6 手枪（含 Kitgun）
+    for t in ("Pistol", "Kitgun"):
+        names = [m["name"] for m in full._build_mods(t)]
+        ok(names[:len(pistol)] == list(pistol), "B6 %s 配手枪真表" % t, names[0])
+        ok(not any(m in names for m in _MELEE_ONLY), "B7 %s 无近战卡混入" % t)
+
+    # B8 步枪（含 Archgun）/ 霰弹
+    for t, expect in (("Rifle", rifle), ("Archgun", rifle), ("Shotgun", shotgun)):
+        names = [m["name"] for m in full._build_mods(t)]
+        ok(names[:len(expect)] == list(expect), "B8 %s 配 %s 真表" % (t, expect[0][:4]))
+        ok("当前紫卡" in names, "B9 %s 末格为当前紫卡" % t)
+
+    # B10 未知/战甲名/空类型 → 8 格诚实占位，绝不套 Rifle
+    for t in (None, "", "Warframe", "Archwing", "Unknown"):
+        mods = full._build_mods(t)
+        names = [m["name"] for m in mods]
+        ok(len(names) == 8 and all(n == full._NEED_SHOT for n in names),
+           "B10 未知类型(%r)→需截图占位" % t, names[0])
+        ok(not any(g in names for g in _GUN_ONLY + _MELEE_ONLY),
+           "B11 未知类型(%r)零枪卡/近战卡" % t)
+
+    # B12 标题随类型变化（2026-11-13 第30轮改写）。
+    # 🔴 旧断言要求枪械标题含「手枪」/「霰弹」类别字，但参考卡标题实测 419px、卡面
+    #    标题栏只有 W_SEC_LONG=436px 通栏，塞进「· 手枪」会触发 fit() 缩字号、偏离
+    #    参考卡大字号通栏——故类别字**不进标题**，类型区分改由 B2/B6/B8 的配卡表锁。
+    #    标题的新契约 = 「基于击杀效率配卡 - 需极化N次」，N 由该类型那 7 张真实 Mod
+    #    现算（_forma_needed），**禁止写死常数**。下面同时验「等于实算值」与「因类型而异」。
+    ok("近战" in full._build_label("Melee"), "B12 近战标题含「近战」")
+    for _t in ("Rifle", "Pistol", "Shotgun"):
+        for _crit in (False, True):
+            _n = card._forma_needed(card._BUILD_EN["crit" if _crit else "noncrit"][_t])
+            _lb = full._build_label(_t, _crit)
+            ok(_n is not None and ("需极化%d次" % _n) in _lb,
+               "B13 %s %s 标题=实算需极化%d次" % (_t, "暴击" if _crit else "非暴击", _n or -1), _lb)
+    # B14 反证「标题写死」：同口径下三类枪械的极化次数不可能全相同（当前 4/3/1 与 4/2/3）
+    for _crit in (False, True):
+        _vals = {full._build_label(t, _crit) for t in ("Rifle", "Pistol", "Shotgun")}
+        ok(len(_vals) >= 2, "B14 %s 三类枪械标题不全相同（非硬编码）"
+           % ("暴击" if _crit else "非暴击"), str(len(_vals)))
+    ok("需紫卡截图" in full._build_label(None), "B15 未知标题如实标需截图")
+
+    # B16 武器名反查真类型（只读 riven 真表的映射，探针实测恒定）
+    # 这里只验 _wtype_from_name 的「查不到落空串」与「精确命中」两条确定路径，
+    # 具体 disp 表数据由容器真出图覆盖（宿主无 httpx 不加载完整 riven 数据）。
+    ok(full._wtype_from_name("") == "", "B16 空名→空类型")
+
+
+def section_c_injection():
+    print("== C. 注入反证：旧实现必须被守门判据抓住 ==")
+    src = _DATA.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    f_rfd = _fn(tree, "riven_full_data")
+    rfd_src = ast.get_source_segment(src, f_rfd) or ""
+
+    # C1 注入「生产路径回落 _mod_assets」→ 构造反证样本并验证 A10 判据能抓到
+    injected_tree = ast.parse(src)
+    inj_rfd = _fn(injected_tree, "riven_full_data")
+    # 把一个 _build_mods Call 节点替换为 _mod_assets Call（真节点级注入）
+    replaced = 0
+    for n in ast.walk(inj_rfd):
+        if replaced:
+            break
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                and n.func.id == "_build_mods":
+            n.func.id = "_mod_assets"
+            replaced += 1
+    inj_calls = {c.func.id for c in ast.walk(inj_rfd)
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+    ok(replaced == 1 and "_mod_assets" in inj_calls,
+       "C1 注入 _mod_assets 调用成功（反证样本构造）")
+    # C2 当前真源码的 riven_full_data 无该坏调用 → 证明 A10 判据有效
+    real_calls = {c.func.id for c in ast.walk(f_rfd)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+    ok("_mod_assets" not in real_calls,
+       "C2 当前真源码无该坏调用（守门有效）")
+
+    # C3 注入「_build_mods 默认套 Rifle」→ 必须被 B10 判据语义拒绝
+    bad_default = "return list(rc._BUILD['Rifle'])"
+    ok(bad_default.replace("rc._BUILD", "card._BUILD") not in src,
+       "C3 当前源码无「未知类型默认 Rifle」坏实现")
+
+    # C4 真错误注入（2026-11-12 用户 prove-it 纪律）：把旧错名塞进 A14 的判据，
+    #     必须被「mod_full.json zh 精确命中」抓住 —— 证明这条守门不是摆设。
+    import json as _json
+    mf = _json.loads(_MOD_FULL.read_text(encoding="utf-8")).get("map", {})
+    zh_set = {str((v or {}).get("zh") or "").strip() for v in mf.values()}
+    injected_wrong = list(melee_build_from_card()) + ["暗病打击 Prime", "肉瘤 巨颚"]
+    bad = [n for n in injected_wrong if n not in zh_set]
+    ok("暗病打击 Prime" in bad and "肉瘤 巨颚" in bad,
+       "C4 注入旧错名被事实源判据抓到", "caught=%r" % bad)
+
+
+def section_d_frame():
+    """D. 深色满幅 + 金属边框收边守门（防再犯 2026-11-12 两次纠正）。
+
+    第一次（第19轮）我曾把「深色满幅」误判为黑边、改成框外透明 + 浅灰白圆角框，
+    用户随即否定：「不对，你看你之前做的这个效果，我就要这个，你别再乱改了」，
+    并在 AskUserQuestion 明确「只换质感，保留按武器配」。
+
+    守的是用户认可的原始母版 `mod_0_0…mod_1_3` 肉眼可见形态：
+      * **深色满幅不透明**：四角 alpha=255（不是框外透明圆角）；
+      * **四边金属色收边**：四边中点取样必须是金属色（非深色裸边/黑边），且
+        Bronze/Silver/Gold/Legendary 至少 3 种不同色（每种类型边框不一样）；
+      * **整卡深色**：中心与四角均为深色（非浅灰白透明感）；
+      * 生成源码不得再用框外透明 mask / 圆角裁切 / 深色 RGB 底覆盖。
+    """
+    print("== D. 深色满幅 + 金属边框收边 + 稀有度分档（非透明浅灰，运行时实时合成）==")
+    from PIL import Image as _Image
+    import io as _io
+    # 档位事实源：由 Mods.json 的 rarity 经 RARITY_TIER 派生（不 import 生产模块，
+    # 只读 JSON 复刻映射，避免测试与生成器同实现同源而失去独立性）。
+    import json as _json
+    _RARITY_TIER = {"common": "Bronze", "uncommon": "Silver",
+                    "rare": "Gold", "legendary": "Legendary"}
+    _mods = _json.loads((_REPO / "data" / "warframe_items" / "Mods.json").read_text(encoding="utf-8"))
+    _mod_full = _json.loads(_MOD_FULL.read_text(encoding="utf-8"))
+    _rarity_by_name = {str(m.get("name") or "").lower(): (m.get("rarity") or "common").lower()
+                       for m in _mods if isinstance(m, dict)}
+    _tier_by_zh = {}
+    for _k, _v in (_mod_full.get("map") or {}).items():
+        _zh = str((_v or {}).get("zh") or "").strip()
+        if _zh and _k in _rarity_by_name:
+            _tier_by_zh[_zh] = _RARITY_TIER.get(_rarity_by_name[_k], "Bronze")
+    tier_by_zh = _tier_by_zh
+
+    # 运行时实时合成的 7 张（zh 名称来自 _MELEE_BUILD 真表，卡图由 _live_mod_image 产出）
+    full, _card = _load_isolated()
+    zhs = list(_card._MELEE_BUILD)
+
+    def _is_dark(c):
+        return max(c[:3]) < 110          # 深色：三通道最大值都偏暗
+
+    def _is_metal(c):
+        # 金属色：足够亮/饱和（R/G/B 至少一通道 ≥130），且非纯白透明底的浅灰
+        return max(c[:3]) >= 130
+
+    corner_alpha = []
+    edge_samples = {}                     # zh → 四边中点 RGB
+    opaque_ratio, dark_ratio, white_ratio = [], [], []
+    live_ok = []
+    for zh in zhs:
+        bio = full._live_mod_image(zh)     # 运行时实时合成（内存缓存），零静态资产
+        if not isinstance(bio, _io.BytesIO):
+            live_ok.append((zh, "no BytesIO")); continue
+        try:
+            im = _Image.open(bio).convert("RGBA"); im.load()
+        except Exception as e:  # noqa: BLE001
+            live_ok.append((zh, type(e).__name__)); continue
+        live_ok.append((zh, "OK" if im.size == (370, 185) else str(im.size)))
+        w, h = im.size
+        a = im.split()[3]
+        corners = [a.getpixel(pt) for pt in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+        corner_alpha.append((zh, corners))
+        hist = a.histogram()
+        opaque_ratio.append((zh, hist[255] / (w * h)))
+        # 深色/亮白像素占比：整卡形态判据，对卡名/翼尖/框高光等局部取样点不敏感。
+        px = list(im.convert("RGB").getdata())
+        n = len(px)
+        dark_ratio.append((zh, sum(1 for c in px if max(c) < 110) / n))
+        white_ratio.append((zh, sum(1 for c in px if min(c) > 200) / n))
+        # 四边中点（金属描边取样）：上/下/左/右
+        edge_samples[zh] = (im.getpixel((w // 2, 0))[:3],
+                            im.getpixel((w // 2, h - 1))[:3],
+                            im.getpixel((0, h // 2))[:3],
+                            im.getpixel((w - 1, h // 2))[:3])
+    ok(all(s == "OK" for _, s in live_ok) and len(live_ok) == 7,
+       "D0 7 张卡运行时实时合成为 370×185 BytesIO 真图", "r=%r" % live_ok)
+    # 缓存命中：同一卡第二次调用命中 _LIVE_MOD_CACHE、bytes 相同（不重复合成）
+    b1 = full._live_mod_image(zhs[0]); b2 = full._live_mod_image(zhs[0])
+    ok(isinstance(b1, _io.BytesIO) and isinstance(b2, _io.BytesIO)
+       and b1.getvalue() == b2.getvalue() and len(full._LIVE_MOD_CACHE) >= 7,
+       "D0b 内存缓存命中（同卡二次 bytes 相同、缓存≥7）",
+       "cache=%d" % len(full._LIVE_MOD_CACHE))
+
+    # D1 深色满幅：四角 alpha=255（严禁框外透明圆角）
+    bad_corner = [s for s, c in corner_alpha if any(v != 255 for v in c)]
+    ok(not bad_corner, "D1 7 张卡四角 alpha=255（深色满幅，非透明圆角）", "bad=%r" % bad_corner)
+    # D1b 满幅不透明占比 ≈100%（防整卡被掏空成透明贴纸）
+    bad_opaque = [(s, round(r, 3)) for s, r in opaque_ratio if r < 0.99]
+    ok(not bad_opaque, "D1b 7 张卡不透明像素占比 ≥99%（满幅）", "bad=%r" % bad_opaque)
+    # D2 整卡深色满幅（深色像素占比 ≥55%，母版实测 0.65~0.82）：对卡名/翼尖局部
+    # 取样不敏感，精确区分「深色游戏卡」vs 第19轮「浅灰白透明贴纸」。
+    bad_dark = [(s, round(r, 3)) for s, r in dark_ratio if r < 0.55]
+    ok(not bad_dark, "D2a 7 张卡深色像素占比 ≥55%（深色满幅，非浅灰白）", "bad=%r" % bad_dark)
+    bad_white = [(s, round(r, 3)) for s, r in white_ratio if r > 0.20]
+    ok(not bad_white, "D2b 7 张卡亮白像素占比 <20%（非浅底/透明贴纸）", "bad=%r" % bad_white)
+    # D3 四边金属色收边（非深色裸边=黑边）：每张卡四边中点至少 3/4 是金属色
+    bad_edge = []
+    for slug, cs in edge_samples.items():
+        metal = sum(1 for c in cs if _is_metal(c))
+        if metal < 3:
+            bad_edge.append((slug, cs))
+    ok(not bad_edge, "D3 7 张卡四边金属色收边（每卡≥3/4 边为金属色，无深色裸边）",
+       "bad=%r" % bad_edge)
+
+    # D4 稀有度分档边框色 ≥3 种（每种类型边框不一样），档位由事实源派生
+    tier_samples = {}
+    for zh, cs in edge_samples.items():
+        tier = tier_by_zh.get(zh)
+        ok(tier is not None, "D4a %s 稀有度档位可由事实源派生" % zh, "tier=%r" % tier)
+        if tier:
+            tier_samples.setdefault(tier, []).extend(cs)
+
+    def _avg(cs):
+        return tuple(sum(c[i] for c in cs) // len(cs) for i in range(3))
+    tier_avg = {t: _avg(cs) for t, cs in tier_samples.items()}
+    distinct = set(tier_avg.values())
+    ok(len(distinct) >= 3, "D4 稀有度边框色 >=3 种（每种类型边框不同）",
+       "tier_avg=%r" % {t: c for t, c in tier_avg.items()})
+
+    # D5 生成源码：必须深色满幅 + 金属收边，严禁框外透明 mask / 圆角裁切 / 深底覆盖
+    gen_src = (_REPO / "tools" / "gen_mod_cards.py").read_text(encoding="utf-8")
+    fn = _fn(ast.parse(gen_src), "render_mod_card_wide")
+    fn_src = ast.get_source_segment(gen_src, fn) or ""
+    no_transparent_mask = ("_card_outline_mask" not in fn_src
+                           and "Image.composite(base" not in fn_src)
+    no_dark_base = "Image.new(\"RGB\", (W, H), (16, 18, 22))" not in fn_src
+    full_bleed = "Image.new(\"RGBA\", (W, H), tint + (255,))" in fn_src
+    metal_edge = "ed.rectangle" in fn_src and "edge_color + (235,)" in fn_src
+    rgb_out = "base.convert(\"RGB\").save" in fn_src
+    ok(no_transparent_mask, "D5a 生成函数已删除框外透明 mask / 圆角裁切")
+    ok(no_dark_base, "D5b 生成函数无深色 RGB 底覆盖")
+    ok(full_bleed and rgb_out, "D5c 深色满幅底 + RGB 全幅不透明输出",
+       "full_bleed=%s rgb_out=%s" % (full_bleed, rgb_out))
+    ok(metal_edge, "D5d 生成函数沿四边画金属色描边收边")
+
+    # D6 注入反证：把旧「框外透明圆角」写法塞进 D5a 的判据输入，必须仍被判失败
+    # （证明 D5a 不是摆设：一旦有人把透明 mask 加回，no_transparent_mask 会翻 False）。
+    injected = fn_src + "\n    base.putalpha(_card_outline_mask(W, H))\n"
+    injected_passes = ("_card_outline_mask" not in injected
+                       and "Image.composite(base" not in injected)
+    ok(no_transparent_mask and not injected_passes,
+       "D6 注入旧框外透明圆角写法被 D5a 判据抓到（反证守门有效）")
+
+    # D7 当前紫卡母版：第 8 格固定用 mod_1_3.png（紫色星标），且四角满幅不透明
+    riven_p = _MOD_WIDE.parent / "mod_1_3.png"
+    ok(riven_p.is_file(), "D7a 当前紫卡母版 mod_1_3.png 存在", str(riven_p))
+    if riven_p.is_file():
+        rim = _Image.open(riven_p).convert("RGBA")
+        ra = rim.split()[3]
+        rcorners = [ra.getpixel(pt) for pt in ((0, 0), (rim.width - 1, 0),
+                                               (0, rim.height - 1), (rim.width - 1, rim.height - 1))]
+        ok(all(v == 255 for v in rcorners), "D7b 紫卡星标母版四角满幅不透明（非透明贴纸）",
+           "corners=%r" % rcorners)
+
+
+def section_e_layout():
+    """第26轮守门：紫卡「布局正负按效果方向判定」——阿利乌双枪 2正1负 逐位对齐 Rabbit。
+
+    防的是 2026-11-12 真群截图事故：+58.1% 武器后坐力（越低越好、卡面却是+号）
+    被旧实现按 OCR 卡面符号误算成第 3 个正词条 → 选 3正(0.75) → 区间 40.5/197.6/81.0，
+    与 Rabbit 参考卡 66.8/326.1/53.5 差远。修复复刻 koishi/Warframe Rabbit 权威口径
+    （koishi_ref/riven-data.md:69 + riven-ocr.md:155）：布局负面位 = 卡面真负号
+    OR「效果方向为负」属性集合（_LAYOUT_CURSE_STATS，Ammo Efficiency 受 reverse 保护排除）。
+    """
+    import json as _json
+    print("== 模块E. 布局正负按效果方向判定（阿利乌 2正1负 对齐 Rabbit） ==")
+    base_tbl = _json.loads((_REPO / "data" / "warframe_items" / "riven_stat_base.json")
+                           .read_text(encoding="utf-8"))
+
+    # E1 静态接线：_fix_of/_mid/_fit_disp 都必须走 _layout_curse（不能漏改某处又用 sign）
+    card_src = _CARD.read_text(encoding="utf-8")
+    card_tree = ast.parse(card_src)
+    for fname in ("_fix_of", "_mid", "_fit_disp"):
+        f = _fn(card_tree, fname)
+        fsrc = ast.get_source_segment(card_src, f) or "" if f else ""
+        calls = {n.func.id for n in ast.walk(f) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name)} if f else set()
+        ok("_layout_curse" in calls,
+           "E1 %s 用 _layout_curse 判负面位（非裸 sign）" % fname)
+
+    # 行为级：拿隔离真模块，注入真实 base 表（_load_isolated 默认桩空表）
+    _, card = _load_isolated()
+    card._RAW["base"] = base_tbl
+    card._load_riven_tables = lambda: ({}, base_tbl, {})
+    derived = frozenset(
+        en for en, v in (base_tbl.get("Pistol") or {}).items()
+        if isinstance(v, (int, float)) and v < 0 and en not in card._REVERSE_VALUE_SYMBOL_STATS)
+    ok(card._LAYOUT_CURSE_STATS == derived,
+       "E2 _LAYOUT_CURSE_STATS 与 base 表负值派生一致（防漏同步）",
+       "const=%r derived=%r" % (sorted(card._LAYOUT_CURSE_STATS), sorted(derived)))
+    ok("Ammo Efficiency" not in card._LAYOUT_CURSE_STATS and "Weapon Recoil" in card._LAYOUT_CURSE_STATS,
+       "E3 reverse 保护排除弹药效率、保留后坐力为负面位")
+
+    def _akarius():
+        return {"weapon": "Akarius", "weapon_zh": "阿利乌双枪", "rank": 8, "mr": 13,
+                "disp": 1.2, "type": "Pistol", "stats": [
+            {"en": "Ammo Efficiency", "zh": "弹药效率", "value": 68.1, "unit": "%", "sign": "+"},
+            {"en": "Damage", "zh": "基础伤害", "value": 355.3, "unit": "%", "sign": "+"},
+            {"en": "Weapon Recoil", "zh": "武器后坐力", "value": 58.1, "unit": "%", "sign": "+"}]}
+
+    p = _akarius()
+    fix = card._fix_of(p)
+    ok(abs(fix["buff"] - 1.2375) < 1e-9 and abs(fix["curse"] + 0.495) < 1e-9,
+       "E4 阿利乌 3条全+ 仍判 2正1负(1.2375/-0.495)，非 3正(0.75)", "fix=%r" % fix)
+    rabbit = {"Ammo Efficiency": (60.1, 66.8, 73.5, 1.9),
+              "Damage": (293.5, 326.1, 358.7, 9.0),
+              "Weapon Recoil": (48.1, 53.5, 58.8, 8.7)}
+    all_ok = True
+    for s in p["stats"]:
+        mid = card._mid(s, p, fix); rng = card._range_of(s, p, fix)
+        dev = (s["value"] / mid - 1) * 100
+        got = (round(rng[0], 1), round(mid, 1), round(rng[1], 1), round(dev, 1))
+        ok(got == rabbit[s["en"]], "E5 阿利乌 %s 逐位对齐 Rabbit" % s["en"],
+           "%s vs %s" % (got, rabbit[s["en"]]))
+        all_ok &= got == rabbit[s["en"]]
+    ok(all_ok, "E5x 阿利乌 9 个数字全部逐位复现")
+
+    # E6 后坐力卡面仍正号显示、不标负（Rabbit 卡面就是 +58.1%）
+    market = {"status": "ok", "base": 400, "lo": 370, "hi": 400, "rank": 8, "n": 45,
+              "ts": "2026-11-12 14:01", "source": "WM", "slug": "akarius",
+              "rec_neg": {"zh": "变焦", "delta": 150, "pct": 38, "n": 45},
+              "exact": {"status": "error", "reason": "词条未收录"}, "rec_pos": ["多重", "暴伤", "基伤"]}
+    d = card.build_card_data(_akarius(), market)
+    recoil = next(r for r in d["stats"] if r["name"] == "武器后坐力")
+    ok(recoil["value"].startswith("+") and recoil["neg"] is False and recoil["mean"] == "53.5%",
+       "E6 后坐力仍正号显示/不标负/均值53.5%（Rabbit 卡面一致）", "%r" % recoil)
+    # E7 布局标签按**卡面符号**计数（与参考卡同口径）：阿利乌卡面三条全是「+」
+    # （弹药效率+68.1 / 基础伤害+355.3 / 武器后坐力+58.1）→ 标签就是「3 正 0 负」。
+    # 区间/均值/系数另走 `_layout_curse`（后坐力按 curse 系数 = 21 布局），二者刻意解耦。
+    # ⚠️ 本断言旧版写的是「2 正 1 负」，与实现相反；该实现（neg_ct 按 s["sign"] 计数）
+    # 在原件的 feat/qq-official-buttons-1111 分支里已存在（riven_card.py:1451），
+    # 故属**陈旧断言**、非回归。以下同时锁住解耦的两侧，防以后有人「顺手统一」。
+    ok(d["layout"] == "3 正 0 负",
+       "E7 layout 标签按卡面符号=3正0负（后坐力卡面是+，不标负）", d["layout"])
+    ok(recoil["mean"] == "53.5%" and recoil["neg"] is False,
+       "E7b 区间/均值仍走 _layout_curse（后坐力均值 53.5% 用 curse 系数，与标签解耦）",
+       "%r" % recoil)
+
+    # E8 真负号卡（伯斯顿 3正1负，末位 sign=-）不被新规则破坏
+    b = {"weapon": "Burston", "weapon_zh": "伯斯顿", "rank": 8, "mr": 8, "disp": 1.2,
+         "type": "Rifle", "stats": [
+        {"en": "Damage", "zh": "伤害", "value": 200.0, "unit": "%", "sign": "+"},
+        {"en": "Critical Chance", "zh": "暴击几率", "value": 140.0, "unit": "%", "sign": "+"},
+        {"en": "Multishot", "zh": "多重射击", "value": 100.0, "unit": "%", "sign": "+"},
+        {"en": "Zoom", "zh": "变焦", "value": 50.0, "unit": "%", "sign": "-"}]}
+    bfix = card._fix_of(b)
+    ok(abs(bfix["buff"] - 0.9375) < 1e-9 and abs(bfix["curse"] + 0.75) < 1e-9,
+       "E8 真负号卡(3正1负)仍判 31(0.9375/-0.75)，新规则不破坏", "fix=%r" % bfix)
+    ok(card._layout_curse(b["stats"][-1]) and not card._layout_curse(b["stats"][0]),
+       "E9 真负号(Zoom sign=-)判负面位、正词条不误判")
+
+
+def melee_build_from_card() -> list:
+    """从 riven_card.py AST 取 _MELEE_BUILD 真值（供 C4 注入反证复用）。"""
+    import ast as _ast
+    t = _ast.parse(_CARD.read_text(encoding="utf-8"))
+    for node in t.body:
+        if isinstance(node, _ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, _ast.Name) and tgt.id == "_MELEE_BUILD":
+                    try:
+                        return list(_ast.literal_eval(node.value))
+                    except Exception:
+                        return []
+    return []
+
+
+if __name__ == "__main__":
+    print("== 模块E. 配卡按真实武器类型派生守门 ==")
+    section_a_static()
+    print()
+    section_b_behavior()
+    print()
+    section_c_injection()
+    print()
+    section_d_frame()
+    print()
+    section_e_layout()
+    print("\n%d PASS / %d FAIL" % (_P, _F))
+    sys.exit(1 if _F else 0)

@@ -1,0 +1,80 @@
+# ============================================================================
+# docker-compose.official.yml —— QQ 官方机器人【独立副本】的编排
+#
+# 与 NapCat 版（D:/AI/manju_agent/qq_bridge/docker-compose.bridge.yml）物理隔离：
+#   * 独立项目名 / 镜像名 / 容器名 / 端口 / 数据卷 / 日志 —— 互不共享一个字节
+#   * 官方 Bot（AppID 1906371548）由本容器独占连接（QQ 开放平台 AppID 单连接语义）
+#   * NapCat 容器另由 napcat-disable-official.override.yml 关闭其官方连接权
+#
+# 官方通道是 QQAdapter 主动连腾讯 wss://，不依赖 NapCat 反向 WS；
+# 容器仍监听一个 HTTP 端口（8081）用于 /api/qqo/* 管理接口与 fastapi driver。
+#
+# 构建：docker compose -f docker-compose.official.yml up -d --build
+# 回退：docker compose -f docker-compose.official.yml down
+# ============================================================================
+name: qq_bridge_official
+
+services:
+  bridge-official:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bridge
+    image: qq-bridge-official:latest
+    container_name: qq-bridge-official
+    restart: unless-stopped
+    ports:
+      # 与 NapCat 版 8080 错开；仅本机管理接口需要，不对外
+      - "127.0.0.1:8081:8081"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8081"
+      # 主项目后端在宿主；容器内 localhost 是容器自己，必须指向宿主
+      MANJU_API_BASE: "http://host.docker.internal:7788/api/v1"
+      TASK_MONITOR_BASE: "http://host.docker.internal:8099/api/v1"
+      # 下载中心（2026-11-16 用户「不要连了，暂时用不到，日志不要频繁打这个报错」）：
+      # 本副本暂不使用 aria2 下载中心，总开关关闭 ⇒ download_manager / 订阅监控都
+      # 不启动（见 src/plugins/qq_bridge/__init__.py 的 DL_ENABLE=false 分支），
+      # 不再每 5-9s 刷一条 download_tick_failed；/dl 命令会显式提示未启用。
+      # 恢复：把 DL_ENABLE 改回 "true" 并确保 aria2 sidecar 在 6802 可达。
+      DL_ENABLE: "false"
+      # 保留端点仅作将来恢复时参考；DL_ENABLE=false 时不会被连接。
+      DL_ARIA2_RPC: "http://host.docker.internal:6802/jsonrpc"
+      DL_DIR: "/downloads"
+      OPS_WATCH_ENABLE: "false"
+      WF_WIKI_MODCARDS_DISABLE: "0"
+      WF_OCR_BACKEND: "rapid"
+      # 纯官方通道：确保 NapCat 反向 WS 相关入站即便误连也不产生业务副作用
+      GROUP_ENABLED: "true"
+      TZ: "Asia/Shanghai"
+      # ── 运行态数据一律落在挂载卷 /app/data（2026-11-16 事故修复）──────────
+      # 事故：.env 里 STICKER_DIR 还是 Windows 盘符路径（D:/AI/.../data/stickers），
+      # 而 history/__init__.py 用 STICKER_DIR 反推 data/ 目录。该路径在 Linux 容器
+      # 内被当成相对路径 → 解析成 /app/D:/AI/.../data/，于是 6 个 SQLite 库全部
+      # 写进【镜像可写层】而不是 bind-mount 卷；每次 docker build/recreate 全部丢失。
+      # 铁律：容器内绝不出现盘符路径；存档路径必须显式指向 /app/data。
+      # STICKER_DIR 覆盖后，history/memory/checkin/budget/emotion/group_style
+      # 六个库随之一并回到 /app/data（它们都以它为基准目录）。
+      STICKER_DIR: "/app/data/stickers"
+      # 斗破/修仙存档默认写在插件包内（src/plugins/*/data/*.json）＝ 镜像层，
+      # 重建即回滚。此处显式改到卷内；配合 .dockerignore 排除，双保险。
+      DOUPO_DATA_PATH: "/app/data/doupo/doupo.json"
+      XIUXIAN_DATA_PATH: "/app/data/xiuxian/xiuxian.json"
+      # warframe 头像缓存 + cf_cookies.json 默认落 game_tools/.wm_cache（镜像层）。
+      # 虽是可再生缓存，但同样会被重建清空且污染镜像，一并放进卷。
+      QQ_BRIDGE_CACHE_DIR: "/app/data/wm_cache"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 本副本自己的 .env（含官方凭据），与 NapCat 版完全独立
+      - ./.env:/app/.env:ro
+      # 本副本自己的运行态数据（记忆/历史/贴纸/config 全部独立生成）
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./tmp:/app/tmp
+      - ./downloads:/downloads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8081),3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
