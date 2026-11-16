@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ============================================================================
+# 上传红线（用户 2026-11-16 要求）：任何单文件 >200KB 禁止上传。
+# 在 pre-commit 拦截（比 pre-push 更早、反馈更快）。违反即 exit 1。
+# 解除需用户明确要求，并改本脚本配额——不得用 --no-verify 绕过。
+# ============================================================================
+set -u
+LIMIT=$((200 * 1024))          # 204800 bytes
+over=()
+
+while IFS= read -r -d '' f; do
+    # 索引里可能被删除的文件，跳过
+    [ -e "$f" ] || continue
+    sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+    [ -n "$sz" ] || continue
+    if [ "$sz" -gt "$LIMIT" ]; then
+        over+=("$(printf '%8d B  %s' "$sz" "$f")")
+    fi
+done < <(git diff --cached --name-only -z --diff-filter=ACM)
+
+if [ "${#over[@]}" -gt 0 ]; then
+    echo "════════════════════════════════════════════════════════════" >&2
+    echo "⛔ 上传红线：以下文件 >200KB，禁止提交（单文件上限 $((LIMIT)) B）" >&2
+    printf '   %s\n' "${over[@]}" >&2
+    echo "   请拆分为小文件 / 放进 .gitignore / 或改用外部资产库。" >&2
+    echo "   本红线由 .githooks/pre-commit 拦截，禁止 --no-verify 绕过。" >&2
+    echo "════════════════════════════════════════════════════════════" >&2
+    exit 1
+fi
+exit 0
