@@ -215,7 +215,9 @@ async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
 
 
 async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
-                      file_name: str = "doupo.png") -> None:
+                      file_name: str = "doupo.png",
+                      page: int | None = None,
+                      total_pages: int | None = None) -> None:
     """出一张斗破/修仙卡片；官方通道在卡片下方挂对应功能按钮，NapCat 行为不变。
 
     ## 为什么需要这一层（2026-11-16）
@@ -239,6 +241,9 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
 
     ``event`` 可传 EvView 或原始事件；``card_key`` ∈ CARD_ACTIONS 的 key
     （menu/panel/skills/roster/faction/flames/shop/bag/rank）。
+
+    ``page`` / ``total_pages``（2026-11-16 炼药卡分页）：多页时 arm 分页状态并把
+    按钮切到「上一页/下一页」哨兵；单页或不传则维持普通功能按钮，零行为变化。
     """
     raw = event.raw if isinstance(event, EvView) else event
     if not is_official(raw):
@@ -252,6 +257,7 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
     from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
 
     token = None
+    page_token = None
     sent_via_channel = False
     try:
         ch = get_channel(OFFICIAL)
@@ -259,7 +265,14 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
         if ctx is None:
             raise RuntimeError("official_normalize_returned_none")
         token = attach_official_ctx(ctx)
-        ret = await send_card_via_channel(ctx, data, card_key)
+        # 炼药卡多页：登记本回合分页状态，按钮派生读取后挂「上一页/下一页」。
+        effective_key = card_key
+        if page is not None and total_pages is not None and int(total_pages) > 1:
+            from src.plugins.qq_bridge.channel import doupo_buttons as db  # noqa: PLC0415
+
+            page_token = db.arm_page(int(page), int(total_pages))
+            effective_key = "page:%d" % int(page)   # → keyboard_cmd "doupo:page:N"
+        ret = await send_card_via_channel(ctx, data, effective_key)
         if not (isinstance(ret, dict) and ret.get("ok")):
             raise RuntimeError("official_send_not_ok: %s" % (ret.get("reason") if isinstance(ret, dict) else type(ret).__name__))
         sent_via_channel = True
@@ -271,6 +284,10 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
     finally:
         if token is not None:
             detach_official_ctx(token)
+        if page_token is not None:
+            from src.plugins.qq_bridge.channel import doupo_buttons as db  # noqa: PLC0415
+
+            db.disarm_page(page_token)
 
     if sent_via_channel:
         # 已由 OfficialChannel.send 发出（图片+按钮一条），空 finish 仅结束 handler。
@@ -278,3 +295,85 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
     else:
         # 降级：走 NoneBot 原生发送纯图段（无按钮，但绝不丢图）。
         await matcher.finish(image_seg(event, data, file_name))
+
+
+async def finish_text(matcher: Any, event: Any, text: str,
+                      file_name: str = "") -> None:
+    """发一条纯文本回复；官方通道若本回合有竞猜答题则挂选项按钮。
+
+    ## 为什么需要（2026-11-16 有奖竞猜按钮化）
+    机遇文本拼在战斗/炼丹等命令的返回文本里，原路径 ``matcher.finish(text)``
+    走 NoneBot 原生 ``bot.send``，拿不到 ``OfficialChannel.send`` 的 keyboard
+    注入能力。命令层在触发竞猜时把按钮 token 写进 ContextVar（见
+    ``doupo.quiz_session.arm_button``），本函数读取它：
+
+    * 官方通道 + 有 token：normalize ctx → ``OfficialChannel.send`` 发文本 +
+      ``keyboard_cmd = "doupo:quiz:<token>"`` → 派生 4 个选项按钮，与文本同条下发
+      （msg_type=2 markdown + keyboard）；空 finish 仅结束 handler。
+    * NapCat / 无 token：保持原生 ``matcher.finish(text)`` 原样，零行为变化。
+    * 任何异常降级原生文本，绝不因按钮丢回复。
+
+    ``event`` 可传 EvView 或原始事件；``text`` 已是完整回复文本。
+    """
+    raw = event.raw if isinstance(event, EvView) else event
+    if not is_official(raw):
+        await matcher.finish(text)
+        return
+
+    # 只有本回合 arm 了竞猜按钮才走官方通道；无按钮保持原生发送，减少试探面。
+    try:
+        from doupo import quiz_session as qs  # noqa: PLC0415 — 包内模块
+        token = qs.take_button()
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        await matcher.finish(text)
+        return
+
+    from src.plugins.qq_bridge.channel.base import (  # noqa: PLC0415
+        attach_official_ctx, detach_official_ctx, Outgoing,
+    )
+    from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
+    from src.plugins.qq_bridge.channel import doupo_buttons as db  # noqa: PLC0415
+    from src.plugins.qq_bridge.channel.qq_keyboard import (  # noqa: PLC0415
+        DOUPO_QUIZ_PREFIX,
+    )
+
+    # 把选项文字登记到发送层 ContextVar（buttons_for 同 task 读取生成按钮）。
+    quiz = None
+    try:
+        from doupo import quiz_session as qs  # noqa: PLC0415
+        quiz = qs.STORE.peek_by_token(token)
+    except Exception:  # noqa: BLE001
+        quiz = None
+
+    ctx_token = None
+    quiz_ctx_token = None
+    sent = False
+    try:
+        if quiz is None:
+            raise RuntimeError("quiz_session_not_found")
+        quiz_ctx_token = db.arm_quiz(token, quiz.options)
+        ch = get_channel(OFFICIAL)
+        ctx = await ch.normalize(raw, self_id=str(getattr(raw, "self_id", "") or ""))
+        if ctx is None:
+            raise RuntimeError("official_normalize_returned_none")
+        ctx_token = attach_official_ctx(ctx)
+        kcmd = DOUPO_QUIZ_PREFIX + token
+        ret = await ch.send(ctx, Outgoing(text=text, keyboard_cmd=kcmd))
+        sent = isinstance(ret, dict) and bool(ret.get("ok"))
+    except Exception as e:  # noqa: BLE001 — 按钮增强失败不能丢文本
+        import logging  # noqa: PLC0415
+
+        logging.getLogger("qq_bridge.doupo").warning(
+            "finish_text 官方通道发送失败，降级原生文本：%s: %s", type(e).__name__, e)
+    finally:
+        if ctx_token is not None:
+            detach_official_ctx(ctx_token)
+        if quiz_ctx_token is not None:
+            db.disarm_quiz(quiz_ctx_token)
+
+    if sent:
+        await matcher.finish()
+    else:
+        await matcher.finish(text)

@@ -324,13 +324,13 @@ def build_roster_data(p: dict) -> dict:
     ``rows`` 仍保留扁平结构，供纯文本兜底与既有测试消费。
     """
     sk = p.get("skills") or {}
-    pool = core.skill_pool(p)
-    tier_order = {t: i for i, t in enumerate(cfg.SKILL_TIERS)}
-    pool_sorted = sorted(pool, key=lambda e: tier_order.get(e["tier"], 9))
+    # 序号必须与「上阵 1 3 5」的数字口径严格同源——统一走 core.skill_pool_sorted
+    # （三阶稳定排序），不再在此另写一份 sorted，避免卡片序号与上阵序号错位。
+    pool_sorted = core.skill_pool_sorted(p)
 
     rows: list[dict] = []
     by_tier: dict[str, list[dict]] = {}
-    for e in pool_sorted:
+    for no, e in enumerate(pool_sorted, 1):
         name = e["name"]
         unlocked = bool(e.get("unlocked"))
         equipped = bool(e.get("equipped"))
@@ -372,6 +372,9 @@ def build_roster_data(p: dict) -> dict:
         phrase = fx.source_phrase(e)
 
         row = {
+            # 全局序号（1-based，按卡片显示顺序 = core.skill_pool_sorted）。
+            # 玩家可直接发「上阵 1 3 5 7」按序号上阵，无需手打技名。
+            "no": no,
             "name": name,
             "badge": e["tier"][0],
             "tier": e["tier"],
@@ -417,16 +420,16 @@ def build_roster_data(p: dict) -> dict:
         })
 
     fac_name = p.get("faction_name") or "无宗门"
-    on = sum(1 for e in pool if e.get("equipped"))
-    own = sum(1 for e in pool if e.get("origin") == "本宗")
-    common = sum(1 for e in pool if e.get("origin") == "通用")
+    on = sum(1 for e in pool_sorted if e.get("equipped"))
+    own = sum(1 for e in pool_sorted if e.get("origin") == "本宗")
+    common = sum(1 for e in pool_sorted if e.get("origin") == "通用")
     return {
         "icon": "bolt", "title": "本宗斗技",
         "subtitle": (f"{fac_name} · 共 {len(rows)} 门 · 本宗 {own} / 通用 {common} · "
                      f"上阵 {on}/{cfg.LOADOUT_SIZE}"),
         "groups": groups,
         "rows": rows,
-        "tip": "〔通用〕为斗技堂流通基础斗技，非本宗传承 ｜ 斗技详情 <技名> 看原著出处",
+        "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看原著出处",
     }
 
 
@@ -604,3 +607,89 @@ async def render_bag(p: dict) -> bytes | None:
 
 async def render_rank(top: list) -> bytes | None:
     return await _render_list("doupo_list", build_rank_data(top), "斗破排行")
+
+
+# ---------------------------------------------------------------------------
+# 炼药丹方卡 / 玩法细则卡（2026-11-16：内容多且近乎固定的纯文本 → 卡片）
+# ---------------------------------------------------------------------------
+CARD_RECIPES_NAME = "斗破炼药"
+CARD_HELP_NAME = "斗破玩法"
+
+
+def build_recipes_data(p: dict, page: int = 1) -> dict:
+    """炼药丹方 → doupo_recipes 模板参数（等级过滤 + 分页 + 两列数据）。
+
+    与 ``commands.cmd_recipes`` 严格同源：
+      * 可见丹方 = ``core.recipes_page(p, page)``（内含等级过滤 + 分页夹取）；
+      * 分组顺序 = ``cfg.GRADE_ORDER``（与纯文本一致）；
+      * 齐备标记 = ``core.count_item`` 逐味判（与纯文本 `ok` 判据逐字一致）；
+      * 成功率 = ``cfg.craft_rate``。
+
+    2026-11-16 用户要求「等级不够不展示 / 丹药多了分页 / 两列展示」：
+    低阶丹药由 ``available_recipes`` 直接过滤掉，卡上只出现当前境界可用者；
+    每页固定 ``cfg.RECIPES_PER_PAGE`` 枚，模板按两列网格排布，页码信息由
+    ``page`` / ``total_pages`` / ``total_avail`` 透出（供卡面与翻页按钮共用）。
+    """
+    alch_idx = int(p.get("alch", 0))
+    alch = cfg.ALCHEMIST[alch_idx]
+    rate = int(cfg.craft_rate(alch_idx) * 100)
+    chunk, page, total_pages = core.recipes_page(p, page)
+    total_avail = len(core.available_recipes(p))
+
+    groups = []
+    for grade in cfg.GRADE_ORDER:
+        rows = []
+        for r in chunk:
+            if r["grade"] != grade:
+                continue
+            need = r.get("need") or {}
+            rows.append({
+                "name": r["name"],
+                "mats": [[k, int(v)] for k, v in need.items()],
+                "desc": str(r.get("desc") or ""),
+                "ready": all(core.count_item(p, k) >= int(v) for k, v in need.items()),
+                # 无药方丹药：卡面改为「N 金购买」而非空材料行（与原著考据口径一致）
+                "buyonly": not bool(need),
+                "buy": int(r.get("buy", 0)),
+            })
+        if rows:
+            groups.append({"grade": grade, "rows": rows})
+
+    # 每页丹药数 = 当前页实际条数；卡面与脚注都读它，杜绝「算的画得下」三处不一致
+    shown = sum(len(g["rows"]) for g in groups)
+    return {
+        "icon": "wand",
+        "title": "炼药",
+        "subtitle": ("%s炼药师 · 成功率 %d%% · 药渣 ×%d" %
+                     (alch[0], rate, core.count_item(p, "药渣"))),
+        "page": page,
+        "total_pages": total_pages,
+        "total_avail": total_avail,
+        "shown": shown,
+        "groups": groups,
+        "tip": ("第 %d/%d 页 · 本页 %d 枚 · 可用丹方 %d 枚" %
+                (page, total_pages, shown, total_avail)) if total_pages > 1 else
+               ("可用丹方 %d 枚 · 炼制 <丹名> / 买 <丹名>" % total_avail),
+    }
+
+
+async def render_recipes(p: dict, page: int = 1) -> bytes | None:
+    """「炼药/丹方」出图：等级过滤 + 分页 + 两列丹方卡。失败降级纯文本由调用方保证。"""
+    return await _render_list("doupo_recipes", build_recipes_data(p, page), CARD_RECIPES_NAME)
+
+
+def build_help_data() -> dict:
+    """玩法细则 → doupo_help 模板参数，数据源 commands.HELP_GROUPS（唯一源）。"""
+    return {
+        "title": "斗破玩法",
+        "groups": [
+            {"name": name, "rows": [str(x) for x in rows]}
+            for name, rows in commands.HELP_GROUPS
+        ],
+        "tip": "发「斗破菜单」看全部口令 · 数值改动以本卡为准",
+    }
+
+
+async def render_help() -> bytes | None:
+    """「帮助/玩法/攻略/规则」出图：10 分组玩法细则卡。"""
+    return await _render_list("doupo_help", build_help_data(), CARD_HELP_NAME)

@@ -404,17 +404,28 @@ def test_out_of_pool_monster_still_killable():
             assert hits <= 12, f"lv{lv} 打 {sp['name']} 需 {hits} 回合"
 
 
-def test_fight_mp_not_carried_over():
-    """斗气每战回满、战后不结转 —— 否则连打第二场只能普攻（输出 42%）。"""
+def test_fight_mp_carried_over():
+    """斗气跨战结转、不再每战回满（2026-11-16 用户「去掉强制回满，突破才有意义」）。
+
+    战后写回消耗后的剩余值；见底转普攻；突破/升级（_refill）才回满。
+    """
     p = _p(10)
     p["hp"] = core.stats(p)["体力"]
-    before = core.mp_max(p)
+    full = core.mp_max(p)
+    p["mp"] = full
     core.fight(p, core.monster_scaled(p, cfg.MONSTERS[3]), rng=lambda: 0.5)
-    assert p["mp"] == before
-    # 第二场的第一击必须仍是斗技（伤害显著高于普攻）
+    assert 0 <= p["mp"] < full, "战后斗气必须被消耗（小于满值），不再强制回满"
+
+    # 第二场开战沿用剩余斗气：把 mp 钉成 0，第一击必须是普攻（不是斗技）
     p["hp"] = core.stats(p)["体力"]
+    p["mp"] = 0
     res = core.fight(p, core.monster_scaled(p, cfg.MONSTERS[3]), rng=lambda: 0.5)
-    assert res["log"][0].get("skill") is True
+    first = res["log"][0]
+    assert not first.get("skill"), "0 斗气开战第一击必须是普攻（斗气结转生效）"
+
+    # 突破回满：_refill 把 mp 拉回上限——这正是「突破的意义」
+    core._refill(p)
+    assert p["mp"] == core.mp_max(p), "突破/升级必须回满斗气"
 
 
 def test_mitigation_bounds():

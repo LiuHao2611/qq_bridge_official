@@ -52,7 +52,7 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "转宗": ("cmd_faction", "qq_str", ""),
     "宝库": ("cmd_shop", "qq", "shop"),
     "买": ("cmd_buy", "qq_str", ""),
-    "炼药": ("cmd_recipes", "qq", ""),
+    "炼药": ("cmd_recipes", "qq", "recipes"),
     "服丹": ("cmd_use", "qq_str", ""),
     "背包": ("cmd_bag", "qq", "bag"),
 }
@@ -61,6 +61,159 @@ _PLAN: dict[str, tuple[str, str, str]] = {
 def plan() -> dict[str, tuple[str, str, str]]:
     """返回按钮口令→调用计划（供守门测试核对，返回副本避免被篡改）。"""
     return dict(_PLAN)
+
+
+#: 竞猜选项按钮 data 前缀（与 channel/doupo_buttons.py 同源）。
+QUIZ_PREFIX = "doupo:quiz:"
+
+#: 炼药卡翻页按钮 data 前缀（与 channel/doupo_buttons.py 同源）。
+PAGE_PREFIX = "doupo:page:"
+
+
+def parse_page_cmd(cmd: str) -> int | None:
+    """解析 ``doupo:page:<page>`` → 目标页码（1-based）；非本前缀/非法返 None。"""
+    raw = (cmd or "").strip()
+    if not raw.startswith(PAGE_PREFIX):
+        return None
+    body = raw[len(PAGE_PREFIX):]
+    if not body.isdigit() or int(body) < 1:
+        return None
+    return int(body)
+
+
+async def dispatch_page(bot: Any, full_ctx: dict, cmd: str) -> bool:
+    """炼药卡翻页点击回调：渲染目标页 → 带新页按钮再下发。返回 True=已处理。
+
+    与 :func:`dispatch_quiz` 同构（event_id 被动回复、store 单例、模式锁定），
+    业务走 ``card.render_recipes(p, page)``；页码越界由 core.recipes_page 夹取。
+    翻页后需要重新 arm 分页状态（下一页的「上一页/下一页」目标不同）。
+    """
+    target = parse_page_cmd(cmd)
+    if target is None:
+        return False
+
+    from . import commands as cmd_mod  # noqa: PLC0415
+    from . import card as card_mod  # noqa: PLC0415
+    from .store import STORE as _STORE  # noqa: PLC0415
+    from src.game_mode import set_mode  # noqa: PLC0415
+
+    store = _STORE
+    try:
+        await store.load()
+    except Exception:  # noqa: BLE001 — load 幂等且失败不阻断本次回复
+        pass
+
+    user_key = str(full_ctx.get("user_key") or "")
+    openid = user_key.split(":")[-1] if ":" in user_key else user_key
+    try:
+        await set_mode(openid, "doupo")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 夹取页码到实际范围（与纯文本 cmd_recipes / card 同一口径）
+    p = await store.get_player(openid)
+    if not p:
+        return True   # 未入道：静默（点击旧卡时角色可能已重置），不误发
+    _chunk, page, total_pages = cmd_mod.core.recipes_page(p, target)
+
+    png = None
+    try:
+        png = await card_mod.render_recipes(p, page)
+    except Exception as e:  # noqa: BLE001 — 出图失败降级文本
+        from nonebot.log import logger  # noqa: PLC0415
+
+        logger.warning("doupo_page_render_failed: %s: %s" % (type(e).__name__, e))
+
+    if png:
+        from src.game_compat import send_card_via_channel  # noqa: PLC0415
+        from src.plugins.qq_bridge.channel import doupo_buttons as db  # noqa: PLC0415
+
+        # full_ctx 已由 qq_interaction 调用方 attach 到 ContextVar（与 quiz/button
+        # 同构），本函数不重复 attach；只需 arm 本回合分页状态供按钮派生读取。
+        page_ctx_token = None
+        try:
+            page_ctx_token = db.arm_page(page, total_pages)
+            # send_card_via_channel 内部拼 "doupo:" + card_key：
+            #   "page:N" → keyboard_cmd "doupo:page:N" → buttons_for 走翻页分支；
+            # 多页才挂翻页按钮；单页退回普通炼药卡按钮（服丹/养火/宝库）。
+            card_key = ("page:%d" % page) if total_pages > 1 else "recipes"
+            ret = await send_card_via_channel(full_ctx, png, card_key)
+            if isinstance(ret, dict) and ret.get("ok"):
+                return True
+        except Exception as e:  # noqa: BLE001
+            from nonebot.log import logger  # noqa: PLC0415
+
+            logger.warning("doupo_page_send_failed: %s: %s" % (type(e).__name__, e))
+        finally:
+            if page_ctx_token is not None:
+                db.disarm_page(page_ctx_token)
+
+    # 出图失败 → 发纯文本当页清单（绝不丢消息）
+    try:
+        from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
+        from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
+
+        msg = await cmd_mod.cmd_recipes(store, openid, page)
+        await get_channel(OFFICIAL).send(full_ctx, Outgoing(text=msg))
+    except Exception as e:  # noqa: BLE001
+        from nonebot.log import logger  # noqa: PLC0415
+
+        logger.warning("doupo_page_text_failed: %s: %s" % (type(e).__name__, e))
+    return True
+
+
+def parse_quiz_cmd(cmd: str) -> tuple[str, int] | None:
+    """解析 ``doupo:quiz:<token>:<idx>`` → (token, idx)；非本前缀返 None。"""
+    raw = (cmd or "").strip()
+    if not raw.startswith(QUIZ_PREFIX):
+        return None
+    body = raw[len(QUIZ_PREFIX):]
+    token, sep, idx_s = body.rpartition(":")
+    if not sep or not token or not idx_s.isdigit():
+        return None
+    return token, int(idx_s)
+
+
+async def dispatch_quiz(bot: Any, full_ctx: dict, cmd: str) -> bool:
+    """有奖竞猜选项点击回调：判定 + 答对发奖。返回 True=已处理。
+
+    与 :func:`dispatch_button` 同构（event_id 被动回复、store 单例、模式锁定），
+    只是业务走 ``commands.cmd_answer_quiz`` 而非静态 _PLAN。
+    """
+    parsed = parse_quiz_cmd(cmd)
+    if parsed is None:
+        return False
+    token, idx = parsed
+
+    from . import commands as cmd_mod  # noqa: PLC0415
+    from .store import STORE as _STORE  # noqa: PLC0415
+    from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
+    from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
+
+    store = _STORE
+    try:
+        await store.load()
+    except Exception:  # noqa: BLE001
+        pass
+
+    user_key = str(full_ctx.get("user_key") or "")
+    openid = user_key.split(":")[-1] if ":" in user_key else user_key
+
+    try:
+        msg = await cmd_mod.cmd_answer_quiz(store, openid, token, idx)
+    except Exception as e:  # noqa: BLE001 — CLOSE-02 记全不静默吞
+        from nonebot.log import logger  # noqa: PLC0415
+
+        logger.warning("doupo_quiz_answer_failed: %s: %s" % (type(e).__name__, e))
+        msg = "（答题处理出错，请重试）"
+
+    try:
+        await get_channel(OFFICIAL).send(full_ctx, Outgoing(text=msg))
+    except Exception as e:  # noqa: BLE001
+        from nonebot.log import logger  # noqa: PLC0415
+
+        logger.warning("doupo_quiz_reply_failed: %s: %s" % (type(e).__name__, e))
+    return True
 
 
 async def dispatch_button(bot: Any, full_ctx: dict, cmd: str) -> bool:

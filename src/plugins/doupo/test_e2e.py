@@ -265,7 +265,7 @@ async def main():
     await fire("养火 青莲地心火", mk_group(A, "养火 青莲地心火"), "药渣")
     await fire("宝库", mk_group(A, "宝库"), None, expect_image=True)
     await fire("买 血灵草 2", mk_group(A, "买 血灵草 2"), "血灵草")
-    await fire("炼药", mk_group(A, "炼药"), "回灵丹")
+    await fire("炼药", mk_group(A, "炼药"), None, expect_image=True)  # 2026-11-16 丹方卡
     await fire("买 紫叶兰 1", mk_group(A, "买 紫叶兰 1"), "紫叶兰")
     await fire("炼制 回灵丹", mk_group(A, "炼制 回灵丹"), "成功率")
     await fire("背包", mk_group(A, "背包"), None, expect_image=True)
@@ -279,11 +279,12 @@ async def main():
     await fire("B 入道", mk_group(B, "入道"), "玄重尺")
     await fire("抢 @某人", mk_group(A, "抢", at=B), "金币")
     await fire("送 100 @某人", mk_group(A, "送 100", at=B), "金币")
-    await fire("帮助", mk_group(A, "帮助"), "暴击")
+    await fire("帮助", mk_group(A, "帮助"), None, expect_image=True)  # 2026-11-16 玩法卡
 
     # prove-it 自举：fire(expect_image=True) 必须真的拦住「只回纯文本却声称出图」。
     # 把 fire 放宽成旧写法，下面这条 STATIC 就会 FAIL —— 防止「假通过」悄悄回归。
-    await fire("SELF 假出图", mk_group(A, "帮助"), None, expect_image=True)
+    # 用「修炼」（纯文本口令）做探针：帮助已改卡片，不能再用它当"纯文本"样本。
+    await fire("SELF 假出图", mk_group(A, "修炼"), None, expect_image=True)
     _label, _ok, _detail = RESULTS.pop()
     RESULTS.append(("STATIC expect_image 会拒绝纯文本回复",
                     (not _ok) and "期望出图" in _detail,
@@ -301,7 +302,7 @@ async def main():
     await fire("私聊 人物", mk_private(C, "人物"), None, expect_image=True)
     await fire("私聊 修炼", mk_private(C, "修炼"), "修为")
     await fire("私聊 战斗", mk_private(C, "战斗"), "遭遇")
-    await fire("私聊 帮助", mk_private(C, "帮助"), "暴击")
+    await fire("私聊 帮助", mk_private(C, "帮助"), None, expect_image=True)  # 2026-11-16 玩法卡
     await fire("私聊 抢（无对象）", mk_private(C, "抢"), "用法")
     await fire("私聊 排行（仅自己）", mk_private(C, "排行"), None, expect_image=True)
 

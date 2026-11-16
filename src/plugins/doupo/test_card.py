@@ -169,6 +169,127 @@ def test_render_rank_empty_is_safe():
     assert png and png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 500
 
 
+def test_build_and_render_recipes_card():
+    """炼药卡：等级过滤 + 分页 + 配方与纯文本同源 + 出合法 PNG。"""
+    p = _player(6)
+    p["alch"] = 5
+    # 备齐回灵丹材料 → 该丹 ready=True；其余不备 → ready=False
+    for k in cfg.RECIPE_BY_NAME["回灵丹"]["need"]:
+        core.add_item(p, k, 99)
+    d = card.build_recipes_data(p, 1)
+    assert d["title"] == "炼药"
+    assert "六品炼药师" in d["subtitle"] and "成功率" in d["subtitle"]
+
+    avail = core.available_recipes(p)
+    chunk, page, total_pages = core.recipes_page(p, 1)
+    assert d["page"] == page == 1
+    assert d["total_pages"] == total_pages
+    assert d["total_avail"] == len(avail)
+    assert d["shown"] == len(chunk), "卡面展示数必须=当页切片数（算的画得下）"
+
+    all_rows = [r for g in d["groups"] for r in g["rows"]]
+    assert len(all_rows) == len(chunk), "第一页条数必须与 recipes_page 同源"
+    # 分组顺序遵循 cfg.GRADE_ORDER（只登记本页实际存在的品阶）
+    grades = [g["grade"] for g in d["groups"]]
+    assert grades == [g for g in cfg.GRADE_ORDER
+                      if any(r["grade"] == g for r in chunk)], "分组顺序错"
+    for g in d["groups"]:
+        want = {r["name"] for r in chunk if r["grade"] == g["grade"]}
+        assert {r["name"] for r in g["rows"]} == want, "分组 %s 归属错" % g["grade"]
+    # 无药方丹药必须标记 buyonly（卡面显示购买价而非空材料行）
+    for r in all_rows:
+        rec = cfg.RECIPE_BY_NAME[r["name"]]
+        assert r["buyonly"] == (not bool(rec.get("need"))), \
+            "%s 的 buyonly 标记与原方不符" % r["name"]
+    # 出图合法 PNG
+    png = asyncio.run(card.render_recipes(p, 1))
+    assert png and png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000
+
+
+def test_recipes_card_level_filter():
+    """等级不够的丹药完全不展示：lv1 不得出现高阶丹，lv103 才见帝品。"""
+    low = card.build_recipes_data(_player(1), 1)
+    low_names = {r["name"] for g in low["groups"] for r in g["rows"]}
+    # 逐页扫全（lv1 可能不足一页）
+    low_all = set()
+    for pg in range(1, low["total_pages"] + 1):
+        d = card.build_recipes_data(_player(1), pg)
+        low_all |= {r["name"] for g in d["groups"] for r in g["rows"]}
+    assert "帝品雏丹" not in low_all and "雷劫丹" not in low_all, \
+        "lv1 不该看到高阶丹药"
+    assert all(cfg.RECIPE_BY_NAME[n]["min_lv"] <= 1 for n in low_all), \
+        "lv1 卡上出现 min_lv>1 的丹药"
+    high = _player(103)
+    high_all = set()
+    d0 = card.build_recipes_data(high, 1)
+    for pg in range(1, d0["total_pages"] + 1):
+        d = card.build_recipes_data(high, pg)
+        high_all |= {r["name"] for g in d["groups"] for r in g["rows"]}
+    assert "帝品雏丹" in high_all, "满级应见帝品丹药"
+    assert d0["total_avail"] == len(cfg.RECIPES), "满级应可见全部丹药"
+
+
+def test_recipes_card_pagination_distinct():
+    """分页：不同页是不同丹药集合；越界页码夹取到末页；页码信息自洽。"""
+    p = _player(6)
+    d1 = card.build_recipes_data(p, 1)
+    assert d1["total_pages"] > 1, "lv6 可用丹药应超过一页（否则分页无从验证）"
+    n1 = {r["name"] for g in d1["groups"] for r in g["rows"]}
+    d2 = card.build_recipes_data(p, 2)
+    n2 = {r["name"] for g in d2["groups"] for r in g["rows"]}
+    assert n1 and n2 and not (n1 & n2), "相邻两页不应有重复丹药"
+    assert d1["shown"] + d2["shown"] <= d1["total_avail"]
+    # 越界夹取
+    last = card.build_recipes_data(p, 9999)
+    assert last["page"] == last["total_pages"]
+    assert card.build_recipes_data(p, 0)["page"] == 1
+
+
+def test_recipes_two_column_boxes_no_overlap():
+    """两列布局盒子自检：满页 10 枚（含多味药方 + 长描述）三种宽度零溢出/重叠。
+
+    用 check_doupo_typography.check_boxes（card-design 同款算法）反向设防：
+    改模板排版若把 tip 挤出边界、或丹名/材料/功效重叠，这里必红。
+    """
+    import importlib.util
+
+    pic_dir = os.path.join(REPO_ROOT, "src", "plugins", "qq_bridge", "pic")
+    if pic_dir not in sys.path:
+        sys.path.insert(0, pic_dir)
+    spec = importlib.util.spec_from_file_location(
+        "_doupo_typecheck",
+        os.path.join(REPO_ROOT, "tools", "check_doupo_typography.py"))
+    tc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tc)
+    from pic import theme as pic_theme
+    from pic.templates import doupo_recipes as R
+
+    p = _player(103)        # 满级 → 全丹药可见，第一页 10 枚
+    d = card.build_recipes_data(p, 1)
+    assert d["shown"] == cfg.RECIPES_PER_PAGE, "满级第一页应画满 10 枚"
+    t = pic_theme.get("light")
+    for w in (560, 720, 900):
+        L = R._plan(d, w)
+        boxes: list = []
+        R.build(t, d, width=w, boxes=boxes)
+        bounds = (R.PAD, R.PAD, w - R.PAD, L["h"] - R.PAD)
+        probs = tc.check_boxes(bounds, boxes, min_gap=8)
+        assert not probs, "炼药卡 w=%d 排版越界/重叠：%s" % (w, probs[:5])
+
+
+def test_build_and_render_help_card():
+    """玩法卡：数据源 HELP_GROUPS 与纯文本同源 + 出合法 PNG。"""
+    d = card.build_help_data()
+    assert len(d["groups"]) == len(commands.HELP_GROUPS)
+    for (name, rows), g in zip(commands.HELP_GROUPS, d["groups"]):
+        assert g["name"] == name and list(g["rows"]) == list(rows), \
+            "分组 %s 图文不同源" % name
+    total = sum(len(g["rows"]) for g in d["groups"])
+    assert total == sum(len(rows) for _, rows in commands.HELP_GROUPS)
+    png = asyncio.run(card.render_help())
+    assert png and png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000
+
+
 # ---------------------------------------------------------------------------
 # 人物卡内嵌静态头像（2026-11-07 用户要求，禁止退回「另发一张动图」）
 # ---------------------------------------------------------------------------

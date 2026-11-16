@@ -196,6 +196,8 @@ def test_each_card_buttons_are_relevant_family():
         "shop": {"买", "炼药", "背包"},
         "bag": {"服丹", "炼药", "宝库"},
         "rank": {"战斗", "修炼", "人物"},
+        "recipes": {"服丹", "养火", "宝库"},
+        "help": {"人物", "炼药", "斗技"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (
@@ -290,6 +292,70 @@ def test_keyboard_prefix_does_not_collide_with_real_commands():
 
 
 # ---------------------------------------------------------------------------
+# 2026-11-16 炼药卡翻页按钮守门（prove-it，独立口径）
+# ---------------------------------------------------------------------------
+def test_page_prefix_isolated_from_canonical_buttons():
+    """翻页前缀必须独立，不进 CARD_ACTIONS / ALL_BUTTON_CMDS / _PLAN。"""
+    page_prefix = getattr(db, "DOUPO_PAGE_PREFIX", "doupo:page:")
+    assert page_prefix.startswith("doupo:"), "翻页前缀应在斗破命名空间"
+    assert page_prefix != getattr(db, "DOUPO_CARD_PREFIX", "doupo:"), \
+        "翻页不能与卡片通用前缀相同（否则被 when card_key 分支吞掉）"
+    # 翻页哨兵绝不能混进 canonical 按钮全集（一旦混入，静态按钮点击会走翻页分发）
+    for card, acts in db.CARD_ACTIONS.items():
+        for c in acts:
+            assert not c.startswith(page_prefix), \
+                "卡 %s 的按钮 %r 误用了翻页前缀" % (card, c)
+    assert not any(c.startswith(page_prefix) for c in db.ALL_BUTTON_CMDS)
+    assert not any(k.startswith(page_prefix) for k in _baseline_dispatch_plan())
+
+
+def test_page_buttons_derived_from_armed_state():
+    """arm_page 后 page_buttons_for 应派生正确的「上一页/下一页」data。"""
+    assert db.page_buttons_for("doupo:page:2") == (), \
+        "未 arm 时不得凭空挂翻页按钮"
+    t = db.arm_page(2, 4)
+    try:
+        btns = db.page_buttons_for("doupo:page:2")
+        got = [(b.label, b.cmd) for b in btns]
+        assert got == [("上一页", "doupo:page:1"), ("下一页", "doupo:page:3")], \
+            "第2/4页翻页按钮错：%s" % got
+        assert all(not b.primary for b in btns)
+        # 首页只有下一页；末页只有上一页
+        db.disarm_page(t)
+        t = db.arm_page(1, 4)
+        assert [b.cmd for b in db.page_buttons_for("doupo:page:1")] == ["doupo:page:2"]
+        db.disarm_page(t)
+        t = db.arm_page(4, 4)
+        assert [b.cmd for b in db.page_buttons_for("doupo:page:4")] == ["doupo:page:3"]
+    finally:
+        db.disarm_page(t)
+    # 单页不挂翻页按钮
+    t = db.arm_page(1, 1)
+    try:
+        assert db.page_buttons_for("doupo:page:1") == ()
+    finally:
+        db.disarm_page(t)
+
+
+def test_page_dispatch_source_contract():
+    """qq_interaction 必须先识别翻页哨兵，再走 canonical 按钮 / game_tools。"""
+    src = (_CH / "qq_interaction.py").read_text(encoding="utf-8")
+    assert "parse_page_cmd" in src and "dispatch_page" in src, \
+        "qq_interaction 未接入翻页分发"
+    i_page = src.find("parse_page_cmd(cmd)")
+    i_button = src.find("if cmd in _DOUPO_CMDS")
+    i_gt = src.find("await dispatch_normalized(bot, full_ctx, pseudo, cmd)")
+    assert i_page != -1 and i_button != -1 and i_gt != -1 \
+        and i_page < i_button < i_gt, "翻页判定必须早于 canonical 按钮与 game_tools"
+    # button_dispatch 必须能解析并消费该前缀
+    if disp is not None:
+        assert disp.parse_page_cmd("doupo:page:3") == 3
+        assert disp.parse_page_cmd("doupo:page:0") is None
+        assert disp.parse_page_cmd("doupo:page:abc") is None
+        assert disp.parse_page_cmd("炼药") is None
+
+
+# ---------------------------------------------------------------------------
 # 注入验证（prove-it：四类真实错误必须被拦住）
 # ---------------------------------------------------------------------------
 def test_injection_guards():
@@ -360,10 +426,10 @@ def test_injection_guards():
 def test_source_contract_finish_card_used():
     """9 张卡片全部走 finish_card；入道动图保留 image_seg（GIF 不内嵌 markdown）。"""
     src = (_DOUPO / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("finish_card(") >= 9, \
-        "finish_card 调用点不足 9 处（有卡片没挂按钮）：%d" % src.count("finish_card(")
+    assert src.count("finish_card(") >= 11, \
+        "finish_card 调用点不足 11 处（有卡片没挂按钮）：%d" % src.count("finish_card(")
     for card in ("menu", "panel", "roster", "skills", "faction",
-                 "flames", "shop", "bag", "rank"):
+                 "flames", "shop", "bag", "rank", "recipes", "help"):
         assert '"%s"' % card in src, "源码里找不到 card_key %r" % card
     # 入道动图仍是 image_seg（官方 file_image），不能被误改成 finish_card
     assert 'image_seg(event, gif' in src, "入道动图出图方式被误改"
@@ -395,6 +461,9 @@ if __name__ == "__main__":
         test_platform_structure_limits,
         test_keyboard_doupo_fallback_and_gametools_isolation,
         test_keyboard_prefix_does_not_collide_with_real_commands,
+        test_page_prefix_isolated_from_canonical_buttons,
+        test_page_buttons_derived_from_armed_state,
+        test_page_dispatch_source_contract,
         test_injection_guards,
         test_source_contract_finish_card_used,
         test_source_contract_interaction_routes_doupo,

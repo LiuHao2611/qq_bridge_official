@@ -80,3 +80,18 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * **GitHub 全量 tree 推送会 422**：644 条一次 POST 偶发 "input too large"。
   用 `tmp/push_incremental.py <本地基线commit>` 走 `base_tree` 只提交 diff 文件，
   秒级完成；铁律不变——blob key 用内容 sha1，推送后拉 raw grep 特征。
+
+## 紫卡洗卡推荐卡口径（2026-11-16 确立，别重造）
+* **数据源唯一链**：WFCD `data/warframe_items/*.json`（面板，含 puncture/slash 互换 bug，
+  `_fix_ips` 修）→ `riven_disp.json`（disp/type，执法者 1.2）→ `riven_stat_base.json`
+  （满 roll，×disp）→ `wfm_riven_attrs.json`（`/v2/riven/attributes` 50 条快照，
+  **不许再手写 slug 表**）→ `riven_recommend_attrs.py` 建索引。
+* **两个维度不可混用**：击杀效率 = 裸面板边际 DPS；市场价差 = 同分位中位差。卡面并列但不能互相推导。
+* **价差三个坑（都踩过）**：① 整段比整段会算出 1/3 的假比例，必须 `k=min(n)` 同分位；
+  ② `negative_stats=X` 返回 3正1负完整卡（1000p vs 全量 468p），必须换基到负面池中位；
+  ③ 候选要用 desc+base **双路频次**，只用 desc 会漏「震地」这类高价卡不常见的词条。
+* **WFM 请求**：UA 必须 `curl/8.4.0` + `Platform: pc`（Chrome UA 返 200 但 0 条）；
+  15 次请求 ≈ 20s 是上限，16+ 触发 429（retry-after 60~117s）。
+* **算的必须画得下**：后端候选数与模板行数、脚注计数三者要相等（曾 9/8/9 三处不一致）。
+  脚注「有效词条」排除致命项。卡面文案禁用 markdown（`**` 会画成字面星号）。
+* 守门 `tests/test_riven_recommend_spread.py` 45 条（A~E 五段），改口径先跑它。

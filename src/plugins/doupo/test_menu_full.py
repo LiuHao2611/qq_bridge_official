@@ -337,7 +337,8 @@ CASES = [
     dict(id="01_menu", text="斗破菜单", img="png", must=[], ban=[]),
     dict(id="02_enter", text="入道", img="gif", must=["玄重尺"], ban=[]),
     dict(id="03_panel", text="人物", img="png", must=[], ban=[]),
-    dict(id="04_help", text="帮助", img=None, must=["暴击", "强化"], ban=[]),
+    # 2026-11-16 卡片化：帮助=44 行全静态细则 → 玩法卡；文本断言移到 test_card.py 同源守门
+    dict(id="04_help", text="帮助", img="png", must=[], ban=[]),
     dict(id="05_cult", text="修炼", img=None, must=["修为"], ban=[]),
     dict(id="06_break", text="突破", img=None, must=["突破成功", "境界突破", "成就【斗帝】"],
          ban=["修为不足"], prep="break"),
@@ -353,7 +354,8 @@ CASES = [
     dict(id="13_shop", text="宝库", img="png", must=[], ban=[]),
     dict(id="14_buy", text="买 血灵草 2", img=None, must=["购入"],
          ban=["金币不足", "没有【"], prep="buy"),
-    dict(id="15_recipes", text="炼药", img=None, must=["炼药师", "丹药"], ban=[]),
+    # 2026-11-16 卡片化：炼药=近乎固定的丹方清单 → 炼药卡；文本同源断言移到 test_card.py
+    dict(id="15_recipes", text="炼药", img="png", must=[], ban=[]),
     dict(id="16_craft", text="炼制 回灵丹", img=None, must=["丹成", "炼制失败"],
          ban=["材料不足", "丹炉尚温"], prep="craft"),
     dict(id="17_bag", text="背包", img="png", must=[], ban=[]),

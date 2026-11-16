@@ -2077,3 +2077,487 @@ A /app/D:/AI/manju_agent/qq_bridge_official/data/qq_memory.db
 * **不要把"重启不丢"当成"重建不丢"**。判断标准只有一个：`docker diff` 里是否出现该文件。
 * 迁移/清理数据前先留备份；本次备份在 `D:/AI/manju_agent/_db_rescue_20261116_1315/`
   （`from_container/` 容器原始 6 库、`host_before/` 宿主旧 6 库、`container_dbs.tar`）。
+
+## §11-16 17:5x 战斗模块优化：1~5 敌遭遇战 + 原著反派 + 高光战报
+
+**用户需求**：`回合有点少`、`最终输出忽略中间回合避免刷屏`、
+`每次遭遇 1-5 随机魔兽/强盗/坏人，反派参考原著`、`战报更规范吸引人，参考热门游戏写法`。
+
+### 一、调研（先考据再动手）
+* **原著反派/魔兽**（百度百科「魂殿」/「斗破势力」、B 站「全本资料·魔兽」、头条「魔兽介绍」）：
+  魔兽按一~九阶（嗜血鼠/岩蛇/暴雪魔猿/狮翼兽/双头火灵蛇/紫晶翼狮王/八翼黑蛇皇/天毒蝎龙兽）；
+  魂殿等级 = 殿主魂灭生 > 天尊摘星老鬼 > 护法鹜护法 > 执事；黑盟药皇韩枫、魔炎谷地魔老鬼、
+  狼头佣兵穆蛇（二星斗师，原著早期反派）。**全部有出处，不编造**。
+* **热门战报写法**（梦幻西游武神坛/赛事解说）：只讲「第 N 回合 + 技能名 + 暴击万伤 +
+  一回合 X 杀 + 总伤害」高光节点，不做逐招流水账 —— 正对应用户"忽略中间回合"。
+
+### 二、修法（三层，核心内核零改动）
+1. **`config.py`**：物种表 7→23 只，加 `kind`（魔兽/悍匪/魂殿/黑盟/魔炎谷）分档；
+   新增 `ENCOUNTER_MIN/MAX=1/5`、`ENCOUNTER_REST_HEAL=0.18`（战间回血）、
+   `ENCOUNTER_FADE=0.05`（连战逐敌削弱 ≤20%）。原 7 只的 lv/hard/产出规律保留 → 平衡测试不破。
+2. **`core.py`** 新增三个函数，**`fight()` 单敌内核一行未改**（守住 test_core/test_duel 全部契约）：
+   * `roll_encounter_count()`：伯努利掷 5 次（per=0.42+机缘微调），至少 1 敌；
+     实测 1~2 敌占 67%，5 敌仅 0.9%（稀有硬仗，非常态）。
+   * `pick_encounter()`：按玩家等级"同大境界窗口"取敌（不越级），先跨 kind 再补足，
+     同场物种不重复。低等级只见魔兽、20+遇穆蛇、60+遇魂殿/韩枫/地魔老鬼、满级魂灭生。
+   * `encounter()`：逐个调 `fight`（业务零分叉），气血结转 + 战间回血 + 逐敌衰减，
+     败即收兵；聚合 rounds/taken/exp/gold/drops/detail。
+3. **`commands.py`**：
+   * 新增 `_battle_highlights(log, limit=4)`：必留首击/终结/暴击/控制/机缘，
+     其余折叠成"└ 略去 N 式常规攻防"（参考热门战报高光剪辑）。
+   * `cmd_fight` 改用 `core.encounter`，战报分节 `① ② ③` + 「交锋/决战」标题 +
+     `⚡终结` 标记 + 结尾「共 N 回合 · 受伤 · 修为/金币 · 战利品」总览。
+   * **沿用 `_battle_line` 属性归因单一源**，特殊条目仍 `.get`（不回退 KeyError 事故）。
+
+### 三、平衡验收（真实容器 200 场）
+| 敌人数 | 场次 | 满血胜率 |
+|---|---|---|
+| 1 | 59 | 98% |
+| 2 | 85 | 71% |
+| 3 | 45 | 67% |
+| 4 | 11 | 64% |
+| **总** | 200 | **77.5%** |
+梯度健康：日常稳赢、多敌硬仗有风险但不劝退。单场回合从 4~5 → 多敌 8~15。
+
+### 四、守门与回归
+* 新增 `tests/test_battle_encounter.py` **14 例**：物种考据/分档、敌人数 1~5 与非均匀、
+  同场去重、聚合一致性、回合随敌数增长、败即收兵、高光剪辑保留首击/暴击/特殊、
+  短战报不折叠、展示层禁整段 log、4 类注入反例（prove-it）。
+* 修 `test_chance.py` 的 `fake_fight` 桩补 `rng=None` 形参（cmd_fight 改走 encounter 后
+  内部 `fight(..., rng=...)` 签名变化）——**测试桩适配，未放宽任何断言**。
+* 斗破 20 套 runner **全绿**（含 e2e 75/75、commands 92、battle_depth 37、duel 56）；
+  核心 pytest 合集 **96 passed**。
+
+### 五、部署与数据隔离
+* 镜像 `e6cd70d1`，容器 healthy、`QQ 1906371548 connected`+READY、日志零异常。
+* 4 改动文件宿主↔容器 md5 全等；`docker diff` 无 `/app/src` 写入（未碰镜像层）。
+* **生产存档 md5 `b414912b52be` 重建前后完全一致** —— 本轮纯代码改动，零数据迁移、零覆盖。
+* 备份：`D:/AI/manju_agent/_battle_opt_backup_20261116_174813/`（改前 3 源码 + 存档）。
+* **待用户实测**：QQ 发「战斗」，应见多敌分节战报、终结标记、折叠行与战利品总览。
+
+---
+
+## 2026-11-16 18:3x 战斗战报二次优化：固定骨架（用户反馈"怪多也不能增加字数"）
+
+### 一、问题
+上一版按敌人分节（① ② ③ + 每敌 4 条高光 + 折叠行），3 敌实测 **23 行 457 字**，
+字数随敌人数线性膨胀；嵌套括号`（力量·斗气·暴击(敏捷)）`又长又乱。用户原话：
+> 不行，不够简略，就算遭遇怪物多了，也不能增加字数，而且战报展示也不好看和直观
+
+### 二、改动（战斗内核 core.fight/encounter 一行未动，纯展示层）
+* `commands.py::_battle_highlights` 新增 `limit==1` 的「最强一击」模式：
+  机缘 > 暴击 > 最高伤害打分，跨整场只留 1 条，其余中间回合全折叠。
+  默认 `limit=4` 行为不变（PVP/旧用例零影响）。
+* `commands.py::cmd_fight` 展示段从「每敌一节」重写为**固定骨架结算面板**：
+  `⚔️遭遇 → 💥最强一击 → ⋯略去N式 → 🎯斩获(代表名等N名) → 🩸代价 → 💰收益 → 🎁战利`，
+  事件行（机缘/突破/机遇）按需追加但与敌人数无关。1/3/5 敌行数与字数基本一致。
+* 拍平`暴击(敏捷)`→`暴击·敏捷`；「防御」字样固定在代价行，保证属性归因锚点恒在。
+* `_battle_line` 保留不动（PVP `cmd_duel` 仍复用其属性归因 + `.get` 鲁棒）。
+
+### 三、效果（容器内真实战报）
+1 敌 7 行 127 字 / 3 敌 8 行 164 字 / 5 敌 8 行 165 字（差仅「等N名」几个字 + 数字位数）。
+对比上一版 3 敌 23 行 457 字 → **8 行 164 字**。容器 30 级样例：
+```
+⚔️ 遭遇 2 敌 · 8回合 · 力竭·斩1/2
+💥 铁山拳 4498（力量·斗气·暴击·敏捷）
+⋯ 略去中间 17 式常规攻防
+🎯 斩获 血战佣兵等2名
+🩸 代价 防御减伤后受伤 1.3万　气血 7279
+💰 收益 修为 +2.1万　金币 +1.2万
+```
+
+### 四、守门与回归
+* `tests/test_battle_encounter.py` 从 14 → **19 例**，新增固定骨架守门：
+  注入确定性 encounter 比对 1 敌 vs 5 敌（标记序列相同/行数相等/高光仅 1 条/
+  折叠仅 1 条/不逐敌展开）、字数≤200 且 5敌-1敌≤24、精简后保留遭遇+属性归因+
+  收益+代表名、源码禁逐敌分节标记、注入膨胀战报反例必被 detect（prove-it）。
+* 修 `test_battle_depth.py::test_cmd_fight_aid_text` 偶发抖动：注入确定性关闭机缘
+  （原 luck=500 在多敌场每敌各掷一次机缘，累积概率会偶发触发贵人）——
+  **仅文案层测试，未改战斗内核概率/硬顶**。连跑 5 次全绿。
+* 斗破 20 套 runner 全绿（e2e 75/75、commands 92、battle_depth 37、duel 56）。
+* 核心 pytest `24 failed, 1413 passed, 3 skipped, 17 errors`：失败数较基线 25→24、
+  errors 17 不变；24 个失败全为既有问题（PNG 版式高度 724≠712、reminders 导入、
+  riven 网络、warframe、bg/bounty 等），逐一排除无战斗战报相关，零回归。
+
+### 五、部署与数据隔离
+* 镜像 `add5f6c8`，容器 healthy、`QQ 1906371548 connected`+READY、日志零异常。
+* `data/doupo/doupo.json` md5 `038d8e0b6a02` / `data/xiuxian/xiuxian.json` md5 `e7a4f122a314`
+  重建前后完全一致（纯代码改动，零数据迁移/覆盖）。
+* `docker diff` 无 `/app/src`、无 `/app/D:` 盘符路径、无 db 写入镜像层。
+* 备份：`D:/AI/manju_agent/_battle_skeleton_20261116_182108/`（4 改动文件改前快照）。
+* **待用户实测**：QQ 发「战斗」，应见固定骨架简洁战报（不再逐敌刷屏）。
+
+### 六、遗留（供裁定，本轮未改战斗内核）
+* `encounter()` 对每敌各调一次 `fight()`，而 `fight()` 每次都掷一次机缘；
+  多敌场累积触发概率超过「硬顶 2%」的设计口径。本轮只修了文案层测试抖动，
+  **未改概率内核**（避免动 TTK/胜率平衡）。若要严格守住 2% 硬顶，需把机缘掷骰
+  上移到 `encounter()` 整场一次——留待用户明确要求再做。
+
+---
+
+## 2026-11-16 19:0x 机缘逻辑修正：多敌场命中率不再累积突破 2% 硬顶
+
+### 一、问题（上轮战线报优化时标注的遗留，本轮用户明确要求「修正机缘逻辑」）
+* `core.fight()` 开场各自 `roll_hero_aid(p, rng)`，而 `encounter()` 对每敌各调一次
+  fight → **N 敌场掷 N 次**，累积命中率 `1-(1-2%)^N`，5 敌 ≈9.6%，
+  突破「硬顶 2%」设计口径（该硬顶刻意压低以免改 TTK/胜率）。
+* 叠加文案矛盾：只要任一敌触发机缘，`res["hero_aid"]` 非空 → 展示层报
+  「此战毫发无伤」，但其他敌照打、玩家照常受伤，自相矛盾。
+
+### 二、修法（战斗内核其余一行未动，只改机缘掷骰归属）
+* `core.fight(p, mon, rng, aid=None, roll_aid=True)`：新增两个可选参数。
+  **默认 `roll_aid=True` —— 单敌直接调用（PVP / _balance.py / test_core 等）语义完全不变。**
+  `roll_aid=False` 时不自己掷，直接用外部传入的 `aid`。
+* `core.encounter()`：整场开场**只掷一次** `whole_aid = roll_hero_aid(p, rng)`，
+  命中则把同一个 aid 传给每个 fight 且 `roll_aid=False`——贵人一招把整场敌手全灭，
+  每敌 taken=0、正常结算 exp/gold/drops，汇总后整场毫发无伤、全胜。未命中则全程禁掷。
+* 展示层 `cmd_fight` 无需改：整场 hero_aid 回传，「毫发无伤」现在名副其实。
+
+### 三、守门与回归
+* `tests/test_battle_encounter.py` 19→**24 例**，新增 5 项机缘守门：
+  ① 1/3/5 敌均只调一次 roll_hero_aid（spy 计数）；② 5 敌场统计命中率 ≈ 单次 2%
+  （2000 样本，不累积）；③ 命中整场全胜/受伤 0/正常结算/气血不降；④ 单敌 fight
+  默认仍自己掷 + roll_aid=False 不掷；⑤ 注入旧实现源码反例必须判红（prove-it，已实测）。
+* 修 `test_chance.py::fake_fight` 桩补 `aid=None, roll_aid=True`（encounter 新传参），
+  **仅桩适配，未放宽断言**。
+* 斗破 20 套 runner 全绿；核心 pytest `24 failed, 1418 passed, 3 skipped, 17 errors`：
+  失败/错误数与基线（24/17）完全一致，passed +5 正好是新增守门，零回归。
+
+### 四、部署与数据隔离
+* 镜像 `add5f6c8` 之后的新构建，容器 healthy、QQ connected；容器内 fight 签名含
+  `aid`/`roll_aid`、标记到位、import 冒烟 OK。
+* `data/doupo/doupo.json` md5 `17f262c6` / `data/xiuxian/xiuxian.json` md5 `e7a4f122`
+  重建前后完全一致；`docker diff` 无 `/app/src`、无盘符路径、无 db 写入镜像层。
+* **md5 变化核查**：doupo.json 从上轮基线 `038d8e0b`→`17f262c6`，系 11-16 18:57
+  真实玩家（openid `EA1D2B18...`）实测战斗产生的正常数据，存档内无测试假玩家
+  （OPENID_TEST/skel/cmp/demo 均未落盘），非污染；重建本身零覆盖。
+* 备份：`D:/AI/manju_agent/_aid_fix_backup_20261116_185859/`。
+* **待用户实测**：QQ 发「战斗」，机缘为极低概率彩蛋，正常应无感知；概率硬顶已守住。
+
+---
+
+## 2026-11-16 19:3x 学斗技修复：老档惰性迁移 + 定向学习「学习 <技名>」
+
+### 一、问题（用户截图：发「学习 风灵分形剑」无回复，发「学斗技」被拒）
+* 机器人回「你的存档是老版本（斗技已全会），无需领悟。」——用户 openid
+  `EA1D2B18...`（就是个棒槌 lv14 云岚宗）是**老档，无 `learned` 字段**。
+  `core.insight()` 第 1095 行（旧）直接 `reason="legacy"` 拒绝；`sk.is_legacy()`
+  让 `learned_names()` 返回全部可学技，老档永远学不了新斗技。
+* 且没有「学习 <技名>」入口——用户想点名学风灵分形剑，消息无人处理。
+
+### 二、修法
+* **老档惰性迁移**：`core.migrate_legacy_learned(p)` 用老档 `loadout`（真实在用的技，
+  如青木剑诀/爆步/玄岩盾/风火木壁）初始化 `learned`——保留进度不削弱，之后按新档
+  走逐一领悟。返回**拷贝**（避免 append 新技把「迁移 N 门」提示数字撑大）。
+  `insight()` / `learn_named()` 都先迁移再办事，成功返回带 `migrated` 标记；
+  迁移后即使本次没学成也 `store.put_player` 落盘（惰性、单玩家、绝不批量改库）。
+* **定向学习**：新增 `core.learn_named(p, name)`，与 insight() 同一套门槛口径
+  （解锁等级/战力/金币/去重），只把「随机取」换成「取点名的那门」；失败 reason：
+  noskill/learned/level/power/gold。
+* **命令层**：`cmd_insight`/`cmd_learn_named` 删掉旧「老版本/无需领悟」提示，
+  迁移时顶部加「📜 存档已升级：保留你在用的 N 门斗技…」。
+* **matcher**：扩展现有 `insight_cmd` 正则 `(?:学斗技|领悟斗技|悟技|学习\s*\S+)`，
+  handler 见「学习」走 cmd_learn_named、否则 cmd_insight——**不新增 matcher**
+  （避免破坏菜单/matcher 数=33 的守门）。菜单「学斗技」描述补「也可学习 <技名>」。
+
+### 三、效果（真实老档玩家内存副本端到端，未写盘）
+```
+学习 风灵分形剑 →
+📜 存档已升级：保留你在用的 4 门斗技，现在可以继续逐一领悟了。
+✨ 福至心灵——领悟了【风灵分形剑】（普通斗技）！
+　耗金 800，已领悟 5 门。
+再发「学斗技」→ ✨ 领悟【碎石掌】，无迁移提示（已是新档）
+```
+老版本提示彻底消失。
+
+### 四、守门与回归
+* `test_insight.py` 36→**54 例**：改老档断言（不再 legacy，迁移保留在用技+标记），
+  新增定向学习成功/去重/noskill、老档迁移后定向学、命令层无老版本提示、
+  定向学习门槛（金币/等级）等。注入反例覆盖。
+* 斗破 20 套 runner 全绿（insight 54、menu 55、commands 92、e2e 75 等）。
+* 关键守门 `test_doupo_buttons`+`test_battle_encounter`+`test_runtime_data_paths`
+  共 43 passed——菜单数 33 基准未破、数据路径纪律未破。
+* 核心 pytest `24 failed, 1418 passed, 3 skipped, 17 errors`，与基线完全一致，零回归。
+
+### 五、部署与数据隔离
+* 容器 healthy、QQ connected+READY；容器内 `migrate_legacy_learned`×4、
+  `cmd_learn_named`×1、matcher「学习」×6 均到位。
+* `data/doupo/doupo.json` md5 `17f262c6` / `xiuxian.json` `e7a4f122` 重建前后完全一致；
+  `docker diff` 无 `/app/src`、无盘符路径、无 db 写镜像层。
+* 备份：`D:/AI/manju_agent/_learn_skill_fix_20261116_191718/`。
+* **待用户实测**：QQ 发「学习 风灵分形剑」/「学斗技」，老档应能正常领悟、
+  首次带「存档已升级」提示；迁移会在该玩家第一次学时把其在用四槽固化为 learned。
+
+---
+
+## 2026-11-16 21:1x 名录卡加序号 + 序号上阵（用户「给斗技全部卡片加序号，方便输出上阵口令」）
+
+### 一、需求
+用户截图「斗技 全部」名录卡：每门斗技加序号，照着序号就能发上阵口令。
+只画数字没用——必须让序号能直接用在「上阵」口令里，否则还得转技名。
+
+### 二、修法（三处同源，唯一真源 = core.skill_pool_sorted）
+* `core.skill_pool_sorted(p)` 已是三阶稳定排序原函数；新增 `core.roster_no_map(p)`
+  → {1:name,...} 与卡片序号同源；新增 `core.equippable_names(p)`（可上阵=已领悟∪异火主动技）。
+* `card.build_roster_data`：排序统一改用 `skill_pool_sorted`（原来自写一份 sorted，会错位），
+  每行加 `no`（1-based 全局序号，分组/扁平一致）；底部 tip 改「序号即上阵编号：上阵 1 3 5 7」。
+* `doupo_roster` 模板：名字左侧画圆形序号徽章（色随阶位），块内文字起点右移 NO_D+NO_GAP、
+  inner_w 同步收窄；序号圆与名字/描述不重叠；_DEMO 补 no。
+* `commands.cmd_loadout`：纯数字 token 按 roster_no_map 翻译成技名再走既有校验；
+  越界序号报「不可上阵」；**新增未领悟校验**——未领悟技明确提示「还没领悟…先学斗技/
+  学习 X」，不再静默把未领悟技过滤成默认四槽（照序号选「可学」态时最常见的坑）。
+  无参回包列出「1.技名」；菜单/帮助补「上阵 1 3 5 7」说明。
+
+### 三、效果（真实天冥宗15门名录卡 PNG 肉眼核对）
+每块左上角圆序号 1..15 清晰、色随阶位（普通灰蓝/高阶橙/特殊红），不与技能名重叠；
+底部提示显示上阵序号用法。真实老档玩家（迁移后已领悟6门）发「上阵 1 2 3 4」正确、
+发 6 个序号被「最多4门」拦住，未领悟序号明确提示先学。
+
+### 四、守门与回归
+* `test_roster_card.py` 17→**23 例**：序号连续且与分组一致、序号=skill_pool_sorted 同源、
+  按序号上阵选对已领悟技、未领悟序号明确拒绝不改上阵、越界序号拒绝、源码反例判红（prove-it）。
+* 斗破 20 套 runner 全绿（roster 23、insight 54、menu 55、commands 92、e2e 75 等）。
+* 关键 pytest（doupo_buttons/battle_encounter/runtime_data_paths）77 passed，菜单数 33 基准未破。
+* 核心 pytest `24 failed, 1418 passed, 3 skipped, 17 errors` 与基线完全一致，零回归
+  （test_pic_templates 3 项失败为既有：面板卡高度 724≠712、riven 数据/网络，与名录卡无关）。
+
+### 五、部署与数据隔离
+* 容器 healthy、QQ connected+READY；容器内序号代码标记到位（card 1 / core 1 / commands 2 / 模板 3）。
+* `data/doupo/doupo.json` md5 `2ec4ae59` / `xiuxian.json` `e7a4f122` 重建前后完全一致；
+  `docker diff` 无 `/app/src`、无盘符路径、无 db 写镜像层。
+* **md5 变化核查**：doupo.json 从上轮 `17f262c6`→`2ec4ae59`，系真实玩家 EA1D2B18 上轮
+  实测学斗技（learned 6 门）产生的正常存档写入，玩家仍只有 2 个、无测试假玩家落盘，非污染、非覆盖。
+* 备份：`D:/AI/manju_agent/_roster_no_fix_20261116_205334/`；预览 `D:/AI/manju_agent/_roster_no_preview.png`。
+* **待用户实测**：QQ 发「斗技 全部」看带序号名录卡，再发「上阵 1 3 5 7」按号选四槽。
+
+---
+
+## 2026-11-16 21:2x 上阵序号兼容「技N」前缀（用户截图「上阵 技3 技4 技5 技6 报不可上阵」）
+
+### 一、问题
+用户点名录卡「上阵」后发「上阵 技3 技4 技5 技6」，机器人回
+「[按3/技3] 不可上阵（未解锁或非本宗）」——但这 4 门是他**已装备在用**的斗技，
+只是想重新装备。日志权威原文：`上阵 技3 技4 技5 技6`。
+根因：`cmd_loadout` 上一轮只认纯数字 `tok.isdigit()`，「技3」带前缀被当技名去找 → 找不到。
+「技N」写法来自 `commands.py:758` 遗留旧文案「上阵 技1 技2 技3 技4」（用户照打）。
+
+### 二、修法
+* `cmd_loadout` 序号 token 正则 `^(?:技|按|第)?\s*(\d+)\s*号?$`：
+  兼容 `3`/`技3`/`按3`/`第3`/`3号`/`技3号`/混写，统一映射 roster_no_map 技名。
+* `commands.py:758` 遗留文案改「上阵 1 3 5 7（名录卡序号）」。
+  用户可见文案零残留「上阵 技N」（菜单口令早已是序号版；doupo_menu.py:23 仅注释历史举例）。
+
+### 三、效果（真实玩家内存副本）
+发「上阵 技3 技4 技5 技6」/「上阵 3 4 5 6」/「上阵 按3 按4 技5 6号」
+三种写法全部正确上阵为 玄岩盾/风火木壁/风灵分形剑/飞絮（序号 3/4/5/6）。
+
+### 四、守门与回归
+* `test_roster_card.py` 23→**25 例**：新增技N/按N/第N号/纯数字/混写五种写法都能上阵、
+  源码无用户可见「上阵 技N」旧文案（注释允许）。
+* 斗破 20 套 runner 全绿（roster 25）；核心 pytest `24 failed, 1418 passed, 17 errors`
+  与基线完全一致，零回归。
+
+### 五、部署与数据隔离
+* 容器 healthy、QQ connected；容器内技N兼容正则到位。
+* `data/doupo/doupo.json` md5 `e6e5db40` / `xiuxian.json` `e7a4f122` 重建前后完全一致；
+  `docker diff` 干净无镜像层写入。
+* **md5 变化核查**：从上轮 `2ec4ae59`→`e6e5db40`，系真实玩家 EA1D2B18 在 21:14~21:20
+  真实打斗升级（lv14→17、last_fight 21:20:03）+ 重新装备（loadout 玄岩盾/风火木壁/
+  风灵分形剑/飞絮）的正常写入；玩家仍 2 个、无测试假玩家落盘，非污染、非覆盖。
+* 备份：`D:/AI/manju_agent/_loadout_jin_fix_20261116_211733/`。
+* **待用户实测**：QQ 重发「上阵 技3 技4 技5 技6」应成功装备。
+
+---
+
+## 2026-11-16 机遇「有奖竞猜」改为真·选项按钮问答 + 斗气核查报告
+
+> 用户：「机遇有的是问答，应该增加选项按钮问答才对，而不是默认正确。最后检查
+> 战斗有没有消耗斗气……把目前我装备的技能、斗气消耗列表、战斗触发几率给我。」
+
+### 一、问题
+旧 `_apply_chance` 遇竞猜：题干直接显示「（答案：药老）」+ 写死「答案正确，获得
+1000金币奖励」，**无条件发奖**——无问答、无对错、答案泄露，用户截图明确指出。
+
+### 二、设计（不新增 matcher／守住菜单 33 条／不写盘）
+竞猜改**异步两阶段**，答案与奖励只在服务端内存，绝不进按钮 data：
+1. `config.CHANCE_EVENTS` 竞猜新增 `quiz_items`（4 选项 + 答案下标），保留原 `quiz`
+   逐字文案供考据守门，question 从原版去「（答案：X）」得到，同源不漂移。
+2. `core._apply_chance` 竞猜分支：只出题、**不发奖、不显示答案**，返回 `quiz` 元数据。
+3. `quiz_session.py`（新，零依赖）：按 qq 索引答题会话，token 随机、一次性消费、
+   qq 隔离、惰性超时（TTL 300s）；答案只在内存，重启即失效，不碰存档 schema。
+4. `_chance_lines(..., qq)` 注册答题 + `arm_button`（ContextVar 传按钮 data 给发送层）。
+5. `game_compat.finish_text`（新）：5 个机遇 handler（战斗/强化/养火/买/炼丹）改走它；
+   官方通道 normalize ctx → `OfficialChannel.send` 挂 `keyboard_cmd=doupo:quiz:<token>` →
+   题目文本与 4 个选项按钮**同条**下发（msg_type=2 markdown+keyboard）；NapCat 原样纯文本。
+6. `buttons_for` 加 `doupo:quiz:` 前缀分支（比 `doupo:` 卡片前缀更具体，先判），
+   选项从 per-task ContextVar 取，data=`doupo:quiz:<token>:<idx>`，与卡片口令空间隔离。
+7. `qq_interaction` 识别 quiz 前缀 → `button_dispatch.dispatch_quiz` → `cmd_answer_quiz`
+   判定：答对才 `_grant_reward` + put_player，答错给正确答案、无奖，重复点击无效。
+
+### 三、斗气核查结论（真实存档 EA1D2B18 lv17）
+* `core.fight` 每回合 `_pick_skill` 在「斗气够」的已上阵技里选，`mp -= cost` **确实消耗**；
+  旧设计战后 `p["mp"] = mp_max(p)` 强制回满，故存档/战斗后永远满斗气，看着像没消耗。
+  **已废除强制回满（见末尾「取消战后强制回满斗气」）**：现 `core.py:696` 战后写回
+  `p["mp"] = mp`（本场消耗后的剩余值），斗气跨战结转；回满只在 `_refill()`（升级/突破）。
+  消耗本身一直存在，改动只是让消耗在结转后可见、让突破回满重新有意义。
+* 上限 1410；四门皆普通阶，每门消耗 282（20%）；满斗气够放 5 次，之后转普攻。
+* 满斗气时 4 门等概率各 25%；战斗触发效果：玄岩盾减伤23%(2回合)、风火木壁定身(1回合)、
+  风灵分形剑纯输出、飞絮闪避18%(2回合)。
+
+### 四、守门与回归
+* 新增 `tests/test_quiz_answer.py` 9 例：不发奖/不泄答案/题库同源/会话生命周期/过期/
+  答对发奖/答错无奖/重复无效/按钮隔离——全绿。
+* 斗破 20 套 runner 全绿、test_doupo_buttons 13/13、test_chance 11/11、相关 pytest 47/47。
+* 菜单 33 条基准未动（未加 matcher）；`docker diff` 干净、存档 md5 `e6e5db40` 不变。
+
+### 五、部署
+容器 healthy、新模块进镜像（`MODULE_OK`）；待用户 QQ 实测：做任务撞见「有奖竞猜」应看到
+题干 + 4 个选项按钮，点错提示正确答案无奖，点对才 +1000。
+
+## 取消战后强制回满斗气（用户：「去掉强制回满斗气，不然突破就失去了意义」）
+### 一、设计口径（硬要求）
+* 斗气必须**真实跨战结转**：战斗内 `_pick_skill` 扣的 mp 要留到战后，不能白送满蓝。
+* **回满只允许在 `_refill()`**（升级/突破）——否则突破/升级的「回满」毫无意义，这正是用户诉求。
+* 斗气见底不阻断战斗：已上阵技都买不起时 `_pick_skill` 返回普攻，照常开打。
+
+### 二、核心改动（`src/plugins/doupo/core.py`）
+* `fight()` 开战：`mp = max(0, min(mp_max(p), int(p.get("mp", mp_max(p)))))`
+  ——沿用当前斗气（clamp 防越界存档），不再无条件 `mp = mp_max(p)`。
+* `fight()` 收尾：`p["mp"] = mp`（写回本场消耗后的剩余），删掉原 `p["mp"] = mp_max(p)`。
+  * 定位锚点：`core.py:696` 是结转写回；`core.py:217` 的 `p["mp"] = mp_max(p)` 属 `_refill()`，保留。
+* `encounter()` 战间仍按 `heal` 回血（回血与回斗气是两回事，只动斗气）。
+* config/commands/core 里「每战回满」的过时注释一并更新。
+
+### 三、守门（`tests/test_battle_encounter.py` + `src/plugins/doupo/test_core.py`）
+* 新增 4 条：`test_fight_mp_carries_over_not_refilled` / `test_zero_mp_opening_uses_normal_attack`
+  / `test_level_up_refills_mp_so_break_matters` / `test_no_postfight_refill_source_guard`
+  （末条是源码断言：`fight()` 体内有 `p["mp"] = mp`、无 `p["mp"] = mp_max(p)`）。
+* `test_core.py::test_fight_mp_not_carried_over` 更名 `test_fight_mp_carried_over` 并反转断言。
+* `test_encounter_rounds_richer_than_single_fight` 改为每次抽样新建 `_p(20)`
+  ——旧版复用同一 `p` 依赖「每战回满」，结转后第二场起状态失真。
+* 结果：test_battle_encounter 28/28、core runner 31/31、相关 pytest 78/78、斗破 20 套 runner ANY_FAIL=0。
+
+### 四、部署与数据核对
+* `docker compose -f docker-compose.official.yml up -d --build`，容器 healthy。
+* 容器内确认 `core.py:696` 为 `p["mp"] = mp` 结转写回。
+* 生产存档 `data/doupo/doupo.json` md5 部署前后 `f3d45f89eb562639176f308d809b7af7` 不变。
+
+### 五、docker diff 中 `/app/src/.../riven_recommend.py` 的变化（非数据污染，勿误判）
+* 现象：`docker diff` 标 `C /app/src/plugins/qq_bridge/pic/templates/riven_recommend.py`。
+* 根因：该文件 22:25 被**另一条紫卡推荐任务线**改动并 `docker cp` 热补丁进容器
+  （宿主/容器当前同为 `aacf93aa…` 16351B，镜像层仍是 22:23 的 `87fd7e16…` 15990B）。
+  `/app/src` 不是 bind mount，故 cp 进 upperdir 会显现为 C。
+* 判定：**代码热补丁，不违反「运行态数据只落 /app/data」铁律**——铁律管的是 SQLite/存档/缓存，
+  这些都在 bind-mount 卷（diff 里是 `A /app/data`，宿主/容器存档 md5 一致）。
+* 处置：**不要在此刻 rebuild**——紫卡任务线 22:25~22:27 仍在活跃改这些文件，
+  rebuild 会打断并把半成品烘进镜像；待那条线收尾后统一 build 一次即可让 diff 归零。
+
+## 炼药/帮助卡片化（2026-11-16 22:30~22:50，用户「内容多且近乎固定的都要做成卡片」）
+### 一、筛选口径（硬要求）
+* 全 33 条斗破口令逐个核对「展示内容多 + 近乎固定」。符合的只有两个：
+  - **炼药/丹方**：8 条配方近乎固定（仅齐备标记/成功率随玩家变）→ 炼药卡。
+  - **帮助/玩法/攻略/规则**：44 行全静态玩法细则 → 玩法细则卡。
+* 明确**不做**：`斗技详情`（描述固定但 Lv/伤害随玩家变、单条查询）、`任务`（进度动态）——
+  它们以动态数值为主，非「近乎固定」，做成卡反而每查必重绘且信息量小。
+* 铁律：卡片数据与纯文本兜底**同源**，不许另写一份；渲染失败一律降级纯文本，绝不丢消息。
+
+### 二、新增模板（`src/plugins/qq_bridge/pic/templates/`）
+* `doupo_recipes.py`：按 GRADE_ORDER（帝品/五品/四品）分组，每丹一个圆角块：
+  丹名（24 真粗）+ 右侧「可炼(check 图标)/缺料」+ 材料行 + 功效行。副标题给品阶/成功率/药渣。
+* `doupo_help.py`：10 分组单列要点折行（同 xiuxian_help 版式，doupo 配色）。
+  **标题图标用自绘 `_list_glyph`（三条横线）而非 icons book**——book 在 line 风格下是空心方框，
+  看着像豆腐框（card-design「一眼看见」瑕疵，已踩过一次）。
+* 两模板都在 `pic/__init__.py` 的 `_TEMPLATES` + `TEMPLATE_LABELS` 注册。
+
+### 三、同源数据
+* `commands.py` 抽出 `HELP_GROUPS`（(组名,[行]) 唯一源）：`cmd_help` 由它逐字拼文本、
+  `card.build_help_data` 读它出卡，文本逐字未变（test_commands 92/92 含「暴击% = 10」断言）。
+* `card.build_recipes_data(p)` 读 cfg.RECIPES/GRADE_ORDER + core.count_item 判齐备 +
+  cfg.craft_rate，与 `cmd_recipes` 同源；`build_recipes_data` 按品阶分组故扁平顺序 ≠ 原始 RECIPES 顺序（测试按集合+分组归属比对）。
+
+### 四、接线
+* handler（doupo/__init__.py）：recipes/helper 改「先 render_* → finish_card，异常降级 msg」。
+  card_key 分别 `recipes` / `help`。
+* `button_dispatch._PLAN` 的「炼药」card_key 由空串改 `recipes`（shop/bag 卡点「炼药」也出卡）。
+* `doupo_buttons.CARD_ACTIONS/CARD_SELF` 增 recipes/help 两卡（9→11）：
+  recipes=(服丹,养火,宝库)、help=(人物,炼药,斗技)。**帮助是 `_MENU_CMDS` 主菜单口令，
+  绝不能当任何卡的按钮、也不进 _PLAN**；帮助卡有出图按钮组但无按钮指向它。
+
+### 五、守门同步（新增卡必须改这些，否则假红）
+* `tests/test_doupo_buttons.py`：expected 9→11、`finish_card(` 断言 ≥9→≥11、card_key 元组 +recipes/help。
+* `src/plugins/doupo/test_card.py`：+2 例（同源数据 + 合法 PNG），12/12。
+* `test_menu_full.py`：04_help/15_recipes 由 `img=None` 改 `img="png"`、文本 must 清空。
+* `test_e2e.py`：炼药/帮助/`私聊 帮助` 改 `expect_image=True`；prove-it 假出图探针由「帮助」换「修炼」（帮助已非纯文本）。
+* 结果：test_doupo_buttons 13/13、test_card 12/12、test_e2e 75/75、test_menu_full 55/55、
+  test_typography 6/6、test_commands 92/92、test_quiz_answer 9/9、斗破 20 套 runner ANY_FAIL=0。
+
+### 六、card-design 验收
+* 自建 `tmp/check_new_cards.py`：渲染两卡 → 收集 boxes → `check_boxes`。
+  结果 **溢出 0 / 重叠 0 / 间距 0**；导出 `tmp/doupo_typography/08_recipes.png` / `09_help.png` 肉眼核对通过（无重叠/裁切/豆腐框）。
+
+### 七、部署
+* 紫卡并行线 22:47 仍活跃 → **不 rebuild**，改 docker cp 8 个斗破运行文件 + restart。
+* 容器内独立加载 pic 验证两模板注册 + 出图成功（recipes PNG 42408B / help PNG 27651B）。
+* 存档 md5 部署前后 `8c2267aa…`（宿主=容器一致；较上轮 f3d45f89 变化系用户实测游戏的正常写入，非污染）。
+* 待用户 QQ 实测：「炼药」「帮助」是否出卡片、卡片按钮是否正确。
+
+## 紫卡「洗卡推荐」双维度推荐卡（2026-11-16 21:40~23:00，用户「严格参考图片数据，禁止硬编译糊弄」）
+
+用户给定参考卡（洗卡推荐 执法者），要求**反推数据源与推荐逻辑**、不许把参考卡数字写死。
+结论：参考卡两个区块各有一套独立口径，全部链路化。
+
+### 一、数据源链（每一环都可审计，没有一处写死数值）
+| 环节 | 来源 | 说明 |
+|---|---|---|
+| 武器面板 | `data/warframe_items/{Primary,Secondary,Melee}.json`（WFCD 镜像） | 六列 + 伤害构成；**本地快照 puncture/slash 互换**，`_fix_ips()` 按「恰好互换且总伤一致」自动纠正（Magistar 官方 168/31.5/10.5 vs 本地 168/10.5/31.5） |
+| 紫卡类别 + 倾向 | `riven_disp.json`（DE 官方 623 把） | 执法者 `disp=1.2`；**1.2 不是全局常数**，按武器查，查不到按 1.0 不假装 |
+| 满 roll 基准 | `riven_stat_base.json`（disp=1.0 三正满值） | 暴率 180 × 1.2 = **216%** ↔ WFM 实盘最高 215.7%（差 <1%，D2 守门） |
+| 词条 ↔ WFM 属性 | `/v2/riven/attributes` 快照 `wfm_riven_attrs.json`（50 条，随包交付） | `riven_recommend_attrs.py` 用 `gameRef`/`i18n`/`exclusiveTo` 建索引，**不再手写 slug 表** |
+| 挂牌价 | `/v1/auctions/search?type=riven&weapon_url_name=<slug>` | 必须 `User-Agent: curl/8.4.0` + `Platform: pc`（Chrome UA 返 200 但 0 条）；`page` 被忽略，只有「最便宜 100 / 最贵 100」两个截断视图 |
+
+### 二、算法口径（改任何一个都会让守门测试红）
+* **击杀效率 = 裸面板边际**（不含配卡）：`rc._dps(w) + _apply_riven` 折进面板，看 DPS 涨幅。
+  这是参考卡「暴伤 +18.2%」唯一能复现的口径：近战暴伤满 roll 108% → cm 2.0→3.08 →
+  `(1+0.2×2.08)/1.2 = +18.0%`。近战另建连击模型：官方倍率 `1+0.5×⌊combo/5⌋`（封顶 12×）、
+  60s 战斗窗口（**显式假设，写进脚注**）。只建模 Initial Combo；
+  Additional Combo Count Chance 收益完全取决于节奏、给不出可信数字，**刻意不建模**。
+* **市场价差 = 同分位中位差**：`k=min(n_base,n_pool)`，`delta=median(pool[:k])−median(base[:k])`。
+  整段比整段会把 100% 算成 33.3%（`riven_card` 2026-11-04 的 +700% 伪溢价事故同源）。
+* **负面词条必须换基**：`negative_stats=X` 返回的是 3正1负完整卡（中位 1000p），
+  全量池 468p —— 直接相减得到的是「完整卡溢价」，连方向都反（-触发 显示 +117%）。
+  改为以**该武器负面池中位**为基准，只留词条间相对贵贱；三档 rec(≥−3%) / ord(−20%~−3%) / doubt(<−20%)。
+* **分档阈值 75/30/3**：由参考卡 8 条实测 +84/+80/+79/+71/+46/+37/+6/+5 反推，
+  唯一能切成 T0×3/T1×3/T2×2 的组合（C5 守门）。
+* **候选筛选 = 双路频次预筛**：desc（最贵 100）频次 + base（最便宜 100）频次相加。
+  只用 desc 会漏「高价卡不常见但正常卡常见」的词条（实测 Magistar 的「震地」就漏了）。
+  desc 的**价格绝不参与任何计算**（项目既有铁律），只用频次。
+* **请求预算 15 次**（基准 2 + 正面 9 + 负面 4）：16+ 会命中 Cloudflare 429（retry-after 60~117s），
+  `_WFM_MIN_INTERVAL=0.35s`。单卡实测 19~24s。
+
+### 三、守门（`tests/test_riven_recommend_spread.py`，45 条）
+A 词条映射（7 类词表 100% 覆盖、3 条历史误判钉死、源码禁止按英文名猜 slug）／
+B 价差口径（同分位 vs 整段、样本不足返 None）／C 阈值与三档（C1~C12）／
+D 数值自洽（disp、满 roll、连击表、IPS 修正、面板六列）／
+E 容量与文案自洽。
+
+### 四、四个「一眼能看出」的事故（E 段守门就是为它们写的）
+1. **算 9 条画 8 条**：后端 `_MAX_POS=8` 但 `_QUERY_POS=9`，模板只画 8 行，脚注却写
+   「有效词条 9 条」→ 表格 8 行。改 `_MAX_POS=_QUERY_POS`、`_MAX_ROWS_POS=9`，
+   且脚注计数**排除致命项**（它们单独占右栏）。
+2. **近战写「射速/攻速」**：WFM 把枪射速与近战攻速合成 `fire_rate_/_attack_speed`，
+   `short_zh(en, is_melee)` 按类别二选一；传 None 保留合并写法（不猜）。
+3. **脚注残留 `**加粗**`**：markdown 被当字面星号画出来。卡面文案一律用「」。
+4. **错误态与正常态两套标题**：错误分支另写了左对齐无图标标题 + 硬编码高度。
+   抽出 `_brand_title()` 共用，高度按行数算。
+
+### 五、交付物与体积（20KB 门禁）
+* `game_tools/riven_recommend.py` 33229B（HEAD 36575B，**棘轮只降不升**）
+* `pic/templates/riven_recommend.py` 17226B ／ `game_tools/riven_recommend_attrs.py` 8572B
+  ／ `game_tools/wfm_riven_attrs.json` 12274B ／ `tests/test_riven_recommend_spread.py` 15252B
+
+### 六、部署
+* `up -d --build` 完成，容器 healthy；四个文件宿主/容器 md5 逐一致；
+  `docker diff` 仅 `/app/logs` `/app/tmp` `/app/.env`，**`/app/data` 全在挂载卷**。
+* 重建后容器内重跑真实链路：base 468p/100 条，正面 9 条 T0×1/T1×1/T2×7，负面 rec×2/ord×2。
+* 口令：#洗卡推荐 / #词条推荐 / #紫卡推荐 / #wf 推荐 <武器>（同一入口）。
+* 待用户 QQ 实测出图。
