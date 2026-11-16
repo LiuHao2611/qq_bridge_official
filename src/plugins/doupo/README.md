@@ -220,7 +220,7 @@ GIF 缺失时模板画剑形占位，卡片照常出图。
 | `core.py` | 纯函数（属性/战斗/强化/炼药/斗技/异火/任务/商店），零 nonebot |
 | `store.py` | json 落盘 + asyncio.Lock 原子写 |
 | `commands.py` | 业务层，`MENU_GROUPS` 是菜单唯一源 |
-| `__init__.py` | 27 个 matcher，全部 `priority=5 + block=True`；除 3 个入口外均带 `rule=_mode_is("doupo")` |
+| `__init__.py` | 30 个 matcher，全部 `block=True`（29 个 `priority=5`，精确口令「斗技详情」为 `priority=4` 抢在列表前）；除 3 个入口外均带 `rule=_mode_is("doupo")` |
 | `skill_book.py` | **斗技唯一权威表**：185 门斗技的阶位/类型/范围/完整说明/数值/出处/原著 + 卡片短释 |
 | `skills.py` | 三阶四槽纯函数内核（目录/解锁/上阵/斗气单价），数据取 `skill_book` |
 | `_gen_book_doc.py` | 由 skill_book 生成 `docs/门派技能图鉴.md`（`--check` 可校验是否过期） |

@@ -329,7 +329,11 @@ async def cmd_fight(store, qq) -> str:
         elif it.get("taken"):
             lines.append(f"　← 兽击 {it['dmg']}")
         else:
-            tag = f"{it['kind']}" + ("（暴击！）" if it["crit"] else "")
+            # 战报里除「出手」条目外，还有持续伤害/反伤/被控等特殊条目——
+            # 它们没有 crit 键（见 core.fight 的 dmg_log.append）。硬取 it['crit']
+            # 会在这些条目上 KeyError，导致整条战斗回包发不出去（2026-11-16 事故：
+            # 新技能模型下入道只学 1 门低阶技，触发了此前没走到的持续伤害分支）。
+            tag = f"{it['kind']}" + ("（暴击！）" if it.get("crit") else "")
             lines.append(f"　→ {tag} {it['dmg']}")
 
     if res["win"]:

@@ -213,12 +213,20 @@ async def main():
     # --- 静态：matcher 优先级 / 阻断 / 数量 ---
     mats = [v for v in vars(p_mod).values()
             if hasattr(v, "priority") and hasattr(v, "block")]
-    pri_ok = all(m.priority == 5 and m.block is True for m in mats)
+    # 精确口令「斗技详情」刻意用 PRI-1 抢在「斗技」列表口令之前；「学斗技」保持
+    # PRI 靠注册顺序抢先。两者都合法，但所有 matcher 必须 block=True 且优先级
+    # 只允许 PRI / PRI-1（防止有人乱调优先级导致口令互相抢答/漏答）。
+    pri = p_mod.PRI
+    pri_ok = all(m.block is True and m.priority in (pri, pri - 1) for m in mats)
+    pri_hist = {}
+    for m in mats:
+        pri_hist[m.priority] = pri_hist.get(m.priority, 0) + 1
     want = cmds.menu_total()
     RESULTS.append(("STATIC matcher 数量 = 菜单条数", len(mats) == want,
                     f"count={len(mats)} menu_total={want}"))
-    RESULTS.append(("STATIC 全部 priority=5 + block=True", pri_ok,
-                    f"n={len(mats)} pri_ok={pri_ok}"))
+    RESULTS.append(("STATIC 全部 priority∈{PRI,PRI-1} + block=True", pri_ok,
+                    f"n={len(mats)} pri分布={pri_hist} block全True="
+                    f"{all(m.block is True for m in mats)}"))
 
     # ===== 斗破（群聊，用户 A）=====
     # 先发 斗破菜单 设模式（菜单是唯一切换口；同时出菜单卡）
@@ -247,7 +255,11 @@ async def main():
     await fire("战斗（CD 中）", mk_group(A, "战斗"), "调息")
     await fire("强化", mk_group(A, "强化"), "炎星石")
     await fire("斗技", mk_group(A, "斗技"), None, expect_image=True)
-    await fire("升级 龙吟碎", mk_group(A, "升级 龙吟碎"), "焚血散")
+    # 新契约（2026-11-16「逐一学习」）：入道只领悟 1 门（A=裂爪击），升级未领悟技
+    # 必须提示先学斗技，而不是当作全会直接走材料不足分支。
+    await fire("升级 未领悟斗技（提示先学）", mk_group(A, "升级 龙吟碎"), "还没领悟")
+    # 用户诉求「学斗技口令看不到」：该口令必须在真实 matcher 链路里命中并回包。
+    await fire("学斗技 口令命中并回包", mk_group(A, "学斗技"), None)
     await fire("异火", mk_group(A, "异火"), None, expect_image=True)
     await fire("养火 青莲地心火", mk_group(A, "养火 青莲地心火"), "药渣")
     await fire("宝库", mk_group(A, "宝库"), None, expect_image=True)
