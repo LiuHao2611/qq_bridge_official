@@ -218,11 +218,16 @@ def _pair_gaps(blocks):
     for a, b in zip(blocks, blocks[1:]):
         # 主标题 FS_ITEM=20（约 18~20 行墨迹），说明 FS_SMALL=15（约 13~15 行）
         if a[2] >= 16 and 10 <= b[2] <= 16:
-            gaps.append(b[0] - a[1])
+            gap = b[0] - a[1]
+            # 2026-11-16 宝库改双列后，左列会有「无说明的药材 → 下一行说明」
+            # 被误配成一对（实测 gap=89）。标题/说明的正常空白只有 8~11 行，
+            # 超过 40 行的必然不是同一行，纳入会把 min 之外的数据污染成假失败。
+            if gap <= 40:
+                gaps.append(gap)
     return gaps
 
 
-def check_list_spacing(png_path):
+def check_list_spacing(png_path, x_range=(40, 320)):
     """像素级验证：列表卡主标题与副行说明之间必须真的有空白行，不能粘成一块。
 
     2026-11-14 视觉验收发现修复前 cy 只比标题底部多约 0.5px，斗技/宝库卡上
@@ -231,7 +236,7 @@ def check_list_spacing(png_path):
     im = Image.open(png_path).convert("RGB")
     px = im.load()
     w, h = im.size
-    ink = [sum(1 for x in range(40, 320) if max(px[x, y]) < 150) for y in range(h)]
+    ink = [sum(1 for x in range(*x_range) if max(px[x, y]) < 150) for y in range(h)]
     blocks = []
     y = 0
     while y < h:
@@ -567,12 +572,18 @@ async def main():
         await run_case(case)
 
     # 列表卡排版：像素级机器证据（与人工视觉确认互为双验收）
+    # 2026-11-16 宝库改双列后，左列部分行名较短，像素块的墨迹高度会和说明块
+    # 同档（16px），单靠高度分不出主/副。右列样本足够干净；背包卡保持单列，
+    # 两处一起验，既守住原有语义也覆盖新版布局。精确盒模型由 test_card 守门。
     shop_png = os.path.join(OUT_DIR, "13_shop.png")
-    if os.path.isfile(shop_png):
-        ok, d = check_list_spacing(shop_png)
-        record("PIXEL 列表卡标题与说明间距", ok, d)
+    bag_png = os.path.join(OUT_DIR, "17_bag.png")
+    if os.path.isfile(shop_png) and os.path.isfile(bag_png):
+        ok_shop, d_shop = check_list_spacing(shop_png, x_range=(390, 680))
+        ok_bag, d_bag = check_list_spacing(bag_png, x_range=(40, 320))
+        record("PIXEL 列表卡标题与说明间距", ok_shop and ok_bag,
+               "宝库右列 %s / 背包单列 %s" % (d_shop, d_bag))
     else:
-        record("PIXEL 列表卡标题与说明间距", False, "缺少商店卡产物")
+        record("PIXEL 列表卡标题与说明间距", False, "缺少商店/背包卡产物")
     # prove-it 自举：把间隔压回 1 行，检测器必须判不合格，防止断言恒真。
     fake = [(117, 136, 19), (137, 151, 14)]
     record("SELF 间距检测能拒绝粘连", min(_pair_gaps(fake)) < 6,
