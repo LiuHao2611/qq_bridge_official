@@ -622,6 +622,47 @@ async def _(event: Event):
     await rob.finish(await commands.cmd_rob(store, str(event.user_id), _extract_at(event)))
 
 
+# ---------------------------------------------------------------------------
+# 无惩罚切磋（2026-11-16）：发起 → 应战/拒战，两段式，仅本群
+# ---------------------------------------------------------------------------
+# 变量名不要叫 duel_challenge：那会遮住同名的纯逻辑子模块
+# （`from doupo import duel_challenge` 会拿到 matcher 而不是模块）。
+duel_ask_cmd = on_regex(_pat(r"切磋"), priority=PRI, block=True,
+                        rule=_mode_is("doupo"))
+
+
+@duel_ask_cmd.handle()
+async def _(event: Event):
+    event = view(event)  # 双通道兼容（官方=openid / NapCat=QQ号）
+    gid = await _need_group(event, duel_ask_cmd)
+    await duel_ask_cmd.finish(await commands.cmd_duel_challenge(
+        store, str(event.user_id), _extract_at(event), gid, _name(event)))
+
+
+duel_accept = on_regex(_pat(r"(?:应战|接受切磋)"), priority=PRI, block=True,
+                       rule=_mode_is("doupo"))
+
+
+@duel_accept.handle()
+async def _(event: Event):
+    event = view(event)
+    gid = await _need_group(event, duel_accept)
+    await duel_accept.finish(await commands.cmd_duel_accept(
+        store, str(event.user_id), gid))
+
+
+duel_decline = on_regex(_pat(r"(?:拒战|拒绝切磋)"), priority=PRI, block=True,
+                        rule=_mode_is("doupo"))
+
+
+@duel_decline.handle()
+async def _(event: Event):
+    event = view(event)
+    gid = await _need_group(event, duel_decline)
+    await duel_decline.finish(await commands.cmd_duel_decline(
+        str(event.user_id), gid))
+
+
 give = on_regex(_pat(r"(?:送|赠送)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
@@ -709,6 +750,11 @@ register_keywords("doupo", [
     "抢",
     "抢夺",
     "掠夺",
+    "切磋",
+    "应战",
+    "接受切磋",
+    "拒战",
+    "拒绝切磋",
     "送",
     "赠送",
 ])

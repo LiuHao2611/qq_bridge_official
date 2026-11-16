@@ -388,6 +388,15 @@ CASES = [
     # 无图无按钮。img=None + ban 图片由 runner 通用判据保证「纯文本口令夹带图片段」即 FAIL。
     dict(id="31_flames_none", text="异火", img=None, must=["本宗无传承异火"],
          ban=["可自行收服", "青莲地心火"]),
+    # 32/33/34：2026-11-16 无惩罚切磋（仅本群 / 两段式 / 只记荣誉战绩）。
+    # 发起用 A @B；应战/拒战必须由 B 本人发言，故用例带 uid=B，
+    # 并在 prepare 里给 B 注入一条待应挑战。
+    dict(id="32_duel_ask", text="切磋", at=B, img=None,
+         must=["发起切磋", "不掉钱"], ban=["用法", "尚未入道", "不在本群"]),
+    dict(id="33_duel_accept", text="应战", uid=B, prep="duel_challenge", img=None,
+         must=["切磋 ·", "荣誉"], ban=["没有待应"]),
+    dict(id="34_duel_decline", text="拒战", uid=B, prep="duel_challenge", img=None,
+         must=["婉拒"], ban=["没有待应"]),
 ]
 
 
@@ -399,6 +408,9 @@ async def prepare(case):
     if fn:
         fn(p)
         await store.put_player(p)
+    if case.get("prep") == "duel_challenge":
+        # 给 B 注入 A 发起的挑战，让「应战/拒战」走正向分支而非兜底提示。
+        cmds.duels.ask(str(A), str(B), str(GID))
 
 
 def record(name, ok, detail):
@@ -412,7 +424,8 @@ async def run_case(case):
     SENT.clear()
     err = None
     try:
-        await handle_event(BOT, mk_group(A, case["text"], at=case.get("at")))
+        await handle_event(BOT, mk_group(case.get("uid", A), case["text"],
+                                         at=case.get("at")))
     except Exception:  # noqa: BLE001
         err = traceback.format_exc(limit=3)
 
@@ -464,7 +477,7 @@ async def run_case(case):
 
 
 async def static_checks():
-    # 菜单唯一源 = 29 条，且每条口令都要出现在纯文本菜单里（格式无缺失）
+    # 菜单唯一源 = MENU_GROUPS（当前 33 条），每条口令都要出现在纯文本菜单里（格式无缺失）
     menu_txt = cmds.menu_text()
     total = cmds.menu_total()
     # 用例数可多于菜单条数：同一口令按状态分流会有多条用例（如异火「有传承出图」+

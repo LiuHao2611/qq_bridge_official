@@ -54,6 +54,9 @@ def create_player(qq, name, group) -> dict:
         "bonus": {},
         "last_settle": now, "last_fight": 0, "last_craft": 0,
         "wins": 0, "losses": 0,
+        # 无惩罚切磋的独立荣誉战绩：与战斗胜负(wins/losses)分账，
+        # 切磋只动这两个字段，绝不扣 hp/gold/exp。
+        "duel_wins": 0, "duel_losses": 0,
         "main_idx": 0, "task": None,
         "diyan": False,
     }
