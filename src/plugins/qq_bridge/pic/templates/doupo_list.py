@@ -96,14 +96,30 @@ def _row_h(item: dict, content_w: int) -> int:
     return max(ROW_MIN, h)
 
 
+#: 双列布局的列间距。仅 data["columns"]=2 时启用（宝库药材 50+ 种，单列会到 5000px）。
+COL_GAP = 18
+
+
+def _cols(data: dict) -> int:
+    return 2 if int(data.get("columns") or 1) > 1 else 1
+
+
+def _col_width(content_w: int, cols: int) -> int:
+    return (content_w - COL_GAP * (cols - 1)) // cols
+
+
 def _measure(data: dict, content_w: int) -> int:
     """总高度（与 build 里的 y 步进严格一致，否则卡底留白会歪）。"""
-    y = PAD + FS_TITLE + 8 + 1 + 18
+    y_head = PAD + FS_TITLE + 8 + 1 + 18
     if data.get("subtitle"):
-        y += FS_SUB + 10
-    for r in _rows_of(data):
-        y += _row_h(r, content_w) + ROW_PAD
-    y += -ROW_PAD + 1 + 12 + FS_TIP + PAD
+        y_head += FS_SUB + 10
+    cols = _cols(data)
+    cw = _col_width(content_w, cols)
+    ys = [y_head] * cols
+    for i, r in enumerate(_rows_of(data)):
+        k = i % cols
+        ys[k] += _row_h(r, cw) + ROW_PAD
+    y = max(ys) - ROW_PAD + 1 + 12 + FS_TIP + PAD
     return max(300, y)
 
 
@@ -170,8 +186,15 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         y += FS_SUB + 10
 
     # ---- 列表行 ----
+    cols = _cols(data)
+    cw = _col_width(content_w, cols)
+    # 表头高度必须与 _measure 完全一致（含副标题），否则双列底边会错位
+    col_y = [y] * cols
     for ri, item in enumerate(_rows_of(data)):
-        rh = _row_h(item, content_w)
+        k = ri % cols
+        cx0 = x0 + k * (cw + COL_GAP)
+        y = col_y[k]
+        rh = _row_h(item, cw)
         badge = item.get("badge")
         # 角标必须与主标题同一行居中对齐（card-design 红线 4：同列元素起点一致）。
         # 2026-11-15 多维度重构后行变高，旧写法「行内垂直居中」会让角标漂到副行位置、
@@ -184,17 +207,17 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             # 钳到行顶：badge 比「行顶到标题中线」的 14px 更高，
             # 直接 ty-h/2 会算出 -1px 向上出血（check_boxes 会报溢出）。
             by = max(y, ty - bh // 2)
-            c.rounded_rect((x0, by, x0 + BADGE_W - 8, by + bh), radius=8,
+            c.rounded_rect((cx0, by, cx0 + BADGE_W - 8, by + bh), radius=8,
                            fill=p["chip_bg"], outline=bcolor, width=1)
-            S.key(c, (x0 + (BADGE_W - 8) // 2, by + bh // 2),
+            S.key(c, (cx0 + (BADGE_W - 8) // 2, by + bh // 2),
                   badge, size=FS_BADGE, color=btext, anchor="mm",
                   max_w=BADGE_W - 16)
             rec("r%d.badge" % ri, S.fit(badge, BADGE_W - 16, FS_BADGE, "regular"),
-                x0 + (BADGE_W - 8) // 2, by + bh // 2,
+                cx0 + (BADGE_W - 8) // 2, by + bh // 2,
                 FS_BADGE, "regular", "mm")
-            title_x = x0 + BADGE_W + 4
+            title_x = cx0 + BADGE_W + 4
         else:
-            title_x = x0 + 14
+            title_x = cx0 + 14
 
         # 右侧信息测量（绘制走 bold，度量也必须走 bold，否则标题会被挤掉）
         right = item.get("right")
@@ -202,25 +225,25 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
         # 主标题（放大加粗）
         tcolor = p["accent_color"] if item.get("accent") else p["text_color"]
-        title_max = (x0 + content_w) - title_x - 8 - right_w
+        title_max = (cx0 + cw) - title_x - 8 - right_w
         S.key(c, (title_x, ty), str(item.get("title") or ""),
               size=FS_ITEM, color=tcolor, max_w=title_max)
         rec("r%d.title" % ri, S.fit(str(item.get("title") or ""), title_max, FS_ITEM, "bold"),
             title_x, ty, FS_ITEM, "bold", "lm")
         # 右侧信息（价格 / 战力 / 状态，同为重点：暗金加粗）
         if right:
-            S.key(c, (x0 + content_w, ty), right, size=FS_ITEM,
+            S.key(c, (cx0 + cw, ty), right, size=FS_ITEM,
                   color=p["accent_color"], anchor="rm",
-                  max_w=(x0 + content_w) - title_x)
+                  max_w=(cx0 + cw) - title_x)
             rec("r%d.right" % ri,
-                S.fit(str(right), (x0 + content_w) - title_x, FS_ITEM, "bold"),
-                x0 + content_w, ty, FS_ITEM, "bold", "rm")
+                S.fit(str(right), (cx0 + cw) - title_x, FS_ITEM, "bold"),
+                cx0 + cw, ty, FS_ITEM, "bold", "rm")
 
         # 副行（折行，小字明确不加粗）
         cy = ty + FS_ITEM // 2 + 8 + TITLE_SUB_GAP
         sub = item.get("sub") or ""
         if sub:
-            lines = Canvas.wrap(sub, FS_SMALL, "regular", (x0 + content_w) - title_x - 8)
+            lines = Canvas.wrap(sub, FS_SMALL, "regular", (cx0 + cw) - title_x - 8)
             for i, ln in enumerate(lines):
                 S.small(c, (title_x, cy + i * DESC_LH), ln,
                         size=FS_SMALL, color=p["dim_color"])
@@ -230,7 +253,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         # 独立提示行：显式 gap，不与副行连读（card-design 红线 5：禁止空格凑间距）
         note = item.get("note") or ""
         if note:
-            lines = Canvas.wrap(note, FS_NOTE, "regular", (x0 + content_w) - title_x - 8)
+            lines = Canvas.wrap(note, FS_NOTE, "regular", (cx0 + cw) - title_x - 8)
             ny = cy + NOTE_GAP + NOTE_LH // 2
             for i, ln in enumerate(lines):
                 S.small(c, (title_x, ny + i * NOTE_LH), ln,
@@ -243,13 +266,13 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             by = y + rh - BAR_H - 8
             cur = int(bar.get("cur", 0))
             mx = max(1, int(bar.get("max", 1)))
-            _bar(c, title_x, by, (x0 + content_w) - title_x, int(cur * 100 / mx),
+            _bar(c, title_x, by, (cx0 + cw) - title_x, int(cur * 100 / mx),
                  p["bar_from"], p["bar_to"], p["track_color"])
 
-        y += rh + ROW_PAD
+        col_y[k] += rh + ROW_PAD
 
     # ---- 底部提示 ----
-    y -= ROW_PAD
+    y = max(col_y) - ROW_PAD
     c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
     y += 12
     tip = data.get("tip")
