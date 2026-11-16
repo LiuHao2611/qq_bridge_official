@@ -169,7 +169,10 @@ def test_four_cards_render_valid_png_and_export():
         png = _render(tpl, data, cname)
         assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000, tpl
         img = Image.open(io.BytesIO(png)).convert("RGB")
-        assert img.width == 720 and 400 < img.height < 2200, (
+        # 菜单卡 2026-11-16 增到 33 条口令（+无惩罚切磋/应战/拒战），高度约 2320；
+        # 单独放宽它的上限，其余卡片仍守 2200，防止布局 bug 导致高度暴增。
+        height_cap = 2600 if tpl == "doupo_menu" else 2200
+        assert img.width == 720 and 400 < img.height < height_cap, (
             "%s 尺寸异常 %s" % (tpl, img.size))
         raw = img.resize((80, 80)).tobytes()
         colors = len({raw[i:i + 3] for i in range(0, len(raw), 3)})

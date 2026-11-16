@@ -14,6 +14,7 @@ import time
 
 from . import config as cfg
 from . import core
+from . import duel_challenge as dc
 from . import factions as fac
 from . import flame_skills as fs
 from . import skill_book as book
@@ -39,7 +40,8 @@ def _fmt(n) -> str:
     return str(n)
 
 
-def _battle_line(it: dict, who: str = "p") -> str:
+def _battle_line(it: dict, who: str = "p", who_label: str = "",
+                 foe: str = "兽击") -> str:
     """把一条战报 log 渲染成「行动 + 伤害 + 属性归因」的内联文案。
 
     2026-11-16 用户诉求：人物卡每个属性要和战斗强关联，不能「卡上摆数字、
@@ -48,12 +50,16 @@ def _battle_line(it: dict, who: str = "p") -> str:
     不齐，一律用 .get 取值，杜绝 KeyError（见 2026-11-16 战斗回包崩溃事故）。
 
     :param who: "p"=PVE 我方视角；"v"=PVP 对手视角（前缀用「对方」）。
+    :param who_label: 自定义行动方前缀（切磋时换真人昵称），空串沿用默认。
+    :param foe: 闪避文案里的对手称呼，PVE 默认「兽击」，切磋改「来招」。
     """
     if it == "...":
         return "　…"
     kind = str(it.get("kind") or "出手")
     dmg = int(it.get("dmg") or 0)
     pre = "　→ " if who != "v" else "　对方 "
+    if who_label:
+        pre = f"　{who_label} "
 
     # 贵人相助：机缘彩蛋，一招制敌
     if it.get("aid"):
@@ -64,7 +70,7 @@ def _battle_line(it: dict, who: str = "p") -> str:
     if it.get("miss"):
         if kind == "被控":
             return f"{pre}{kind}，无法出手（斗技·控场）"
-        return f"{pre}身形一晃，避开了兽击（敏捷·闪避）"
+        return f"{pre}身形一晃，避开了{foe}（敏捷·闪避）"
 
     # 持续伤害 / 反伤：斗技余威与反击
     if it.get("dot"):
@@ -139,6 +145,9 @@ MENU_GROUPS = (
         ("领主线", "主线达标后结算，推进章节"),
         ("排行", "本群战力榜前 10"),
         ("抢 @某人", "掠夺对方 10% 金币（输了自己掉）"),
+        ("切磋 @某人", "无惩罚切磋：对方「应战」后自动随机放技，只记荣誉战绩"),
+        ("应战", "接受本群道友的切磋邀请（60 秒内有效）"),
+        ("拒战", "婉拒切磋邀请"),
         ("送 100 @某人", "赠金币"),
     )),
 )
@@ -278,6 +287,8 @@ async def cmd_panel(store, qq) -> str:
         f"💠 斗气 {_bar(p['mp'], core.mp_max(p))} {p['mp']}/{core.mp_max(p)}",
         f"💰 金币 {p['gold']}　💎 炎星石 {core.count_item(p, '炎星石')}",
         f"⚔️ 战力 {core.power(p)}（{p.get('wins', 0)}胜 {p.get('losses', 0)}负）",
+        f"🤝 切磋荣誉 {int(p.get('duel_wins', 0))}胜 "
+        f"{int(p.get('duel_losses', 0))}负（无惩罚，仅本群）",
     ]
     return "\n".join(rows)
 
@@ -1035,6 +1046,108 @@ async def cmd_rob(store, qq, target) -> str:
     await store.put_player(p)
     await store.put_player(vic)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 无惩罚切磋（2026-11-16 用户拍板：仅本群 / 自动随机放技 / 只记荣誉战绩）
+# ---------------------------------------------------------------------------
+#: 进程级挑战会话。按 (群, 目标) 隔离，超时惰性清理，避免半开会话堆积。
+duels = dc.ChallengeStore(cfg.DUEL_CHALLENGE_TTL)
+
+#: 私聊虚拟群前缀，与 __init__.py 的 PRIVATE_SCOPE_PREFIX 同源。
+_PRIVATE_SCOPE_PREFIX = "pv:"
+
+
+async def cmd_duel_challenge(store, qq, target, group, name="") -> str:
+    """发起切磋：仅本群、需对方应战；发起方先手，无惩罚。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    group = str(group or "")
+    if not group or group.startswith(_PRIVATE_SCOPE_PREFIX):
+        return "切磋只在群聊中进行，拉个道友来群里比试吧～"
+    if not target:
+        return "用法：切磋 @某人"
+    target = str(target)
+    if target == str(qq):
+        return "不能和自己切磋，换个道友吧。"
+    vic = await store.get_player(target)
+    if not vic:
+        return "对方尚未入道。"
+    if str(vic.get("group")) != group:
+        return "对方不在本群，只有本群道友能切磋。"
+    duels.ask(str(qq), target, group)
+    who = str(name or p.get("name") or f"道友{str(qq)[-4:]}")
+    rival = str(vic.get("name") or f"道友{target[-4:]}")
+    return (f"⚔️ {who} 向 {rival} 发起切磋！\n"
+            f"　无惩罚：不扣血、不掉钱、不损修为，只记荣誉战绩。\n"
+            f"　请 {rival} 在 {cfg.DUEL_CHALLENGE_TTL} 秒内回复「应战」，"
+            f"或「拒战」婉拒。")
+
+
+async def cmd_duel_accept(store, qq, group) -> str:
+    """应战：消费挑战，复用 core.duel 自动随机放技，只写荣誉战绩。"""
+    group = str(group or "")
+    if not group or group.startswith(_PRIVATE_SCOPE_PREFIX):
+        return "切磋只在群聊中进行～"
+    ch = duels.pending_for(str(qq), group)
+    if ch is None:
+        return "你没有待应的切磋（或已超时）；发起请用「切磋 @某人」。"
+    p = await _player(store, str(qq))              # 应战方
+    if not p:
+        return NOT_ENTERED                          # 校验失败不消费挑战
+    rival = await store.get_player(ch.challenger)  # 发起方（先手）
+    if not rival or str(rival.get("group")) != group:
+        return "发起者已不在本群，切磋取消。"
+    ch = duels.take(str(qq), group)                 # 校验通过才一次性消费
+    if ch is None:
+        return "你没有待应的切磋（或已超时）。"
+
+    # 发起方先手，复用现成 duel 内核：四槽自动随机放技，不改任何 hp/gold。
+    res = core.duel(rival, p)
+    seq = res["log"]
+    show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
+    a_name = str(rival.get("name") or f"道友{ch.challenger[-4:]}")
+    b_name = str(p.get("name") or f"道友{str(qq)[-4:]}")
+    lines = [
+        f"⚔️ 切磋 · {a_name} vs {b_name}（{res['rounds']} 回合）",
+        "　无惩罚切磋：不扣血、不掉钱，只记荣誉战绩",
+        "",
+    ]
+    for it in show:
+        if it == "...":
+            lines.append("　…")
+            continue
+        who = "p" if it.get("who") == "p" else "v"
+        label = a_name if who == "p" else b_name
+        lines.append(_battle_line(it, who=who, who_label=label, foe="来招"))
+
+    # 唯一写入点：荣誉战绩。刻意不碰 hp / mp / gold / exp / bag / wins / losses。
+    if res["win"]:
+        rival["duel_wins"] = int(rival.get("duel_wins", 0)) + 1
+        p["duel_losses"] = int(p.get("duel_losses", 0)) + 1
+        lines.append(f"🏆 {a_name} 胜！荣誉 {rival['duel_wins']}胜 "
+                     f"{int(rival.get('duel_losses', 0))}负")
+    else:
+        p["duel_wins"] = int(p.get("duel_wins", 0)) + 1
+        rival["duel_losses"] = int(rival.get("duel_losses", 0)) + 1
+        lines.append(f"🏆 {b_name} 胜！荣誉 {p['duel_wins']}胜 "
+                     f"{int(p.get('duel_losses', 0))}负")
+    lines.append("　（本次未扣血、未掉钱、未损修为）")
+    await store.put_player(rival)
+    await store.put_player(p)
+    return "\n".join(lines)
+
+
+async def cmd_duel_decline(qq, group) -> str:
+    """婉拒切磋。"""
+    group = str(group or "")
+    if not group or group.startswith(_PRIVATE_SCOPE_PREFIX):
+        return "切磋只在群聊中进行～"
+    if duels.pending_for(str(qq), group) is None:
+        return "你没有待应的切磋。"
+    duels.decline(str(qq), group)
+    return "已婉拒切磋，下次再战。"
 
 
 async def cmd_give(store, qq, target, amount) -> str:
