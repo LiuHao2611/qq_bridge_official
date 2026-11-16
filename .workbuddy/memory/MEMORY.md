@@ -68,6 +68,15 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 人物卡六维格子右端的「→战斗作用」短标有几何守门：
   `test_battle_depth.py::test_statcell_label_role_no_overlap` 用模板同一套 text_width
   校验 label+role 不超过 `cell_w-40`。改战斗作用文案前先看这条会不会红。
-* **PVP 已拍板方向**：无惩罚切磋；自动随机放技（不做同时回合报招）；仅本群；
-  不要赛季；真实损失机制虽被认可但先不启用。`core.duel()` 是现成双人模拟器底座，
-  别重写战斗内核；切磋只更新荣誉战绩，不扣血不掉钱。
+* **PVP 已实现（无惩罚切磋，2026-11-16）**：发起 → 应战/拒战两段式，仅本群，
+  自动随机放技（不做同时回合报招），发起方先手，只更新 `duel_wins/duel_losses`，
+  与 PVE `wins/losses` 分账。真实损失机制虽被认可但用户明确先不启用；不要赛季。
+  `core.duel()` 是现成双人模拟器底座，别重写战斗内核。
+  * 会话模块 `duel_challenge.py` 按 `(group,target)` 隔离、惰性超时；
+    **matcher 变量名绝不能叫 `duel_challenge`**，会遮住同名子模块（已改 `duel_ask_cmd`）。
+  * 菜单 / matcher 数严格相等（33 条），新增口令必须同时改 `MENU_GROUPS`、
+    `tests/test_doupo_buttons.py` 基准、`test_menu_full.CASES`、`test_commands` 菜单数。
+
+* **GitHub 全量 tree 推送会 422**：644 条一次 POST 偶发 "input too large"。
+  用 `tmp/push_incremental.py <本地基线commit>` 走 `base_tree` 只提交 diff 文件，
+  秒级完成；铁律不变——blob key 用内容 sha1，推送后拉 raw grep 特征。
