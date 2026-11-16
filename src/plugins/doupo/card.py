@@ -547,7 +547,9 @@ def build_shop_data(p: dict) -> dict:
         rows.append({"title": it["name"], "right": f"{it['price']} 金", "sub": it["desc"]})
     return {
         "icon": "cart", "title": "随身商店",
-        "subtitle": f"金币 {int(p.get('gold', 0))}",
+        "subtitle": f"金币 {int(p.get('gold', 0))} · 药材 {len(rows)} 种",
+        # 2026-11-16：原著药材补录后 50+ 种，单列会到 5000px 不可读；双列排版。
+        "columns": 2,
         "rows": rows,
         "tip": "用法：买 血灵草 2",
     }

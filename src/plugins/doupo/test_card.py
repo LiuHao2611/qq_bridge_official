@@ -277,6 +277,41 @@ def test_recipes_two_column_boxes_no_overlap():
         assert not probs, "炼药卡 w=%d 排版越界/重叠：%s" % (w, probs[:5])
 
 
+def test_shop_two_column_boxes_no_overlap():
+    """宝库双列：50+ 种药材全部上卡后，三种宽度零溢出/重叠。
+
+    2026-11-16 原著药材补录后单列高度从 3600 涨到 5120，此处守住新布局：
+    一行一物的数据同源不变（test_list_cards_data_source 仍逐行相等），
+    但卡面必须压到可读高度，且文字盒不能越界或互相压住。
+    """
+    import importlib.util
+
+    pic_dir = os.path.join(REPO_ROOT, "src", "plugins", "qq_bridge", "pic")
+    if pic_dir not in sys.path:
+        sys.path.insert(0, pic_dir)
+    spec = importlib.util.spec_from_file_location(
+        "_doupo_typecheck_shop",
+        os.path.join(REPO_ROOT, "tools", "check_doupo_typography.py"))
+    tc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tc)
+    from pic import theme as pic_theme
+    from pic.templates import doupo_list as L
+
+    d = card.build_shop_data(_player(1))
+    assert d.get("columns") == 2
+    assert len(d["rows"]) == len(core.shop_list())
+    t = pic_theme.get("light")
+    for w in (560, 720, 900):
+        boxes: list = []
+        c = L.build(t, d, width=w, boxes=boxes)
+        content_w = w - L.PAD * 2
+        h = L._measure(d, content_w)
+        assert c.height == h, "w=%d 实测高度与度量不一致：%d != %d" % (w, c.height, h)
+        assert h < 3600, "w=%d 宝库卡过高：%d" % (w, h)
+        probs = tc.check_boxes((L.PAD, L.PAD, w - L.PAD, h - L.PAD), boxes, min_gap=2)
+        assert not probs, "宝库卡 w=%d 排版越界/重叠：%s" % (w, probs[:5])
+
+
 def test_build_and_render_help_card():
     """玩法卡：数据源 HELP_GROUPS 与纯文本同源 + 出合法 PNG。"""
     d = card.build_help_data()

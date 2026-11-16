@@ -394,7 +394,17 @@ RECIPES = [
 # 每枚补 min_lv（品阶→境界门槛）、buy（金币售价）、src（原著出处）、need 缺省为 {}。
 for _nr in NOVEL_RECIPES:
     _nr.setdefault("price", _nr["buy"])   # 市场价沿用金币售价，供商店/备注展示
-RECIPES = RECIPES + list(NOVEL_RECIPES)
+# 同名冲突必须显式处理，否则炼药卡会出现两张同名丹方。
+# 已知唯一冲突：醒神丹 —— 游戏自设四品暴击版被原著第290章三品醒神丹覆盖。
+_GAME_RECIPE_NAMES = {r["name"] for r in RECIPES}
+_OVERRIDDEN = sorted({r["name"] for r in NOVEL_RECIPES if r["name"] in _GAME_RECIPE_NAMES})
+assert _OVERRIDDEN == ["醒神丹"], (
+    "原著丹药与游戏自设丹方撞名：%s。请在 config.py 里显式决定保留哪一条，"
+    "不要 silent 合并（会出现两张同名卡）。" % "、".join(_OVERRIDDEN or ["<无>"])
+)
+_MERGED = {r["name"]: r for r in RECIPES}
+_MERGED.update({r["name"]: r for r in NOVEL_RECIPES})
+RECIPES = list(_MERGED.values())
 RECIPE_NAMES = [r["name"] for r in RECIPES]
 RECIPE_BY_NAME = {r["name"]: r for r in RECIPES}
 from .recipes_data import GRADE_ORDER  # noqa: E402  高→低全品阶
