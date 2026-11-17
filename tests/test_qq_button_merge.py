@@ -475,6 +475,56 @@ def test_http_put_exception_raises_for_downgrade():
             assert "put_failed" in str(e), "PUT 异常应记 put_failed：%s" % e
 
 
+def test_transient_connect_error_is_retried_once():
+    """瞬时网络错误（容器 DNS 抖动 → ConnectError）要重试一次，别让用户丢按钮。
+
+    2026-11-17 生产实录：14:44:53 「菜单」素材 PUT 报 ConnectError，合并失败降级成
+    纯图片、**没有按钮**，用户点不到任何东西。容器 DNS 冷查询确实会偶发失败
+    （cos.ap-beijing 曾直接 gaierror -3），重试一次基本都能过。
+    """
+    calls = {"n": 0}
+
+    class _ConnectError(Exception):
+        pass
+
+    _ConnectError.__name__ = "ConnectError"      # 让 _is_transient 认出来
+
+    async def flaky_put(url, data, content_type):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _ConnectError("dns boom")
+        return 200
+
+    bot = _FakeMaterialBot()
+    with _wire_fake(bot) as b:
+        ma._http_put = flaky_put
+        try:
+            r = asyncio.run(ma.ensure_material(b, b"png-retry-unique-bytes"))
+            assert r["url"].startswith("qqbot-media://"), r
+            assert calls["n"] == 2, "瞬时错误应该重试一次，实际调用 %d 次" % calls["n"]
+        finally:
+            pass       # _wire_fake 的 __exit__ 会还原 _http_put
+
+
+def test_hard_rejection_is_not_retried():
+    """状态码不对（403/404）**不许**重试：那是真拒绝，重试只会掩盖问题。"""
+    calls = {"n": 0}
+
+    async def bad_status_put(url, data, content_type):
+        calls["n"] += 1
+        return 403
+
+    bot = _FakeMaterialBot()
+    with _wire_fake(bot):
+        ma._http_put = bad_status_put
+        try:
+            asyncio.run(ma.ensure_material(bot, b"png-403-unique-bytes"))
+            raise AssertionError("403 未抛 MaterialUploadError")
+        except ma.MaterialUploadError as e:
+            assert "put_bad_status" in str(e), str(e)
+            assert calls["n"] == 1, "403 被重试了 %d 次（应只 1 次）" % calls["n"]
+
+
 # ---------------------------------------------------------------------------
 # ④ markdown 内嵌语法 + 合一接线 ——行为 + AST
 # ---------------------------------------------------------------------------
@@ -694,8 +744,10 @@ def test_injection_guards():
     _guard_delete_method(ma_src)
 
     # 注入 D：_put_bytes 恢复旧 bot.put_upload_part 路径（= 本次 ActionFailed 根因）
-    bad_old = ma_src.replace("status = await _http_put(presigned_url, data, content_type)",
-                             "await bot.put_upload_part(presigned_url=presigned_url, data=data)", 1)
+    # 锚点用「_http_put 的调用点」本身，别绑定外层 status= 写法 —— 外面那层
+    # 2026-11-17 加了 _retry_net 包壳，写死整行会让守卫失效。
+    bad_old = ma_src.replace("_http_put(presigned_url, data, content_type)",
+                             "bot.put_upload_part(presigned_url=presigned_url, data=data)", 1)
     assert bad_old != ma_src, "注入 D 没找到锚点"
     try:
         _guard_put_never_uses_bot_upload_path(bad_old)
@@ -763,6 +815,8 @@ if __name__ == "__main__":
         test_merge_fallback_never_sends_separate_buttons_by_default,
         test_zero_button_no_empty_keyboard,
         test_merge_segment_has_markdown_and_keyboard_same_message,
+        test_transient_connect_error_is_retried_once,
+        test_hard_rejection_is_not_retried,
         test_injection_guards,
     ]
     passed = failed = 0

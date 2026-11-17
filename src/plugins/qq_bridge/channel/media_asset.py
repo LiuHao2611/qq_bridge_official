@@ -39,6 +39,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -86,6 +87,51 @@ def _cache_path() -> Path:
 
 class MaterialUploadError(RuntimeError):
     """素材上传任一步失败。上层据此降级回两条发送，不静默吞。"""
+
+
+#: 网络瞬时失败的重试次数（2026-11-17 生产实测：容器 DNS 偶发解析失败/超时——
+#: 冷缓存下 api.sgroup.qq.com 曾耗时 4.1s，cos.ap-beijing 直接 gaierror -3）。
+#: 表现为 ``put_failed: ConnectError`` / ``prepare_failed: NetworkError``，
+#: 用户侧看到的是「菜单只有图、没有按钮」。
+#:
+#: 🔴 只重试「连接没建立起来」这类**瞬时**错误。4xx/5xx、响应格式错误、403
+#: Content-Type 不对 —— **一律不重试**：那是真拒绝/真 bug，重试只会掩盖问题，
+#: 违反「禁止兜底」纪律。重试也不是降级：走的还是同一条实现，只是再试一次。
+_NET_RETRY = 1
+_NET_RETRY_DELAY = 0.4
+
+#: 视为瞬时网络错误的异常名（httpx 的 ConnectError 里还包着 OSError/gaierror）
+_TRANSIENT_NAMES = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
+    "NetworkError", "RemoteProtocolError", "PoolTimeout",
+    "gaierror", "TimeoutError", "ConnectionResetError",
+})
+
+
+def _is_transient(e: BaseException, depth: int = 0) -> bool:
+    if type(e).__name__ in _TRANSIENT_NAMES:
+        return True
+    cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+    if cause is not None and cause is not e and depth < 4:
+        return _is_transient(cause, depth + 1)
+    return False
+
+
+async def _retry_net(make_coro, step: str):
+    """执行 ``make_coro()``，遇上瞬时网络错误重试 ``_NET_RETRY`` 次。
+
+    用工厂而不是现成 coroutine：每次重试都要新建请求对象（适配器会往 Request
+    上挂状态，复用同一个对象不安全）。
+    """
+    for attempt in range(_NET_RETRY + 1):
+        try:
+            return await make_coro()
+        except Exception as e:  # noqa: BLE001
+            if attempt >= _NET_RETRY or not _is_transient(e):
+                raise
+            log.info(jlog("material_net_retry", step=step,
+                          error=type(e).__name__, attempt=attempt + 1))
+            await asyncio.sleep(_NET_RETRY_DELAY)
 
 
 class MaterialStore:
@@ -240,19 +286,23 @@ async def _prepare(bot, file_name: str, data: bytes, content_type: str) -> dict:
     预签名校验失败（403 AccessDenied）——2026-11-11 真网络矩阵实验坐实。
     """
     base = bot.adapter.get_api_base()
-    req = _new_request(
-        "POST",
-        base.joinpath("v2", "media-images", "prepare"),
-        json={
-            "file_name": file_name,
-            "file_size": len(data),
-            "content_type": content_type,
-            "md5": hashlib.md5(data).hexdigest(),
-            "sha1": hashlib.sha1(data).hexdigest(),
-        },
-    )
+
+    def _make_req():
+        # 每次重试都新建 Request（适配器会往对象上挂状态，复用不安全）
+        return _new_request(
+            "POST",
+            base.joinpath("v2", "media-images", "prepare"),
+            json={
+                "file_name": file_name,
+                "file_size": len(data),
+                "content_type": content_type,
+                "md5": hashlib.md5(data).hexdigest(),
+                "sha1": hashlib.sha1(data).hexdigest(),
+            },
+        )
+
     try:
-        ret = await bot._request(req)
+        ret = await _retry_net(lambda: bot._request(_make_req()), "prepare")
     except Exception as e:  # noqa: BLE001
         raise MaterialUploadError("prepare_failed: %s" % type(e).__name__) from e
     if not isinstance(ret, dict) or not ret.get("upload_id") or not ret.get("presigned_url"):
@@ -288,7 +338,10 @@ async def _put_bytes(presigned_url: str, data: bytes, content_type: str) -> str:
     比对，故这里返回本地 md5。
     """
     try:
-        status = await _http_put(presigned_url, data, content_type)
+        status = await _retry_net(
+            lambda: _http_put(presigned_url, data, content_type), "put")
+    except MaterialUploadError:
+        raise                      # 状态码不对：真拒绝，不重试也不改写
     except Exception as e:  # noqa: BLE001
         raise MaterialUploadError("put_failed: %s" % type(e).__name__) from e
     if not (200 <= status < 300):
@@ -299,13 +352,19 @@ async def _put_bytes(presigned_url: str, data: bytes, content_type: str) -> str:
 async def _complete(bot, upload_id: str, md5_hex: str) -> dict:
     """POST /v2/media-images/complete → {url, image_id, ...}。"""
     base = bot.adapter.get_api_base()
-    req = _new_request(
-        "POST",
-        base.joinpath("v2", "media-images", "complete"),
-        json={"upload_id": upload_id, "md5": md5_hex},
-    )
+
+    def _make_req():
+        return _new_request(
+            "POST",
+            base.joinpath("v2", "media-images", "complete"),
+            json={"upload_id": upload_id, "md5": md5_hex},
+        )
+
+    async def _go():
+        return await _retry_net(lambda: bot._request(_make_req()), "complete")
+
     try:
-        ret = await bot._request(req)
+        ret = await _go()          # 瞬时网络错误重试一次（见 _retry_net 说明）
     except Exception as e:  # noqa: BLE001
         raise MaterialUploadError("complete_failed: %s" % type(e).__name__) from e
     if not isinstance(ret, dict) or not ret.get("url"):
