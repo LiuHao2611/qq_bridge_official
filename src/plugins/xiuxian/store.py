@@ -111,6 +111,7 @@ class Store:
         self._snap: Dict[str, Dict[str, str]] = {
             "players": {}, "sects": {}, "enabled": {}, "world": {}}
         self._loaded = False
+        self._db_ready = False
 
     # ---- 底层连接 ----
     def _conn(self) -> sqlite3.Connection:
@@ -123,13 +124,16 @@ class Store:
         con.execute("PRAGMA synchronous=FULL")    # 断电也不丢已提交事务
         return con
 
+    def _ensure_ready(self) -> None:
+        """确保表已建好（第一次 DB 访问时自动执行，不能只依赖 load()）。"""
+        if not self._db_ready:
+            self._init_db()
+            self._db_ready = True
+
     @contextmanager
     def _tx(self):
-        """一次事务：成功 commit、异常 rollback，**并且一定 close**。
-
-        `with sqlite3.Connection` 只提交/回滚，不关连接。Windows 下没关的句柄会
-        让临时库文件删不掉（WinError 32），所以这里显式收口。
-        """
+        """一次事务：成功 commit、异常 rollback，**并且一定 close**（防 WinError 32）。"""
+        self._ensure_ready()
         con = self._conn()
         try:
             with con:
@@ -138,8 +142,12 @@ class Store:
             con.close()
 
     def _init_db(self) -> None:
+        # 注意：这里不能用 _tx()（会递归回 _ensure_ready），直接开连接；
+        # 连开连接也要包在 try 里 —— makedirs 失败也要变成 StoreError。
+        con = None
         try:
-            with self._tx() as con:
+            con = self._conn()
+            with con:
                 con.executescript(_SCHEMA)
                 ver = con.execute("PRAGMA user_version").fetchone()[0]
                 if ver < DB_VER:
@@ -147,13 +155,16 @@ class Store:
         except Exception as e:  # noqa: BLE001
             raise StoreError("修仙存档库初始化失败（%s）：%s"
                              % (type(e).__name__, str(e)[:200])) from e
+        finally:
+            if con is not None:
+                con.close()
 
     # ---- 生命周期 ----
     async def load(self) -> None:
         async with self._lock:
             if self._loaded:
                 return
-            self._init_db()
+            self._ensure_ready()
             self._read_all()
             if not self._data["players"] and not self._data["sects"]:
                 self._import_legacy_json()

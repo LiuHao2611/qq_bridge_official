@@ -48,15 +48,18 @@ TOWER_SESSION_PATH = os.environ.get(
 #   * asyncio.Lock 只在单进程内有效 —— 第二个实例/测试脚本 = 后写覆盖，静默丢档；
 #   * 落盘没有 fsync，宿主断电可能截断（只能靠 .corrupt- 备份人工恢复）。
 #
-# 路径跟着 DATA_PATH 走（改 DOUPO_DATA_PATH 就一起改，不需要第二套逻辑）：
+# 路径**只由 DATA_PATH 推导**，不单独开 DOUPO_DB_PATH 环境变量：
 #   容器：/app/data/doupo/doupo.json → /app/data/doupo/doupo.sqlite
 #   宿主/单测：tmp/doupo.json → tmp/doupo.sqlite（每个用例目录独立）
+#
+# 🔴 2026-11-17 事故：一开始给 DB_PATH 单独留了 `DOUPO_DB_PATH` 覆盖，compose 里
+# 设成 /app/data/doupo/doupo.sqlite。结果 test_e2e / test_menu_full 只改
+# `DOUPO_DATA_PATH` 到临时目录，DB 却仍指向**生产库** —— 跑一次测试就往生产
+# 库里塞进 4 个假玩家（10001/10002/10003/10021，群 900000001 / pv:*）。
+# 教训：同一个东西只许有一个来源。两条路径必须同进同退，否则测试隔离必漏。
 # 铁律：容器里绝不出现盘符路径（见 .workbuddy/memory/MEMORY.md）。
 # ---------------------------------------------------------------------------
-DB_PATH = os.environ.get(
-    "DOUPO_DB_PATH",
-    str(Path(DATA_PATH).with_suffix(".sqlite")),
-)
+DB_PATH = str(Path(DATA_PATH).with_suffix(".sqlite"))
 
 # ---------------------------------------------------------------------------
 # 境界 / 星级  [原著小说]

@@ -112,6 +112,27 @@ def _legacy_doupo() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 0. 库路径必须只由 DATA_PATH 推导（两条来源 = 测试隔离必漏）
+# ---------------------------------------------------------------------------
+def test_db_path_follows_data_path_single_source():
+    """存档库和旧 JSON 必须在同一目录同名，且**没有独立的环境变量入口**。
+
+    真实事故（2026-11-17）：一开始给库路径留了 `DOUPO_DB_PATH`，compose 注入成
+    生产路径；而 test_e2e / test_menu_full 只改 `DOUPO_DATA_PATH` 到临时目录。
+    结果跑一次测试就往**生产库**塞进 4 个假玩家（10001/10002/10003/10021）
+    和假群 900000001。同一个东西只许有一个来源。
+    """
+    for mod, name in ((ds, "斗破"), (xs, "修仙")):
+        cfg = mod.cfg
+        want = os.path.splitext(cfg.DATA_PATH)[0] + ".sqlite"
+        assert cfg.DB_PATH == want, (
+            "%s的库路径没有跟着 DATA_PATH 走：DB_PATH=%r，应为 %r"
+            % (name, cfg.DB_PATH, want))
+        assert os.path.dirname(cfg.DB_PATH) == os.path.dirname(cfg.DATA_PATH), \
+            "%s库和旧档不在同一目录（测试隔离会漏）" % name
+
+
+# ---------------------------------------------------------------------------
 # 1. 斗破：导入一次、只导一次、原件不动
 # ---------------------------------------------------------------------------
 def test_doupo_import_once_and_source_untouched():

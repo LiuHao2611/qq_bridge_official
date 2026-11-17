@@ -34,12 +34,12 @@ DATA_PATH = os.environ.get(
 #
 # 旧 JSON 版每次 set_world / put_sect / put_player 都重写**全服**存档；
 # 且锁只在进程内有效、落盘无 fsync。换库后一人一行、事务原子、跨进程安全。
-# 路径跟着 DATA_PATH 走：改 XIUXIAN_DATA_PATH 就一起改。
+#
+# 🔴 路径**只由 DATA_PATH 推导**，不单独开 XIUXIAN_DB_PATH：
+# 一旦开第二个环境变量，测试只改 DATA_PATH 时 DB 仍指向生产库 ——
+# 2026-11-17 就是这么把 4 个假玩家写进斗破生产库的。同一个东西只许有一个来源。
 # ---------------------------------------------------------------------------
-DB_PATH = os.environ.get(
-    "XIUXIAN_DB_PATH",
-    str(Path(DATA_PATH).with_suffix(".sqlite")),
-)
+DB_PATH = str(Path(DATA_PATH).with_suffix(".sqlite"))
 
 
 # ---------------------------------------------------------------------------
