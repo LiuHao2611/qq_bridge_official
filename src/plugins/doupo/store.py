@@ -1,8 +1,34 @@
 # -*- coding: utf-8 -*-
-"""斗破苍穹 · 数据存储层。
+"""斗破苍穹 · 数据存储层（SQLite）。
 
-零额外依赖：标准库 json + asyncio.Lock 做单机持久化。
-asyncio 单事件循环下，Lock 保证 read-modify-write 原子性；落盘用临时文件 + os.replace。
+## 为什么从 JSON 换成 SQLite（2026-11-17，用户「玩家数据肯定是要存到库里」）
+
+旧实现是「一个 doupo.json 装全服 + 整份重写」：
+
+* **写放大**：`put_player` 走 `save()` → `json.dump` 整份存档。代码里有 36 个写入点，
+  1000 玩家时每敲一条命令就要重写约 700KB。
+* **并发即丢档**：`asyncio.Lock` 只在**单进程内**有效。第二个实例、测试脚本、
+  运维手工改档 —— 谁后落盘谁赢，输的那方**静默丢失**且日志里一个字都没有。
+* **断电靠人恢复**：旧 `_write()` 只 `close()` 没有 `flush+fsync`，
+  宿主断电可能截断文件；现在的兜底是「备份成 .corrupt- + 空库启动」，
+  也就是那次回档必须人工找备份。
+
+换库后：**一人一行**，写谁只写谁；WAL + 事务，崩溃自动回滚；跨进程文件锁。
+
+## 设计要点（改之前先看完，别踩回去）
+
+* `self._data` 仍是**内存权威态**：`get_player()` 返回的是**活字典**，调用方
+  就地改完再 `put_player()`。这是全项目 36 个调用点的既有写法，不能改成
+  「每次 get 都查库 + 返副本」，否则就地改的那部分会静默丢掉。
+* 因此落盘分两条路：
+  1. `put_player()` / `enable_group()` 走**快路径**：只 UPSERT 那一行；
+  2. `save()` 走**兜底 diff**：拿内存和上次落盘快照逐条比对，只写变化的行，
+     顺便删掉内存里已不存在的行 —— 这样"改了活字典但没调 put_player"的老写法
+     照样落盘（以前靠整份重写碰巧生效，这里显式保住）。
+* **不做自动回退**：SQLite 出错就抛 :class:`StoreError`，绝不偷偷退回 JSON。
+  用户纪律：备选只能以显式选择存在，默认路径失败必须如实报错。
+* 旧 `doupo.json` 只当**一次性导入源**：库为空且文件存在时导一次，
+  原文件**原样不动**（就是回滚备份），导入记录写进 `meta` 表防重复导入。
 """
 
 from __future__ import annotations
@@ -10,8 +36,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import time
-from pathlib import Path
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from . import config as cfg
@@ -22,6 +49,31 @@ from . import config as cfg
 #: 等比缩放修为（保住「离下一级还差多少」的手感），逐玩家打 `lv_ver` 标记 ——
 #: 即使写盘失败也不会二次换算（换算不可重复执行）。
 SCHEMA_VER = 3
+
+#: 库结构版本（PRAGMA user_version）。改表结构时 +1 并在 `_migrate_db` 里补迁移。
+DB_VER = 1
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS players (
+    qq         TEXT PRIMARY KEY,
+    group_id   TEXT    NOT NULL DEFAULT '',
+    lv         INTEGER NOT NULL DEFAULT 1,
+    exp        INTEGER NOT NULL DEFAULT 0,
+    gold       INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL    NOT NULL DEFAULT 0,
+    data       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_players_group ON players(group_id);
+CREATE INDEX IF NOT EXISTS idx_players_lv    ON players(lv);
+CREATE TABLE IF NOT EXISTS groups (
+    group_id TEXT PRIMARY KEY,
+    added_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS meta (
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL
+);
+"""
 
 
 def _log(level: str, msg: str) -> None:
@@ -39,41 +91,137 @@ def _log(level: str, msg: str) -> None:
     getattr(_lg, level)(msg)
 
 
+class StoreError(RuntimeError):
+    """存档库读写失败。**必须**向上抛：不许静默当成功（会谎报"已保存"）。"""
+
+
+def _dumps(p: Dict[str, Any]) -> str:
+    """压缩序列化（稳定输出：同一份内容永远同一串，用于 diff 判等）。"""
+    return json.dumps(p, ensure_ascii=False, separators=(",", ":"))
+
+
 class Store:
-    def __init__(self, path: str = cfg.DATA_PATH):
-        self.path = path
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: str | None = None, db_path: str | None = None):
+        #: 旧 JSON 存档路径 —— 现在只用作「一次性导入源」，另行保留不动
+        self.path = str(path or cfg.DATA_PATH)
+        #: SQLite 库路径。显式 path 时按同目录同名推导，保证单测天然隔离
+        self.db_path = str(db_path or (cfg.DB_PATH if path is None
+                                       else os.path.splitext(self.path)[0] + ".sqlite"))
         self._lock = asyncio.Lock()
         self._data: Dict[str, Any] = {"players": {}, "groups": []}
+        #: 与磁盘一致的快照（qq/group -> 序列化串），save() 用它算 diff
+        self._snap: Dict[str, Dict[str, str]] = {"players": {}, "groups": {}}
         self._loaded = False
+
+    # ---- 底层连接 ----
+    def _conn(self) -> sqlite3.Connection:
+        d = os.path.dirname(self.db_path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        con = sqlite3.connect(self.db_path, timeout=10.0)
+        con.execute("PRAGMA busy_timeout=5000")   # 跨进程等锁，别立刻 SQLITE_BUSY
+        con.execute("PRAGMA journal_mode=WAL")    # 读写并发 + 崩溃自动回滚
+        con.execute("PRAGMA synchronous=FULL")    # 断电也不丢已提交事务
+        return con
+
+    @contextmanager
+    def _tx(self):
+        """一次事务：成功 commit、异常 rollback，**并且一定 close**。
+
+        `with sqlite3.Connection` 只提交/回滚，不关连接。Windows 下没关的句柄会
+        让临时库文件删不掉（WinError 32），所以这里显式收口。
+        """
+        con = self._conn()
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
+
+    def _init_db(self) -> None:
+        try:
+            with self._tx() as con:
+                con.executescript(_SCHEMA)
+                ver = con.execute("PRAGMA user_version").fetchone()[0]
+                if ver < DB_VER:
+                    con.execute("PRAGMA user_version=%d" % DB_VER)
+        except Exception as e:  # noqa: BLE001
+            raise StoreError("存档库初始化失败（%s）：%s"
+                             % (type(e).__name__, str(e)[:200])) from e
 
     # ---- 生命周期 ----
     async def load(self) -> None:
         async with self._lock:
             if self._loaded:
                 return
-            try:
-                with open(self.path, "r", encoding="utf-8") as f:
-                    self._data = json.load(f)
-                for k, dflt in (("players", {}), ("groups", [])):
-                    self._data.setdefault(k, dflt)
-            except FileNotFoundError:
-                pass
-            except Exception as e:  # noqa: BLE001
-                # 2026-11-17 用户最高声明「用户数据不许丢」：
-                # 原实现是「保留内存空库，下次写盘覆盖」——坏档（截断/半截 JSON）
-                # 会被下一次 save 用空库**永久覆盖**，等于把玩家存档销毁。
-                # 现在必须先备份原文件再继续；备份失败就抛错，宁可起不来也不覆盖。
-                bak = "%s.corrupt-%s" % (self.path, time.strftime("%Y%m%d-%H%M%S"))
-                try:
-                    os.replace(self.path, bak)
-                except Exception as e2:  # noqa: BLE001
-                    _log("error", "斗破存档损坏且无法备份 %s：%r / %r" % (self.path, e, e2))
-                    raise
-                _log("error", "斗破存档损坏，已备份为 %s（读取失败：%r），本次以空库启动"
-                              "——请用备份恢复，勿直接继续玩" % (bak, e))
+            self._init_db()
+            self._read_all()
+            if not self._data["players"] and not self._data["groups"]:
+                self._import_legacy_json()
             self._migrate_if_needed()
             self._loaded = True
+
+    def _read_all(self) -> None:
+        try:
+            with self._tx() as con:
+                for row in con.execute("SELECT qq, data FROM players"):
+                    p = json.loads(row[1])
+                    if isinstance(p, dict):
+                        self._data["players"][str(row[0])] = p
+                        self._snap["players"][str(row[0])] = row[1]
+                for row in con.execute("SELECT group_id FROM groups"):
+                    self._data["groups"].append(str(row[0]))
+                    self._snap["groups"][str(row[0])] = str(row[0])
+        except Exception as e:  # noqa: BLE001
+            # 库读不出来 = 玩家资产看不见。绝不"空库启动"（那会被后续写盘覆盖）。
+            raise StoreError("存档库读取失败（%s）：%s"
+                             % (type(e).__name__, str(e)[:200])) from e
+
+    def _import_legacy_json(self) -> None:
+        """首次启动：把旧 doupo.json 一次性导入。原文件原样保留（回滚备份）。"""
+        if not os.path.exists(self.path):
+            return
+        try:
+            with self._tx() as con:
+                done = con.execute(
+                    "SELECT v FROM meta WHERE k='imported_from'").fetchone()
+            if done:
+                return       # 导过了，绝不重复导（会把新进度覆盖成旧档）
+        except Exception as e:  # noqa: BLE001
+            raise StoreError("存档库 meta 读取失败（%s）" % type(e).__name__) from e
+
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            players = dict(raw.get("players") or {})
+            groups = list(raw.get("groups") or [])
+        except Exception as e:  # noqa: BLE001
+            # 坏档不导入，但也**不许**删除/覆盖原文件：备份成 .corrupt- 留证据。
+            bak = "%s.corrupt-%s" % (self.path, time.strftime("%Y%m%d-%H%M%S"))
+            try:
+                os.replace(self.path, bak)
+            except Exception as e2:  # noqa: BLE001
+                _log("error", "斗破旧存档损坏且无法备份 %s：%r / %r" % (self.path, e, e2))
+                raise
+            _log("error", "斗破旧存档损坏，已备份为 %s（%r），本次以空库启动"
+                          "——请用备份恢复，勿直接继续玩" % (bak, e))
+            return
+
+        self._data["players"] = {str(k): v for k, v in players.items() if isinstance(v, dict)}
+        self._data["groups"] = [str(g) for g in groups]
+        self._flush_changed()
+        try:
+            with self._tx() as con:
+                con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('imported_from', ?)",
+                            (os.path.abspath(self.path),))
+                con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('imported_at', ?)",
+                            (time.strftime("%Y-%m-%dT%H:%M:%S"),))
+                con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('imported_players', ?)",
+                            (str(len(self._data["players"])),))
+        except Exception as e:  # noqa: BLE001
+            raise StoreError("旧存档导入记录写入失败（%s）" % type(e).__name__) from e
+        _log("info", "斗破旧存档已导入 SQLite：%d 名玩家 / %d 个群（原文件保留：%s）"
+                     % (len(self._data["players"]), len(self._data["groups"]), self.path))
 
     def _migrate_if_needed(self) -> None:
         """旧存档 → 原著 13 阶九星制（斗之气 1-9 … 斗帝 103）。
@@ -105,24 +253,78 @@ class Store:
             p["lv_ver"] = SCHEMA_VER
             if new != old:
                 migrated.append(f"{qq}:{old}->{new}")
-        self._data["ver"] = SCHEMA_VER
         if migrated:
             _log("info", "斗破存档升级到原著13阶 lv=" + ",".join(migrated))
             try:
-                self._write()
+                self._flush_changed()
             except Exception as e:  # noqa: BLE001 — 写盘失败不能让机器人起不来
                 _log("error", "斗破存档升级后写盘失败（内存已生效，下次启动会重算）："
                      + type(e).__name__ + ": " + str(e))
 
-    def _write(self) -> None:
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, self.path)
+    # ---- 落盘 ----
+    @staticmethod
+    def _upsert_player(con: sqlite3.Connection, qq: str, p: dict, s: str,
+                       ts: float) -> None:
+        con.execute(
+            "INSERT INTO players(qq, group_id, lv, exp, gold, updated_at, data)"
+            " VALUES(?,?,?,?,?,?,?)"
+            " ON CONFLICT(qq) DO UPDATE SET"
+            "  group_id=excluded.group_id, lv=excluded.lv, exp=excluded.exp,"
+            "  gold=excluded.gold, updated_at=excluded.updated_at,"
+            "  data=excluded.data",
+            (qq, str(p.get("group") or ""), int(p.get("lv") or 1),
+             int(p.get("exp") or 0), int(p.get("gold") or 0), ts, s))
+
+    def _flush_changed(self) -> bool:
+        """把内存里与快照不同的行写回库；返回是否真的写了东西。
+
+        只写变化的行 —— 这正是不再「全服重写」的关键。
+        """
+        players, snap_p = self._data.get("players") or {}, self._snap["players"]
+        changed = []
+        for qq, p in players.items():
+            s = _dumps(p)
+            if snap_p.get(qq) != s:
+                changed.append((str(qq), s, p))
+        gone = [qq for qq in snap_p if qq not in players]
+        groups, snap_g = self._data.get("groups") or [], self._snap["groups"]
+        new_groups = [g for g in groups if str(g) not in snap_g]
+        gone_groups = [g for g in snap_g if g not in {str(x) for x in groups}]
+        if not (changed or gone or new_groups or gone_groups):
+            return False
+
+        now = time.time()
+        try:
+            with self._tx() as con:
+                for qq, s, p in changed:
+                    self._upsert_player(con, qq, p, s, now)
+                if gone:
+                    con.executemany("DELETE FROM players WHERE qq=?",
+                                    [(q,) for q in gone])
+                if new_groups:
+                    con.executemany("INSERT OR IGNORE INTO groups(group_id, added_at)"
+                                    " VALUES(?,?)", [(str(g), now) for g in new_groups])
+                if gone_groups:
+                    con.executemany("DELETE FROM groups WHERE group_id=?",
+                                    [(str(g),) for g in gone_groups])
+        except Exception as e:  # noqa: BLE001
+            # 快照不更新 → 下次 save 会重试，不会"以为存好了"
+            raise StoreError("斗破存档写入失败（%s）：%s"
+                             % (type(e).__name__, str(e)[:200])) from e
+
+        for qq, s, _p in changed:
+            snap_p[qq] = s
+        for qq in gone:
+            snap_p.pop(qq, None)
+        for g in new_groups:
+            snap_g[str(g)] = str(g)
+        for g in gone_groups:
+            snap_g.pop(g, None)
+        return True
 
     async def save(self) -> None:
         async with self._lock:
-            self._write()
+            self._flush_changed()
 
     # ---- 玩家 ----
     async def get_player(self, qq: str) -> Optional[dict]:
@@ -131,8 +333,19 @@ class Store:
 
     async def put_player(self, p: dict) -> None:
         async with self._lock:
-            self._data["players"][str(p["qq"])] = p
-        await self.save()
+            qq = str(p["qq"])
+            self._data["players"][qq] = p
+            s = _dumps(p)
+            if self._snap["players"].get(qq) == s:
+                return          # 内容没变：一个字节都不写
+            now = time.time()
+            try:
+                with self._tx() as con:
+                    self._upsert_player(con, qq, p, s, now)
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("斗破存档写入失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+            self._snap["players"][qq] = s
 
     async def all_players(self, group: Optional[str] = None) -> List[dict]:
         async with self._lock:
@@ -146,7 +359,7 @@ class Store:
         async with self._lock:
             if str(group) not in self._data["groups"]:
                 self._data["groups"].append(str(group))
-        await self.save()
+                self._flush_changed()
 
     async def groups(self) -> List[str]:
         async with self._lock:

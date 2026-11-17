@@ -29,6 +29,18 @@ DATA_PATH = os.environ.get(
     str(Path(__file__).resolve().parent / "data" / "xiuxian.json"),
 )
 
+# ---------------------------------------------------------------------------
+# 玩家存档库（SQLite，2026-11-17 从 xiuxian.json 迁来；与斗破同款改造）
+#
+# 旧 JSON 版每次 set_world / put_sect / put_player 都重写**全服**存档；
+# 且锁只在进程内有效、落盘无 fsync。换库后一人一行、事务原子、跨进程安全。
+# 路径跟着 DATA_PATH 走：改 XIUXIAN_DATA_PATH 就一起改。
+# ---------------------------------------------------------------------------
+DB_PATH = os.environ.get(
+    "XIUXIAN_DB_PATH",
+    str(Path(DATA_PATH).with_suffix(".sqlite")),
+)
+
 
 # ---------------------------------------------------------------------------
 # 主人识别（用于「开启秘境」等管理口令）

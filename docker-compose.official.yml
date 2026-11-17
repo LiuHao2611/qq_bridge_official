@@ -59,6 +59,11 @@ services:
       # 重建即回滚。此处显式改到卷内；配合 .dockerignore 排除，双保险。
       DOUPO_DATA_PATH: "/app/data/doupo/doupo.json"
       XIUXIAN_DATA_PATH: "/app/data/xiuxian/xiuxian.json"
+      # 玩家存档库（2026-11-17 从上面两个 JSON 迁到 SQLite）。默认按 DATA_PATH
+      # 同目录同名推导（doupo.json → doupo.sqlite），这里显式写出便于运维排查；
+      # 旧 JSON 保留为回滚备份，代码只在「库为空」时导一次。
+      DOUPO_DB_PATH: "/app/data/doupo/doupo.sqlite"
+      XIUXIAN_DB_PATH: "/app/data/xiuxian/xiuxian.sqlite"
       # warframe 头像缓存 + cf_cookies.json 默认落 game_tools/.wm_cache（镜像层）。
       # 虽是可再生缓存，但同样会被重建清空且污染镜像，一并放进卷。
       QQ_BRIDGE_CACHE_DIR: "/app/data/wm_cache"
