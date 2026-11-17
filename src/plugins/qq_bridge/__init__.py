@@ -85,7 +85,7 @@ from .session import session_store, choice_sessions
 from .taskmgr import task_mgr
 # 任务中心（2026-09-08）：QQ 侧持久有界队列，主项目后端零改动
 from .queue import queue_mgr
-from .planstore import plan_mgr
+from .planstore import PlanStoreError, plan_mgr
 from .monitor import monitor_mgr
 # 监听主项目生图任务（2026-09-13）：从推理监控页 /tasks 获取，QQ 直接看后台在画啥
 from .monitor import infer_listener
@@ -995,7 +995,13 @@ def _register_queue_routes() -> None:
                                 content={"ok": False, "error": "JSON 解析失败：%s" % str(e)[:200]})
         if not isinstance(items, list):
             return JSONResponse(status_code=400, content={"ok": False, "error": "计划必须是 JSON 数组"})
-        return plan_mgr.save(name, channel, json_text)
+        try:
+            return plan_mgr.save(name, channel, json_text)
+        except PlanStoreError as e:
+            # 落盘失败必须如实告诉面板：绝不再出现「提示保存成功、重启就没了」
+            log.error(jlog("plan_save_failed", error=str(e)))
+            return JSONResponse(status_code=500,
+                                content={"ok": False, "error": "计划保存失败：%s" % e})
 
     app.add_api_route("/api/qq/plans", _plan_save, methods=["POST"])
 
@@ -1010,8 +1016,13 @@ def _register_queue_routes() -> None:
 
     async def _plan_delete(req: Request):
         pid = req.path_params.get("plan_id") or ""
-        if plan_mgr.delete(pid):
-            return {"ok": True}
+        try:
+            if plan_mgr.delete(pid):
+                return {"ok": True}
+        except PlanStoreError as e:
+            log.error(jlog("plan_delete_failed", plan_id=pid, error=str(e)))
+            return JSONResponse(status_code=500,
+                                content={"ok": False, "error": "删除失败（未落盘）：%s" % e})
         return JSONResponse(status_code=404, content={"ok": False, "error": "计划不存在"})
 
     app.add_api_route("/api/qq/plans/{plan_id}", _plan_delete, methods=["DELETE"])
@@ -1044,8 +1055,13 @@ def _register_queue_routes() -> None:
         at = _parse_ts(b.get("schedule_at"))
         # template_id 仅在请求显式给出时才下传（含空串）；未给则不动模板
         tid = b.get("template_id")
-        res = plan_mgr.set_schedule(pid, at, str(b.get("repeat") or "none"),
-                                    enabled=enabled, template_id=tid)
+        try:
+            res = plan_mgr.set_schedule(pid, at, str(b.get("repeat") or "none"),
+                                        enabled=enabled, template_id=tid)
+        except PlanStoreError as e:
+            log.error(jlog("plan_schedule_failed", plan_id=pid, error=str(e)))
+            return JSONResponse(status_code=500,
+                                content={"ok": False, "error": "定时设置失败（未落盘）：%s" % e})
         if not res.get("ok"):
             code = 404 if "不存在" in str(res.get("error")) else 400
             return JSONResponse(status_code=code, content=res)

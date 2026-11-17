@@ -50,6 +50,7 @@ import ast
 import asyncio
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -297,6 +298,19 @@ class _FakeMaterialBot:
             % (req.method, req.url))
 
 
+def _isolated_store(max_items: int | None = None):
+    """临时目录里的素材缓存，**绝不碰真实** ``data/media_assets.json``。
+
+    put 会整表 ``_save``：若测试落到真实路径，一次 LRU 用例就能把生产环境的
+    素材缓存抹掉（image_id 全丢 → 老图全部重传 → 打满腾讯 100 张配额）。
+    """
+    d = tempfile.mkdtemp(prefix="ma_merge_")
+    kw = {"path": Path(d) / "media_assets.json"}
+    if max_items is not None:
+        kw["max_items"] = max_items
+    return ma.MaterialStore(**kw)
+
+
 def _wire_fake(bot, *, meta=(6, 4, "image/png"), put_status=200, put_raises=None):
     """用上下文管理替换 _new_request / image_meta / _http_put，退出即恢复，零残留。
 
@@ -304,8 +318,9 @@ def _wire_fake(bot, *, meta=(6, 4, "image/png"), put_status=200, put_raises=None
     * ``_http_put`` 是 2026-11-11 Content-Type 修复后的干净 PUT 出口，测试
       直接替换它记录 ``content_type``，不碰真实网络、不污染 sys.modules；
     * ``put_status`` / ``put_raises`` 注入错误响应，验证上层降级。
+    * 素材缓存换成临时目录实例：测试绝不许写进真实 ``data/media_assets.json``。
     """
-    original = (ma._new_request, ma.image_meta, ma._http_put)
+    original = (ma._new_request, ma.image_meta, ma._http_put, ma._store)
 
     async def fake_http_put(url, data, content_type):
         bot.order.append("put")
@@ -319,12 +334,11 @@ def _wire_fake(bot, *, meta=(6, 4, "image/png"), put_status=200, put_raises=None
             ma._new_request = lambda method, url, **kw: _FakeRequest(method, url, **kw)
             ma.image_meta = lambda data: meta
             ma._http_put = fake_http_put
-            ma.reset_store()
+            ma._store = _isolated_store()
             return bot
 
         def __exit__(self, *_):
-            (ma._new_request, ma.image_meta, ma._http_put) = original
-            ma.reset_store()
+            (ma._new_request, ma.image_meta, ma._http_put, ma._store) = original
 
     return _Wire()
 
@@ -357,7 +371,7 @@ def test_lru_eviction_uses_delete_method():
     """LRU 超容量淘汰必须发 DELETE /.../delete（误用 POST 会 404/405 释放不掉配额）。"""
     bot = _FakeMaterialBot()
     with _wire_fake(bot):
-        ma._store = ma.MaterialStore(max_items=1)
+        ma._store = _isolated_store(max_items=1)
         try:
             asyncio.run(ma.ensure_material(bot, b"png-alpha-unique"))
             asyncio.run(ma.ensure_material(bot, b"png-beta-unique"))
@@ -367,7 +381,7 @@ def test_lru_eviction_uses_delete_method():
             assert "/media-images/" in url and url.endswith("/delete"), \
                 "LRU 淘汰 URL 错：%s" % url
         finally:
-            ma._store = ma.MaterialStore()
+            ma._store = _isolated_store()
 
 
 def test_injection_material_failure_propagates():

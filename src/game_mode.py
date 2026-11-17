@@ -15,9 +15,28 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Dict, List, Optional
 
-DATA_PATH = os.environ.get("GAME_MODE_PATH", os.path.join("data", "game_mode.json"))
+#: 仓库根（src/ 的上一级）。容器内即 /app，所以下面拼出的 data/ 就是挂载卷。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _log_error(msg: str) -> None:
+    """写 ERROR：线上走 nonebot.log，裸跑单测退回 stdlib。"""
+    try:
+        from nonebot.log import logger as _lg
+    except Exception:  # noqa: BLE001
+        import logging
+
+        _lg = logging.getLogger("game_mode")
+    _lg.error(msg)
+
+
+#: 2026-11-17：原来默认是相对路径 "data/game_mode.json"（依赖进程 CWD）。
+#: CWD 一变就写到别处、且**静默**；改为基于仓库根的绝对路径，
+#: 容器内固定 /app/data/game_mode.json（bind-mount 卷），单测用 GAME_MODE_PATH 覆盖。
+DATA_PATH = os.environ.get("GAME_MODE_PATH", os.path.join(_ROOT, "data", "game_mode.json"))
 
 GAME_LABELS = {"xiuxian": "修仙", "doupo": "斗破"}
 
@@ -39,8 +58,15 @@ async def _ensure_loaded() -> None:
                 _modes = json.load(f)
         except FileNotFoundError:
             _modes = {}
-        except Exception:
-            # 损坏文件不致命：内存空库，下次保存覆盖
+        except Exception as e:  # noqa: BLE001
+            # 坏档不许被空库覆盖（用户最高声明：数据不许丢）：先备份再继续。
+            bak = DATA_PATH + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
+            try:
+                os.replace(DATA_PATH, bak)
+            except Exception as e2:  # noqa: BLE001
+                _log_error("游戏模式文件损坏且备份失败 %s：%r / %r" % (DATA_PATH, e, e2))
+                raise
+            _log_error("游戏模式文件损坏，已备份为 %s（%r）" % (bak, e))
             _modes = {}
         _loaded = True
 

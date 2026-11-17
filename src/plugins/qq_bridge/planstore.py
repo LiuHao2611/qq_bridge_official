@@ -22,6 +22,21 @@ from .queue import DATA_DIR  # 复用 data 目录约定
 
 PLANS_PATH = DATA_DIR / "plans.json"
 
+
+def _log_error(msg: str) -> None:
+    """写 ERROR：线上走 nonebot.log，裸跑单测退回 stdlib。"""
+    try:
+        from nonebot.log import logger as _lg
+    except Exception:  # noqa: BLE001
+        import logging
+
+        _lg = logging.getLogger("qq_bridge.planstore")
+    _lg.error(msg)
+
+
+class PlanStoreError(RuntimeError):
+    """计划落盘失败。**必须**向上抛：不能再出现「提示保存成功、重启就没了」。"""
+
 # 定时字段默认值（老计划升级时补齐，保证前端读到的结构永远完整）
 _SCHEDULE_DEFAULTS = {
     "schedule_enabled": False,
@@ -56,19 +71,37 @@ class PlanStore:
                 data = []
             # 过滤非 dict 项（坏文件不能让弹窗/调度器炸）
             self._plans = [self._norm(p) for p in data if isinstance(p, dict)]
-        except Exception:
-            # 损坏/不存在 → 空列表（不能让坏文件拖垮启动）
+        except Exception as e:  # noqa: BLE001
+            # 坏文件不能拖垮启动，但**绝不能静默**：先备份，再以空列表启动。
+            # （2026-11-17 用户最高声明：用户数据不许"看着没事其实没了"。）
+            bak = str(self.path) + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
+            try:
+                self.path.replace(bak)
+            except Exception:  # noqa: BLE001
+                _log_error("计划文件损坏且备份失败 %s：%r" % (self.path, e))
+            else:
+                _log_error("计划文件损坏，已备份为 %s（%r）" % (bak, e))
             self._plans = []
 
-    def _save(self) -> None:
+    def _save(self, strict: bool = True) -> bool:
+        """原子落盘。
+
+        :param strict: True=用户显式操作（新建/删除/设定时），失败抛 PlanStoreError，
+                       让接口如实返回「没保存成功」；False=运行时记账（mark_run /
+                       claim_due），失败打 ERROR 并返回 False，不拖垮调度器，
+                       但**绝不静默**。
+        """
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(self._plans, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.path)
-        except Exception:
-            # 落盘失败只记日志，不拖垮接口（CLOSE-02）
-            pass
+            return True
+        except Exception as e:  # noqa: BLE001
+            _log_error("计划落盘失败 %s：%r" % (self.path, e))
+            if strict:
+                raise PlanStoreError("计划落盘失败（%s）" % type(e).__name__) from e
+            return False
 
     # ---------------- 增删查 ----------------
     def save(self, name: str, channel: str, json_text: str) -> dict:
@@ -84,7 +117,11 @@ class PlanStore:
         }
         plan.update(dict(_SCHEDULE_DEFAULTS))
         self._plans.append(plan)
-        self._save()
+        try:
+            self._save()
+        except PlanStoreError:
+            self._plans.remove(plan)      # 回滚：内存与磁盘保持一致
+            raise
         return {"ok": True, "plan_id": pid, "plan": plan}
 
     def list(self) -> list:
@@ -94,10 +131,14 @@ class PlanStore:
         return next((p for p in self._plans if p.get("plan_id") == plan_id), None)
 
     def delete(self, plan_id: str) -> bool:
-        before = len(self._plans)
+        old = list(self._plans)
         self._plans = [p for p in self._plans if p.get("plan_id") != plan_id]
-        if len(self._plans) != before:
-            self._save()
+        if len(self._plans) != len(old):
+            try:
+                self._save()
+            except PlanStoreError:
+                self._plans = old        # 回滚：删了但没写盘＝重启又回来
+                raise
             return True
         return False
 
@@ -106,7 +147,7 @@ class PlanStore:
         if p:
             p["last_run_batch"] = batch_id
             p["last_run_at"] = time.time()
-            self._save()
+            self._save(strict=False)
 
     def _apply_template(self, p: dict, template_id: str) -> None:
         """把模板写入/清除计划 json_text 的每一项（生图/放大计划共用「模板」键）。
@@ -142,6 +183,7 @@ class PlanStore:
         p = self.get(plan_id)
         if not p:
             return {"ok": False, "error": "计划不存在"}
+        snap = dict(p)          # 落盘失败要整体回滚，避免「界面改了、重启复原」
         # 模板修改：仅当显式传入（含空串）才动 json_text，None 保持原样
         if template_id is not None:
             self._apply_template(p, template_id)
@@ -152,7 +194,11 @@ class PlanStore:
             p["schedule_enabled"] = False
             p["schedule_at"] = 0
             p["schedule_repeat"] = "none"
-            self._save()
+            try:
+                self._save()
+            except PlanStoreError:
+                p.clear(); p.update(snap)
+                raise
             return {"ok": True, "plan": p, "canceled": True}
         try:
             at = float(schedule_at or 0)
@@ -166,7 +212,11 @@ class PlanStore:
         p["schedule_enabled"] = True
         p["schedule_at"] = at
         p["schedule_repeat"] = rep
-        self._save()
+        try:
+            self._save()
+        except PlanStoreError:
+            p.clear(); p.update(snap)
+            raise
         return {"ok": True, "plan": p}
 
     def due_plans(self, now: float | None = None) -> list:
@@ -204,7 +254,10 @@ class PlanStore:
         else:
             p["schedule_enabled"] = False
         p["schedule_last_fired_at"] = now
-        self._save()
+        # 运行时记账：写盘失败→打 ERROR 并放弃本次抢单（返回 False 就不会下发，
+        # 下一轮再抢），绝不静默当成功。
+        if not self._save(strict=False):
+            return False
         return True
 
     def mark_schedule_result(self, plan_id: str, batch_id: str) -> None:
@@ -212,7 +265,7 @@ class PlanStore:
         p = self.get(plan_id)
         if p:
             p["schedule_last_batch"] = batch_id or ""
-            self._save()
+            self._save(strict=False)
 
 
 # 模块级单例（插件入口直接用 plan_mgr；单测各自 new PlanStore 隔离）
