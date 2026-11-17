@@ -130,16 +130,28 @@ class CodeExplainer:
 
     @staticmethod
     def _score(rel: str, text: str, toks: list[str]) -> int:
+        """相关度打分。
+
+        教训（2026-11-17 真机）：初版正文用 ``min(count,12)`` 累加，长文件
+        （commands.py 几百行）靠篇幅把分数堆到 100，真正讲「电梯」的设计文档
+        反被挤出前三 —— registry 6000 字截断后模型拿不到关键内容。改为：
+          * 文件名命中 = 极强信号（×20）；标题/docstring 命中 = 强（×6）；
+          * 正文命中按「是否出现 + 少量计数」算，封顶防止长文件刷分；
+          * 长 token（4gram / 英文词）比 2gram 更准，权重随词长线性放大。
+        """
         name = rel.rsplit("/", 1)[-1].lower()
-        head = "\n".join(text.splitlines()[:6]).lower()
+        head = "\n".join(text.splitlines()[:8]).lower()
         low = text.lower()
         s = 0
         for t in toks:
+            w = len(t)
             if t in name:
-                s += len(t) * 6
+                s += w * 20
             if t in head:
-                s += len(t) * 3
-            s += min(low.count(t), 12) * len(t)
+                s += w * 6
+            c = low.count(t)
+            if c:
+                s += w * (2 + min(c, 4))   # 正文最多按 6 次计，篇幅不再压倒主题
         return s
 
     @staticmethod
