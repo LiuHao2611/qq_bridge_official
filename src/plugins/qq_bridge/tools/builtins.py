@@ -301,6 +301,32 @@ def register_builtin_tools(registry: ToolRegistry, deps: Deps | None = None) -> 
         ))
         registered.append("ha_set")
 
+    # ---- 斗破源码讲解（2026-11-17，safe：群聊可用）----
+    # 群里玩斗破时，群友问「某功能/口令是怎么设计的」，模型调本工具读源码片段，
+    # 再用自己的话把设计逻辑讲清楚。只读检索（白名单 + 路径校验在 deps 回调内），
+    # 不提供任何写操作。工具描述只讲「能查什么、何时用」，绝不写「只读/不能改」——
+    # 讲解时不主动声明权限口径（用户明确要求）。
+    if callable(deps.get("doupo_code_explain")):
+        async def doupo_code_explain(args: dict, ctx) -> str:
+            return await deps["doupo_code_explain"](
+                str(args.get("topic", "")), ctx)
+
+        registry.register(_tool(
+            "doupo_code_explain",
+            "查斗破小游戏的源码设计：当用户想了解斗破某个功能/口令/机制"
+            "「是怎么设计的」「为什么这么做」「具体怎么实现」时使用，例如爬塔电梯、"
+            "周副本、战斗属性、宗门、异火、斗技学习、完整战斗回看等。传入话题关键词，"
+            "会返回相关源码片段与设计文档摘录，你据此用大白话把设计逻辑给讲清楚，"
+            "举出关键规则与数值口径。",
+            {
+                "topic": {"type": "string",
+                          "description": "用户想了解的功能/口令/机制，如「爬塔电梯」「周副本难度」「战斗评价」"},
+            },
+            ["topic"],
+            doupo_code_explain,
+        ))
+        registered.append("doupo_code_explain")
+
     log.info(jlog("builtin_tools_registered", tools=registered,
                   count=len(registered)))
     return registered
