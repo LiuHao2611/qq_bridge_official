@@ -22,6 +22,7 @@ import logging
 import sys
 from pathlib import Path
 
+from . import battle_review as br
 from . import config as cfg
 from . import core
 from . import commands
@@ -612,6 +613,7 @@ async def render_rank(top: list) -> bytes | None:
 # ---------------------------------------------------------------------------
 CARD_RECIPES_NAME = "斗破炼药"
 CARD_HELP_NAME = "斗破玩法"
+CARD_BATTLE_NAME = "斗破战斗回看"
 
 
 def build_recipes_data(p: dict, page: int = 1) -> dict:
@@ -691,3 +693,14 @@ def build_help_data() -> dict:
 async def render_help() -> bytes | None:
     """「帮助/玩法/攻略/规则」出图：10 分组玩法细则卡。"""
     return await _render_list("doupo_help", build_help_data(), CARD_HELP_NAME)
+
+
+def build_battle_data(last_battle: dict) -> dict:
+    """最后一场战斗 → doupo_battle 模板参数（与纯文本兜底同源）。"""
+    return br.build_data(last_battle or {})
+
+
+async def render_battle(last_battle: dict) -> bytes | None:
+    """「战斗回看」出图：完整逐招过程卡，按钮「战斗评价」由 card_key 派生。"""
+    return await _render_list("doupo_battle", build_battle_data(last_battle),
+                              CARD_BATTLE_NAME)

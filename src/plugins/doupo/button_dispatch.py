@@ -42,6 +42,7 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "修炼": ("cmd_cultivate", "qq", ""),
     "突破": ("cmd_break", "qq", ""),
     "战斗": ("cmd_fight", "qq", ""),
+    "战斗评价": ("cmd_battle_comment", "qq", ""),
     "爬塔": ("cmd_tower", "qq_str", ""),
     "塔层": ("cmd_tower_status", "qq", ""),
     "装备": ("cmd_equip", "qq_str", ""),

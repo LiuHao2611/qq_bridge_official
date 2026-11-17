@@ -444,6 +444,12 @@ CASES = [
          must=["周副本", "第 1/7 层"], ban=["用法", "尚未入道"]),
     dict(id="42_weekly_status", text="周本状态", img=None,
          must=["周副本", "本周状态"], ban=["用法", "尚未入道"]),
+    # 43/44：2026-11-17 完整战斗回看 + 战斗评价。前面的 07/24/33/35/41 已产生
+    # last_battle，43 必须出「战斗回看卡」（img=png），44 必须出毒舌文本。
+    dict(id="43_battle_review", text="战斗回看", img="png",
+         must=[], ban=["还没有可回看", "尚未踏入", "用法"]),
+    dict(id="44_battle_comment", text="战斗评价", img=None,
+         must=["战斗评价"], ban=["还没有可评价", "尚未踏入", "用法"]),
 ]
 
 

@@ -265,6 +265,50 @@ async def _(event: Event):
     await brk.finish(await commands.cmd_break(store, str(event.user_id)))
 
 
+# 完整战斗回看 / 战斗评价（2026-11-17）
+# 必须先于「战斗」命中：短口令「战斗」若在 PRI 相同情况下先注册，会把「战斗回看」
+# 当成普通开打，用户就永远看不到完整战报。这里用 PRI-1 明示抢先，与「斗技详情」同口径。
+battle_review_cmd = on_regex(
+    _pat(r"(?:战斗回看|回看战斗|完整战斗|战斗详情)"),
+    priority=PRI - 1, block=True, rule=_mode_is("doupo"),
+)
+
+
+@battle_review_cmd.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, battle_review_cmd)
+    uid = str(event.user_id)
+    msg = await commands.cmd_battle_review(store, uid)
+    p = await store.get_player(uid)
+    last = p.get("last_battle") if p else None
+    png = None
+    if isinstance(last, dict) and last.get("log"):
+        try:
+            png = await card.render_battle(last)
+        except Exception as e:  # noqa: BLE001 — 出图异常必须有文本兜底，不许静默
+            logger.warning("战斗回看卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+    if png:
+        # card_key="battle" → 官方通道同条消息挂「战斗评价」按钮，绝不分离发送。
+        await finish_card(battle_review_cmd, event, png, "battle", "doupo_battle.png")
+        return
+    await finish_text(battle_review_cmd, event, msg)
+
+
+battle_comment_cmd = on_regex(_pat(r"战斗评价"), priority=PRI - 1, block=True,
+                              rule=_mode_is("doupo"))
+
+
+@battle_comment_cmd.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, battle_comment_cmd)
+    await finish_text(
+        battle_comment_cmd, event,
+        await commands.cmd_battle_comment(store, str(event.user_id)),
+    )
+
+
 fight = on_regex(_pat(r"(?:战斗|打怪|历练|出战)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
@@ -841,6 +885,11 @@ register_keywords("doupo", [
     "晋升",
     "升星",
     "战斗",
+    "战斗回看",
+    "回看战斗",
+    "完整战斗",
+    "战斗详情",
+    "战斗评价",
     "打怪",
     "历练",
     "出战",

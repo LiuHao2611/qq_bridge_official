@@ -32,7 +32,7 @@ from . import theme as _theme_pkg  # noqa: F401
 from . import card_binds  # 卡片主题内置默认绑定（配置优先，随代码交付）
 from .cache import PicCache, make_key, pic_cache
 from .canvas import Canvas
-from .templates import (menu as _menu, progress as _progress, quota as _quota, text as _text, guide as _guide, hw as _hw, riven as _riven, riven_analysis as _riven_analysis, riven_recommend as _riven_recommend, netracell as _netracell, fissure as _fissure, bounty as _bounty, tenet as _tenet, coda as _coda, incarnon as _incarnon, arbitration_table as _arbitration_table, xiuxian as _xiuxian, xiuxian_menu as _xiuxian_menu, xiuxian_help as _xiuxian_help, doupo as _doupo, doupo_menu as _doupo_menu, doupo_list as _doupo_list, doupo_skills as _doupo_skills, doupo_faction as _doupo_faction, doupo_roster as _doupo_roster, doupo_recipes as _doupo_recipes, doupo_help as _doupo_help, aimenu as _aimenu, checkin as _checkin, plain as _plain, alerts as _alerts, task_alert as _task_alert, archon as _archon, riven_trend as _riven_trend, riven_fusion as _riven_fusion, riven_full as _riven_full)  # noqa: F401
+from .templates import (menu as _menu, progress as _progress, quota as _quota, text as _text, guide as _guide, hw as _hw, riven as _riven, riven_analysis as _riven_analysis, riven_recommend as _riven_recommend, netracell as _netracell, fissure as _fissure, bounty as _bounty, tenet as _tenet, coda as _coda, incarnon as _incarnon, arbitration_table as _arbitration_table, xiuxian as _xiuxian, xiuxian_menu as _xiuxian_menu, xiuxian_help as _xiuxian_help, doupo as _doupo, doupo_menu as _doupo_menu, doupo_list as _doupo_list, doupo_skills as _doupo_skills, doupo_faction as _doupo_faction, doupo_roster as _doupo_roster, doupo_recipes as _doupo_recipes, doupo_help as _doupo_help, doupo_battle as _doupo_battle, aimenu as _aimenu, checkin as _checkin, plain as _plain, alerts as _alerts, task_alert as _task_alert, archon as _archon, riven_trend as _riven_trend, riven_fusion as _riven_fusion, riven_full as _riven_full)  # noqa: F401
 from .theme import AUTO, LIGHT, NEON, Theme, resolve as resolve_theme
 
 __all__ = [
@@ -88,6 +88,7 @@ _TEMPLATES = {
     "doupo_roster": _doupo_roster.build,  # 斗破本宗斗技名录卡（按阶位分组 / 卡片块 / 效果 chip）
     "doupo_recipes": _doupo_recipes.build,  # 斗破炼药丹方卡（按品阶分组 / 材料齐备标记 / 功效）
     "doupo_help": _doupo_help.build,  # 斗破玩法细则卡（10 分组要点折行，与纯文本同源）
+    "doupo_battle": _doupo_battle.build,  # 斗破完整战斗回看卡（逐招 + 资源轨迹 + 词条）
     "aimenu": _aimenu.build,  # 指令总览双列加长图（覆盖全部命令族，一张图）
     "checkin": _checkin.build,  # 每日签到卡（连续/累计/喵币 + 里程碑进度 + 本月日历）
     "plain": _plain.build,  # 平原状态和时间卡（Rabbit 版式：白卡+四组状态/倒计时胶囊）
@@ -128,6 +129,7 @@ TEMPLATE_LABELS: dict[str, str] = {
     "doupo_roster": "斗破斗技名录卡",
     "doupo_recipes": "斗破炼药卡",
     "doupo_help": "斗破玩法细则卡",
+    "doupo_battle": "斗破战斗回看卡",
     "aimenu": "指令总览卡",
     "checkin": "签到卡",
     "plain": "平原状态卡",

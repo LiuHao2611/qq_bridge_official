@@ -136,16 +136,17 @@ def test_baseline_sane():
     同日新增无惩罚切磋（切磋/应战/拒战），基准 30→33。
     2026-11-17 新增爬塔副本（爬塔/塔层/塔结算）与装备，基准 33→37。
     2026-11-17 新增电梯 / 周副本 / 周本状态，基准 37→40。
+    2026-11-17 新增战斗回看 / 战斗评价，基准 40→42。
     数量断言跟随 MENU_GROUPS 独立 AST，避免功能新增后基准漏同步导致假红。
     """
     real = _baseline_real_commands()
-    assert len(real) == 40, "MENU_GROUPS 基准应为 40 条 canonical 口令，实际 %d" % len(real)
+    assert len(real) == 42, "MENU_GROUPS 基准应为 42 条 canonical 口令，实际 %d" % len(real)
     for must in ("斗破菜单", "入道", "人物", "修炼", "突破", "战斗", "强化",
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "养火", "宝库", "买", "炼药", "炼制", "服丹",
                  "背包", "任务", "接任务", "交任务", "领主线", "排行", "抢",
                  "切磋", "应战", "拒战", "爬塔", "塔层", "塔结算", "装备", "送",
-                 "电梯", "周副本", "周本状态"):
+                 "电梯", "周副本", "周本状态", "战斗回看", "战斗评价"):
         assert must in real, "基准缺关键口令：%s" % must
     # 实现派生必须与独立基准逐字一致（漏一条都 FAIL）
     assert tuple(db.real_commands()) == tuple(real), \
@@ -201,6 +202,7 @@ def test_each_card_buttons_are_relevant_family():
         "rank": {"战斗", "修炼", "爬塔", "塔层"},
         "recipes": {"服丹", "养火", "宝库"},
         "help": {"人物", "炼药", "斗技"},
+        "battle": {"战斗评价"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (

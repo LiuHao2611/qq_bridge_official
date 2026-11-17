@@ -108,7 +108,7 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
   `core.duel()` 是现成双人模拟器底座，别重写战斗内核。
   * 会话模块 `duel_challenge.py` 按 `(group,target)` 隔离、惰性超时；
     **matcher 变量名绝不能叫 `duel_challenge`**，会遮住同名子模块（已改 `duel_ask_cmd`）。
-  * 菜单 / matcher 数严格相等（33 条），新增口令必须同时改 `MENU_GROUPS`、
+  * 菜单 / matcher 数严格相等（现 42 条），新增口令必须同时改 `MENU_GROUPS`、
     `tests/test_doupo_buttons.py` 基准、`test_menu_full.CASES`、`test_commands` 菜单数。
 
 * **GitHub 全量 tree 推送会 422**：644 条一次 POST 偶发 "input too large"。
@@ -125,9 +125,25 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
   ISO 周 key（如 `2026-W47`）做时间锚。奖励先入会话 `staged`（武器只记名），
   通关第 7 层才 `weekly_commit` 一次性入账；失败/超时整段丢弃，绝不调 commit。
   ⚠ 失败含武器全清是用户硬要求，`cmd_weekly` 失败分支不许出现 `weekly_commit`。
-* 菜单 40 条（含电梯/周副本/周本状态），matcher 数必须 == 菜单数（e2e 等量守门）。
+* 菜单 42 条（含电梯/周副本/周本状态 + 战斗回看/战斗评价），matcher 数必须 == 菜单数（e2e 等量守门）。
   `周本状态` 用 PRI-1 抢在短口令 `周本` 之前命中。
 * 原著**没有七层塔**，只有天焚炼气塔/试炼之塔九层；7 层是游戏化设计，文案别写"原著七层塔"。
+
+## 完整战斗回看/战斗评价口径（2026-11-17 确立）
+* 普通战斗回包继续只给 `_battle_highlights(limit=1)`，中间细节不膨胀；完整过程只在
+  用户主动「战斗回看」时出卡。最后一场战斗统一落 `p["last_battle"]`（SQLite data JSON），
+  唯一写入函数 `core.record_last_battle()`；五个入口：遭遇/掠夺/切磋/爬塔/周副本。
+  切磋双方各留一份；爬塔/周本传**真实玩家 p**，不传战斗深副本。
+* `fight()`/`duel()` 的 log 增补 `move/round/hp_before/hp_after/mp_before/mp_after/
+  mp_cost/foe_hp_before/foe_hp_after`；特殊条目字段仍不齐，渲染一律 `.get`。
+* 数据源分层：`battle_review.py` 只把 log 变行/文本兜底/标签，不重算数值；
+  `battle_comments.py` 40 条毒舌评语（24 短 + 16 长），原创改写并带 source，
+  只嘲讽战斗表现、不攻击玩家；同场用 openid+ts+log_len 做种子保证稳定。
+* 卡片 `doupo_battle` 复用 help 单列版式（sword 图标 + boxes 自检），
+  `card_key="battle"` → `CARD_ACTIONS["battle"]=("战斗评价",)`；
+  官方通道图片+按钮同条发送，素材上传失败仍 image_only，绝不分离按钮。
+* 守门：`tests/test_battle_review.py`（35 条）+ `tmp/prove_battle_review.py` 四条反例；
+  新增口令后菜单/matcher 42 条，typography 新卡必须实图查看后再交付。
 
 ## 紫卡洗卡推荐卡口径（2026-11-16 确立，别重造）
 * **数据源唯一链**：WFCD `data/warframe_items/*.json`（面板，含 puncture/slash 互换 bug，
