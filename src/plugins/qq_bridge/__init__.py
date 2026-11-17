@@ -2997,8 +2997,8 @@ async def _handle_ai_chat(ev, trace_id: str) -> None:
         # 当前时间注入（模型把「N 分钟后」算成 fire_at 绝对时间戳用）
         extra_system = ((extra_system + "\n" + _tools_time_hint())
                         if extra_system else _tools_time_hint())
-        # 斗破源码讲解引导（2026-11-17）：仅当工具真的注册了才注入，避免空指引
-        if _fc_runner.registry.get("doupo_code_explain") is not None:
+        # 斗破源码问答引导（2026-11-17）：仅当工具真的注册了才注入，避免空指引
+        if _fc_runner.registry.get("doupo_code_ask") is not None:
             extra_system = extra_system + "\n" + _doupo_code_hint()
         from .tools import ToolContext as _ToolCtx
         _tctx = _ToolCtx(scope=scope, user_id=ev.user_id, group_id=ev.group_id,
@@ -4320,36 +4320,32 @@ def _tools_time_hint() -> str:
 
 
 def _doupo_code_hint() -> str:
-    """斗破源码讲解引导（2026-11-17 重构后）：群里聊斗破功能设计时的行为规范。
+    """斗破源码问答引导（2026-11-17 换成沙盒 agent 后）：群里聊斗破设计时的行为规范。
 
     只注入 FC 路径（工具已注册），纯对话路径无工具也不受影响。关键口径：
       * 用户问斗破某功能/口令/机制「怎么设计的」「某个数值怎么算的」→ 调
-        doupo_code_explain 读源码，**问到多细就走到多细**（topic → file → symbol）；
-      * 只拿到签名就下结论是**答错的主因**：数值口径、判断分支、随机权重都在函数体里，
-        必须用 symbol 拿到完整实现再讲；
-      * 查证最多 2 次就要作答；回答控制在 600 字以内（AI_MAX_REPLY_LEN=800 会硬截断）；
+        doupo_code_ask，把**用户的原问题**（不是你自己提炼的关键词）交给它；
+      * 它跑在沙盒容器里，自己 grep 源码、自己用 Python 代公式算数，一次 30~90 秒，
+        所以**一个问题只调一次**：拿到答案就用它的结论，别自己再改数字、也别重查；
+      * 它的答案里带了 `文件名:行号` 出处，转述时可以保留关键数字与规则；
+      * 工具失败（服务不可用/超时）就**如实告诉用户**「源码分析服务暂时不可用」，
+        不要退回凭印象回答，更不要编数字；
       * **不要主动声明「我只能读 / 不能改代码 / 只读模式」**——用户明确要求讲解时
         不提这个口径，你只管把设计讲明白。
     """
     return ("（系统注记·斗破源码：群里有人问斗破某个功能/口令/机制「怎么设计的」"
-            "「为什么这么做」「具体怎么实现」「某个数值/概率是怎么算的」时，用 "
-            "doupo_code_explain 查，**三步走，问到多细就走到多细**："
-            "① topic 传用户问的话题（如「宗门系统」「宗门权重怎么算」「斗技怎么学」），"
-            "拿到候选模块清单（模块名 | 职责）；② file 传模块名（如 factions、skills、"
-            "core）拿该模块的**符号概览**：每个函数/类的真实签名 + 行号 + 一句话说明，"
-            "若同时传了 topic 还会自动附上话题命中函数的完整实现；"
-            "③ symbol 传概览里的函数名（或「文件名:行号」）拿**完整代码**。"
-            "**讲数值口径、判断分支、随机权重这类细节时，必须走到第③步看到实现再回答**——"
-            "只看签名就下结论一定会答错，用户问细一点就会露馅。"
-            "topic 里带上你知道的函数名/英文标识符（如 random_faction）命中更准。"
-            "**但查证最多 2 次（一次定模块、一次读实现）就要作答**：file 返回里通常已经"
-            "附带了话题命中函数的完整实现，那时直接讲，不要反复换模块名/换行号重试，"
-            "把工具轮次烧光反而一句都答不出来。数据类常量（各宗门权重、丹药表等）"
-            "也在 symbol 里能直接点名，不用翻整个文件。"
-            "然后用自己的话把设计逻辑讲清楚，带上关键规则和数值口径。"
-            "**回答控制在 600 字以内**（群聊阅读体验，超长会被截断）："
-            "先一句话给结论，再列 2~4 条关键规则，不要整段贴源码。"
-            "回答必须基于工具返回的真实代码，不要凭空编；不要因为模块名是英文就跳过。"
+            "「为什么这么做」「具体怎么实现」「某个数值/概率/倍率是怎么算的」"
+            "「有哪些分支/条件」时，调 doupo_code_ask，**把用户的原问题直接传进去**"
+            "（别自己压成几个关键词，它需要完整语义才能找对文件）。"
+            "它跑在沙盒里，会自己 grep 源码、读实现、再用 Python 代入公式算出具体数字，"
+            "所以**问到多细都能答**；代价是一次 30~90 秒，因此**一个问题只调一次**。"
+            "拿到结果后用自己的话把结论讲清楚："
+            "**讲到能回答用户的疑问为止**——问「多少」就给具体数字和算法，"
+            "问「为什么」就讲清取舍，问「什么情况」就列全分支；"
+            "不要为了简短只回一句话，也不用整段贴源码。"
+            "它给的 `文件名:行号` 出处可以保留，方便用户核对。"
+            "工具报错/超时就如实说「源码分析服务暂时不可用」，"
+            "不要退回凭印象回答、不要编数字。"
             "讲解时正常说设计本身，不要主动声明「只读」「不能改代码」之类的话。）")
 
 
@@ -4428,31 +4424,39 @@ def _register_m2_tools() -> list[str]:
         data = await frp_status.status()
         return frp_status.format_status(data)
 
-    # ---- 斗破源码讲解（2026-11-17：群里玩斗破时让 AI 读源码讲设计逻辑）----
-    # 纯只读检索：白名单/路径校验/截断都在 code_explain 内。同步文件读放到线程，
-    # 不阻塞事件循环（tools.registry.dispatch 已有超时哨兵）。
-    #: 单轮对话里本工具被调了几次（trace_id -> n）。2026-11-17 真机教训：
-    #: 首轮返回里已经含 ``acc += w`` / ``pool_map`` 这些答案，模型仍继续查了 6 轮、
-    #: 把 AI_FC_MAX_ROUNDS 烧光，最后**一句回答都没给**。靠提示词劝不住，
-    #: 得让工具自己在第 3 次之后喊停。
-    _code_explain_calls: dict[str, int] = {}
+    # ---- 斗破源码深度问答（2026-11-17：沙盒 agent 翻源码 + 自己算数）----
+    # 2026-11-17 换人：上一版是自己写的白名单检索（tools/code_explain.py），
+    # 问细一点就露馅——它只能把签名/片段贴给模型，既不能 grep 也不会算数。
+    # 现在活交给独立容器里的 agent（agent/agent_server.py，openai-agents 底座，
+    # 源码只读挂载），它自己决定看哪个文件、自己写 Python 代公式算百分数。
+    #
+    # 这里只做三件事：拼请求、超时、把失败**显式化**（绝不吞成"查不到"）。
+    #: 单轮对话里被调了几次（trace_id -> n）。一次 30~90 秒，连调两次就是三分钟，
+    #: 所以在第 2 次成功调用后就劝停（只在**成功**后计数：失败要允许换问法重试一次）。
+    _agent_calls: dict[str, int] = {}
 
-    async def _doupo_code_explain(topic: str, file: str, symbol: str, tctx) -> str:
-        import asyncio
-        from .tools import code_explain as _ce
-        out = await asyncio.to_thread(_ce.explain, topic, file, symbol)
+    async def _doupo_agent_ask(question: str, tctx) -> str:
+        from .tools import agent_client as _ac
+        base = (getattr(Config, "DOUPO_AGENT_URL", "") or "").rstrip("/")
+        timeout = float(getattr(Config, "DOUPO_AGENT_TIMEOUT", 160.0) or 160.0)
         tid = str(getattr(tctx, "trace_id", "") or "")
-        if not tid:
-            return out
-        n = _code_explain_calls.get(tid, 0) + 1
-        if len(_code_explain_calls) > 512:       # 防泄漏：跨轮累积只保留近 512 个
-            _code_explain_calls.clear()
-        _code_explain_calls[tid] = n
-        if n >= 3:
-            return ("（提醒：你本轮已经查了 %d 次源码，材料够了就**立刻直接回答**，"
-                    "不要再调用任何工具。需要数值就引用已拿到的代码里的数字，"
-                    "不要为了更全面反复检索。）\n\n%s" % (n, out))
-        return out
+        if tid and _agent_calls.get(tid, 0) >= 1:
+            return ("（提醒：你本轮已经查过一次源码了，答案就在上一轮工具结果里，"
+                    "**直接用它的结论回答用户**，不要重复查、也不要自己改数字。）")
+        t0 = time.perf_counter()
+        data = await _ac.ask(base, question, timeout=timeout)
+        ans = data["answer"]
+        if tid:
+            if len(_agent_calls) > 512:          # 防泄漏：跨轮累积只保留近 512 个
+                _agent_calls.clear()
+            _agent_calls[tid] = _agent_calls.get(tid, 0) + 1
+        log.info(jlog("doupo_agent_answered", scope=getattr(tctx, "scope", ""),
+                      tool_calls=data.get("tool_calls"),
+                      agent_elapsed=data.get("elapsed"),
+                      answer_len=len(ans),
+                      elapsed_ms=int((time.perf_counter() - t0) * 1000),
+                      trace_id=tid))
+        return ans
 
     # ---- M8 智能家居 FC 工具回调（2026-10-21：AI 对话自然语言控设备闭环）----
     # 口径同 /ha 命令族：白名单由 HAClient._check 双保险；高敏设备（门锁/摄像头）
@@ -4506,7 +4510,7 @@ def _register_m2_tools() -> list[str]:
         "download_cancel": _download_cancel,
         "ops_git_status": _ops_git_status,
         "ops_frp_status": _ops_frp_status,
-        "doupo_code_explain": _doupo_code_explain,
+        "doupo_agent_ask": _doupo_agent_ask,
         "ha_control": _ha_control,
         "ha_scene": _ha_scene,
         "ha_state": _ha_state,

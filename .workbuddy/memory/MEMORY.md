@@ -1,5 +1,67 @@
 # qq_bridge_official 项目长期笔记
 
+## 斗破源码问答 = 沙盒 agent 容器（2026-11-18 定稿，取代片段检索）
+
+用户原话：**「你直接搬一个完整的agent项目吧，运行在沙盒里，docker应该可以满足，
+这样无论我怎么问他都能找到我想要的东西，而且不会影响我的电脑文件风险」**
+
+* 链路：主 bot 工具 `doupo_code_ask(question)` → `POST http://qq-doupo-agent:8765/ask`
+  → 沙盒容器里的 openai-agents agent（自己 grep/读文件/写 Python 算数）→ 带
+  `文件名:行号` 的中文答案。**整句传用户原话，别压成关键词。**
+* **工具表里只有一个源码工具**。旧的 `doupo_code_explain` 已下线（模块+24 条测试保留），
+  并存会让模型在「快但浅 / 慢但深」之间横跳，最后又退化成只给签名。
+  `tests/test_doupo_code_explain.py::test_module_is_off_the_chat_path` 守这条。
+* **底座必须是 openai-agents，不能是 smolagents**（实测证据见下方铁律）。
+* 沙盒 17 条边界证明：`docker exec -i qq-doupo-agent python - < tests/evidence/prove_agent_sandbox.py`
+  （只读挂载 / read_only 根 / uid 10001 / 无 .env / 无 docker.sock / 命令黑名单）。
+  注意 `docker cp` 进 `read_only` 容器会失败（rootfs is marked read-only），只走 stdin。
+* 详解文档：`docs/斗破源码问答沙盒_2026-11-17.md`（含 7 条真机踩坑）。
+* 已知限制：**单次 40~90 秒**（深度换来的）；额度按模型独立计，容易一烧就光。
+
+## 🚨 铁律：agent 底座不许换回 smolagents（2026-11-18 实证）
+
+`smolagents 1.26` 的 `get_clean_message_list()` **只拷 role/content、
+`assistant.tool_calls` 整个字段丢掉**，而 `tool_role_conversions` 把
+`TOOL_RESPONSE → USER`。于是每轮历史都被压回「文本 ReAct」，模型看不到自己上一轮的
+结构化调用，第二轮就退回纯文本吐 `Calling tools: [...]` → 解析失败 → 跑满步数。
+真机 dump：`tool_calls=0` 恒成立、`msgs` 角色在 assistant→user 之间交替。
+症状是「短问题能答、多轮必崩」，**别误诊成模型不支持 FC**——同端点直测原生
+tool_calls 是通的。换 `openai-agents`（官方 SDK）后同题一次通过。
+
+### agent 侧四条硬约束（都有真机事故背书）
+1. **`read_only: true` 时 docker 不会自动建挂载目标目录** → 挂载静默不生效、`/repo` 空壳、
+   agent 回「源码仓库不存在」。必须在 Dockerfile 里 `mkdir -p` 那 4 个目录。
+2. **一个进程一个事件循环**（常驻线程 + `run_coroutine_threadsafe`）。每请求
+   `asyncio.run()` 会让第 2 个请求炸 `Event loop is closed`（AsyncOpenAI 连接池绑循环）。
+3. **`max_turns` 撞顶 = 答案全丢**（SDK 抛 `MaxTurnsExceeded`，没有部分结果）。
+   所以要有 `AGENT_MAX_TOOLS=10` 的机械刹车逼它作答，不是靠调大 max_turns。
+   提示词写「控制在 6 次」模型照样查到 11~14 次（最长 141s）。
+4. **失败必须显式**：`openai` 客户端默认对 429 静默重试退避 → 上层看到"挂死 300 秒"。
+   必须 `max_retries=0`；`/ask` 失败返回 500 + 原因，绝不返回空答案。
+
+## AI 源码检索模块（tools/code_explain.py，已下线但保留）
+
+用户硬要求：群里问斗破某功能设计，AI 要**能讲到实现细节**；且**不许"想一个模块改一次"**
+（否决过中文别名表）。该模块现**不在聊天链路上**（2026-11-18 换成沙盒 agent），
+保留作离线/排障工具与回归基线。改它之前先读这里：
+
+* 工具面照搬 aider/grep-ast、repomix `--compress`、三家 code-index MCP 的收敛口径：
+  **① outline（真实签名+行号+说明）→ ② body（完整函数体）→ ③ where（`文件:行号`→
+  最内层符号+外层链）**。单工具三参数 `topic / file / symbol`。
+* **解析后端是标准库 `ast`，不是 tree-sitter**：容器离线 wheel 构建，装不动
+  tree-sitter-language-pack；白名单全 Python，`ast` 同构。零新增依赖是硬约束。
+* **两件必须记住的事**（真机踩出来的）：
+  1. **模块级数据常量必须进索引**。`FACTIONS` 1209 行、`POOL_UNLOCK`、`tower_data` 32 常量、
+     `config` 90 常量。只索引 def/class 时 `symbol=POOL_UNLOCK` 直接没找到。
+     `_collect(allow_data=)`：模块级/类体内收顶层赋值，**进函数体就关掉**。
+     数据常量按行开窗；按行号跳读必须 `window()` **以目标行为中心**，否则整段首屏重复。
+  2. **必须有机械刹车**。模型首轮已拿到答案仍继续查 6 轮 16 次，烧光
+     `AI_FC_MAX_ROUNDS=8` 后一句都没答。
+* **预算自己算账**：`_MAX_TOTAL_CHARS=5300`（registry 硬截 6000）+ `_clamp()` 按行边界切。
+  概览两级（签名段→紧凑名单），保证 `core.py` 100 个符号**名字一个不漏**。
+* 守门：`tests/test_doupo_code_explain.py` 24 条 + `tmp/prove_code_explain.py` 11 条反例。
+
+
 ## 🚨 铁律：容器运行态数据只许落挂载卷（2026-11-16 事故后确立）
 
 **事故**：`STICKER_DIR` 在 `.env` 里是 Windows 盘符路径（`D:/AI/.../data/stickers`），
