@@ -35,6 +35,20 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 | 修仙存档 | `/app/data/xiuxian/xiuxian.json` | 同左（卷） |
 | warframe 缓存 | `/app/data/wm_cache` | 同左（卷） |
 | 表情包库 | `/app/data/stickers` | 同左（卷） |
+| 素材映射（image_id 缓存） | `/app/data/media_assets.json` | 同左（卷） |
+| 计划草稿 | `/app/data/plans.json` | 同左（卷） |
+
+### 门禁：`tests/test_user_data_persistence.py`（8 条，2026-11-17 建）
+改任何 `*Store` / 存档读写前先跑它。新增 Store 只有两条路：落盘（原子写 + 失败抛错
+或 ERROR）或登记进 `TRANSIENT` 白名单并写清「丢了只损失一句话」的理由。
+* **R7「测试不许写生产数据」是硬线**：`tests/` 里裸 `XxxStore()` 一律红。
+  真实事故：`test_qq_button_merge` 的 LRU 用例把生产 `media_assets.json` 覆盖成
+  `TOKEN123`；`test_doupo_tower` 的 `TowerStore(ttl=1)` 会抹掉玩家爬塔层数。
+  要直连生产**只读**（如验真实人设库）必须登记 `READONLY_IN_TESTS` 并写明理由。
+* `tmp/evidence/*` 证据脚本同样不许写生产：必须把 `DOUPO_TOWER_SESSION_PATH` 等
+  环境变量指向 tmp（`proof001` 假条目就是这么混进生产档的，已清）。
+* 别反复 `docker cp src/. /app/src/`：会生成 `/app/src/src` 陈旧副本，R1/R3 会红，
+  那是真有第二份旧源码在容器里，不是误报。
 
 ## 其他既有事实（沿用）
 * 原件 `D:/AI/manju_agent/qq_bridge`（NapCat）**永久只读**，所有改动只在
