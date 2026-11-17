@@ -120,17 +120,55 @@ def test_relevance_ranks_topic_doc_above_long_unrelated_file(tmp_path):
     ce = _ilu.module_from_spec(spec)
     spec.loader.exec_module(ce)
     ex = ce.CodeExplainer()                  # 用真实仓库源码树
-    toks = ex._tokens("爬塔失败后电梯直达上次失败层怎么设计的")
+    _topic_toks, score_toks = ex._tokens("爬塔失败后电梯直达上次失败层怎么设计的")
     scored = []
     for p in ex._iter_allowed():
         rel = ex._rel(p)
-        sc = ex._score(rel, ex._load(p), toks)
+        sc = ex._score(rel, ex._load(p), score_toks)
         if sc > 0:
             scored.append((sc, rel))
     scored.sort(key=lambda x: (-x[0], x[1]))
     top = [rel for _sc, rel in scored[:3]]
     # 电梯主题前三必须出现真正讲它的文件，而不是只有长文件 commands.py
     assert any(("tower" in r) or ("无限塔" in r) or ("core.py" in r) for r in top), top
+
+
+def test_douji_topic_hits_skill_core_not_button_dispatch(tmp_path):
+    """「斗技模块怎么设计的」必须命中 skills/skill_book/skill_effects 三件套。
+
+    真机事故（2026-11-17 22:30）：AI 答不出斗技设计，日志显示工具确实调了
+    （result_len=5334）——是检索把 button_dispatch.py 排到前面，真正的斗技内核
+    skills.py 没进前三。根因：中文话题「斗技」匹配不到英文名 skill*，
+    且正文词频让长文件/顺带提词的文件刷分。
+    """
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("ce_douji", _CE_PATH)
+    ce = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ce)
+    ex = ce.CodeExplainer()
+    out = ex.explain("斗技模块是怎么设计的")
+    files = [f.rsplit("/", 1)[-1] for f in
+             __import__("re").findall(r"===== (.+?) =====", out)]
+    assert files, out[:200]
+    assert files[0] == "skills.py", files          # 内核排第一
+    assert "skill_book.py" in files, files
+    assert "button_dispatch.py" not in files, files
+    # 必须带模块设计说明（docstring），否则模型只能看到零散代码
+    assert "【模块设计说明】" in out
+
+
+def test_module_docstring_is_included():
+    """模块 docstring 就是设计说明（skills.py 写明三阶/四槽），必须喂给模型。"""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("ce_doc", _CE_PATH)
+    ce = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ce)
+    ex = ce.CodeExplainer()
+    out = ex.explain("斗技怎么设计的")
+    assert "三阶" in out and "四槽" in out, out[:400]
+    # docstring 截断保护
+    doc = ex._docstring("def x():\n    pass\n")
+    assert doc == ""
 
 
 def test_explain_empty_topic_falls_back_to_map(tmp_path):

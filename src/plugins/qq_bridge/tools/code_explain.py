@@ -28,9 +28,32 @@ _SPECS: tuple[tuple[str, str], ...] = (
 _EXCLUDE_PREFIX = ("test_", "_gen_", "_verify_", "_throttle")
 
 _MAX_FILES = 3          # 单次最多喂给模型几个文件
-_MAX_LINES_PER_FILE = 50
-_CONTEXT_BEFORE = 6
-_CONTEXT_AFTER = 7
+_MAX_LINES_PER_FILE = 30
+_CONTEXT_BEFORE = 5
+_CONTEXT_AFTER = 6
+_MAX_DOC_CHARS = 700    # 每文件模块说明（docstring）上限
+
+#: 中文主题词 → 英文文件名词根（2026-11-17 真机教训）。
+#: 话题是中文、文件名是英文，纯字符串匹配会让「斗技」命中 button_dispatch.py
+#: 这类顺带提到该词的无关文件，而 skills.py / skill_book.py 反而排不上来。
+#: 别名只参与**文件级打分**，不参与片段行定位（否则 skill 会命中所有 skill 字样）。
+_ALIAS: dict[str, tuple[str, ...]] = {
+    "斗技": ("skill",), "技能": ("skill",), "招式": ("skill",), "功法": ("skill",),
+    "爬塔": ("tower",), "塔": ("tower",),
+    "周副本": ("weekly",), "周本": ("weekly",),
+    "异火": ("flame",),
+    "宗门": ("faction",), "门派": ("faction",), "势力": ("faction",),
+    "战斗": ("battle",), "战报": ("battle",),
+    "丹药": ("recipe",), "丹方": ("recipe",), "炼药": ("recipe",),
+    "切磋": ("duel",), "对战": ("duel",), "pvp": ("duel",),
+    "人物卡": ("card", "avatar"), "卡片": ("card",), "形象": ("avatar",),
+    "境界": ("realm", "core"), "修为": ("realm", "core"), "突破": ("realm", "core"),
+    "武器": ("weapon",), "装备": ("weapon", "core"),
+    "答题": ("quiz",), "竞猜": ("quiz",),
+    "按钮": ("button",),
+    "存档": ("store",), "存储": ("store",),
+    "难度": ("balance", "monster"),
+}
 # 中文话题里这些 2~4 gram 无区分度，去掉免得刷屏
 _STOP = {
     "怎么", "如何", "设计", "逻辑", "功能", "什么", "为什", "什么", "这个",
@@ -114,19 +137,42 @@ class CodeExplainer:
 
     # ---------------- 话题 → 检索词 ----------------
     @staticmethod
-    def _tokens(topic: str) -> list[str]:
-        """从中文话题抽 2/3/4 gram + 英文标识符，长词优先（命中更精准）。"""
-        toks: set[str] = set()
+    def _tokens(topic: str) -> tuple[list[str], list[str]]:
+        """拆词。返回 (用于定位片段的话题词, 用于文件打分的话题词+英文别名)。
+
+        中文话题拿不到英文文件名（「斗技」≠ skill），只靠正文词频会让
+        button_dispatch.py 这种顺带提到该词的无关文件排到前面；别名只加进
+        打分集合，片段定位仍用原话题词，避免 skill 命中满屏。
+        """
+        topic_toks: set[str] = set()
+        low = (topic or "").lower()
         for run in _CJK_RE.findall(topic or ""):
             for n in (2, 3, 4):
                 for i in range(len(run) - n + 1):
                     g = run[i:i + n]
                     if g not in _STOP:
-                        toks.add(g)
+                        topic_toks.add(g)
         for w in _WORD_RE.findall(topic or ""):
-            toks.add(w.lower())
-        # 长词优先；同长按字典序保证结果稳定
-        return sorted(toks, key=lambda s: (-len(s), s))
+            topic_toks.add(w.lower())
+        score_toks = set(topic_toks)
+        for zh, ens in _ALIAS.items():
+            if zh in low:
+                score_toks.update(ens)
+        order = lambda s: (-len(s), s)          # noqa: E731 长词优先、同长稳定
+        return sorted(topic_toks, key=order), sorted(score_toks, key=order)
+
+    @staticmethod
+    def _docstring(text: str) -> str:
+        """取模块开头的 docstring —— 斗破各模块的 docstring 就是设计说明本身
+        （如 skills.py 写明「三阶 / 四槽 / 随机释放 / 斗气消耗」），
+        比命中行片段更能让模型讲清设计。"""
+        m = re.search(r'"""(.+?)"""', text, re.S)
+        if not m:
+            return ""
+        doc = m.group(1).strip()
+        if len(doc) > _MAX_DOC_CHARS:
+            doc = doc[:_MAX_DOC_CHARS] + "……"
+        return doc
 
     @staticmethod
     def _score(rel: str, text: str, toks: list[str]) -> int:
@@ -140,18 +186,30 @@ class CodeExplainer:
           * 长 token（4gram / 英文词）比 2gram 更准，权重随词长线性放大。
         """
         name = rel.rsplit("/", 1)[-1].lower()
+        stem = name.rsplit(".", 1)[0]
+        stem_s = stem[:-1] if stem.endswith("s") else stem   # skills → skill
         head = "\n".join(text.splitlines()[:8]).lower()
         low = text.lower()
         s = 0
         for t in toks:
             w = len(t)
-            if t in name:
-                s += w * 20
+            # 文件名：英文词根「精确等于」远强于「包含」——skills.py 是斗技内核，
+            # doupo_skills.py 只是卡片模板，二者都含 skill，必须区分开。
+            if t.isascii():
+                if stem_s == t or stem == t:
+                    s += 70
+                elif t in name:
+                    s += 26
+            elif t in name:
+                s += w * 12
             if t in head:
                 s += w * 6
             c = low.count(t)
             if c:
                 s += w * (2 + min(c, 4))   # 正文最多按 6 次计，篇幅不再压倒主题
+        # 卡片模板降权：问「模块怎么设计」时主要想听玩法逻辑，不是绘制细节
+        if "/pic/templates/" in rel:
+            s = int(s * 0.6)
         return s
 
     @staticmethod
@@ -196,26 +254,36 @@ class CodeExplainer:
         files = self._iter_allowed()
         if not topic:
             return "【斗破源码文件地图】\n" + self.map_text()
-        toks = self._tokens(topic)
-        if not toks:
+        topic_toks, score_toks = self._tokens(topic)
+        if not topic_toks:
             return "话题里没有可检索的关键词。\n【斗破源码文件地图】\n" + self.map_text()
         scored: list[tuple[int, Path, str]] = []
         for p in files:
             rel = self._rel(p)
             text = self._load(p)
-            sc = self._score(rel, text, toks)
+            sc = self._score(rel, text, score_toks)
             if sc > 0:
                 scored.append((sc, p, text))
         scored.sort(key=lambda x: (-x[0], self._rel(x[1])))
         if not scored:
             return ("没在斗破源码里定位到「%s」。\n【斗破源码文件地图】\n%s"
                     % (topic[:40], self.map_text()))
-        parts = ["【斗破源码速查】话题：%s" % topic[:60]]
-        for _sc, p, text in scored[:_MAX_FILES]:
+        picked = scored[:_MAX_FILES]
+        brief = " | ".join("%s（%s）" % (self._rel(p).rsplit("/", 1)[-1],
+                                        (self._docstring(t).splitlines() or [""])[0][:30])
+                           for _sc, p, t in picked)
+        parts = ["【斗破源码速查】话题：%s" % topic[:60],
+                 "相关模块：%s" % brief]
+        for _sc, p, text in picked:
             rel = self._rel(p)
-            snip, cut = self._snippets(text, toks)
-            parts.append("\n===== %s =====\n%s%s" % (
-                rel, snip, "\n（此文件还有更多内容，仅摘相关片段）" if cut else ""))
+            doc = self._docstring(text)
+            snip, cut = self._snippets(text, topic_toks)
+            block = ["\n===== %s =====" % rel]
+            if doc:
+                block.append("【模块设计说明】\n" + doc)
+            block.append("【相关代码片段】\n" + snip
+                         + ("\n（此文件还有更多内容，仅摘相关片段）" if cut else ""))
+            parts.append("\n".join(block))
         return "\n".join(parts)
 
 
