@@ -276,6 +276,57 @@ async def _(event: Event):
 
 
 # ---------------------------------------------------------------------------
+# 试炼之塔（2026-11-17）：无限层冲榜 / 宝箱掉神兵 / 三选一
+# ---------------------------------------------------------------------------
+tower = on_regex(_pat(r"爬塔") + r"\s*(.*)", priority=PRI, block=True,
+                 rule=_mode_is("doupo"))
+
+
+@tower.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower)
+    arg = _arg(event, "爬塔")
+    await finish_text(tower, event, await commands.cmd_tower(store, str(event.user_id), arg))
+
+
+tower_status = on_regex(_pat(r"(?:塔层|塔状态)"), priority=PRI, block=True,
+                        rule=_mode_is("doupo"))
+
+
+@tower_status.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_status)
+    await finish_text(tower_status, event,
+                      await commands.cmd_tower_status(store, str(event.user_id)))
+
+
+tower_settle = on_regex(_pat(r"(?:塔结算|收手)"), priority=PRI, block=True,
+                        rule=_mode_is("doupo"))
+
+
+@tower_settle.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_settle)
+    await finish_text(tower_settle, event,
+                      await commands.cmd_tower_settle(store, str(event.user_id)))
+
+
+equip = on_regex(_pat(r"装备") + r"\s*(.*)", priority=PRI, block=True,
+                 rule=_mode_is("doupo"))
+
+
+@equip.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, equip)
+    arg = _arg(event, "装备")
+    await finish_text(equip, event, await commands.cmd_equip(store, str(event.user_id), arg))
+
+
+# ---------------------------------------------------------------------------
 # 强化 / 斗技 / 异火
 # ---------------------------------------------------------------------------
 enh = on_regex(_pat(r"强化"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -743,6 +794,12 @@ register_keywords("doupo", [
     "打怪",
     "历练",
     "出战",
+    "爬塔",
+    "塔层",
+    "塔状态",
+    "塔结算",
+    "收手",
+    "装备",
     "强化",
     "斗技",
     "技能",

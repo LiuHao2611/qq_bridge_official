@@ -101,12 +101,8 @@ def build_data(p: dict) -> dict:
     alch_need = int(alch[1])
     alch_exp = int(p.get("alch_exp", 0))
 
-    w = int(p.get("weapon", 0))
-    wname = cfg.weapon_name(w)
-    wlv = cfg.weapon_display_level(w)
-    wp: dict[str, int] = {}
-    for k, base in cfg.WEAPON["stats"].items():
-        wp[k] = cfg.weapon_stat(base, w) if w < 9 else cfg.WEAPON["max_stats"][k]
+    wv = core.weapon_panel(p)
+    wname, wlv, wp = wv["name"], wv["level"], wv["stats"]
 
     return {
         "name": p.get("name") or "无名",

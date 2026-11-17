@@ -19,6 +19,8 @@ from . import duel_challenge as dc
 from . import factions as fac
 from . import flame_skills as fs
 from . import skill_book as book
+from . import tower_data as td
+from . import tower_session as ts
 
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
@@ -240,6 +242,9 @@ MENU_GROUPS = (
         ("修炼", "结算离线修为（每分钟自动 +6，陨落心炎每级 +50%）"),
         ("突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
+        ("爬塔", "试炼之塔：无限层冲榜，每10层守塔者，宝箱极低概率掉神兵"),
+        ("塔层", "查看爬塔进度：层数 / 气血 / 增益 / 距下个守塔者"),
+        ("塔结算", "收手结算本轮爬塔奖励（死亡也会自动结算）"),
     )),
     ("养成 · 变强", (
         ("强化", "强化玄重尺：十级蜕变为异火恒古尺（2000/2000/1000/1200）"),
@@ -252,6 +257,7 @@ MENU_GROUPS = (
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
         ("异火", "看 5 种异火的主动技 / 被动、原著出处与喂养进度"),
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
+        ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
     )),
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
@@ -405,7 +411,7 @@ async def cmd_panel(store, qq) -> str:
     exp_line = f"{_fmt(p['exp'])}/{_fmt(need)}" if need else f"{_fmt(p['exp'])}（已至巅峰）"
     alch = cfg.ALCHEMIST[int(p.get("alch", 0))]
     alch_need = alch[1]
-    w = int(p.get("weapon", 0))
+    wv = core.weapon_panel(p)
 
     rows = [
         f"👤 【{p['name']}】",
@@ -415,11 +421,9 @@ async def cmd_panel(store, qq) -> str:
         f"　　　{_fmt(p.get('alch_exp', 0))}/{_fmt(alch_need) if alch_need else '—'}"
         f"　{_bar(int(p.get('alch_exp', 0)), alch_need)}",
         "",
-        f"🗡️ {cfg.weapon_name(w)}　{cfg.weapon_display_level(w)} 级",
+        f"🗡️ {wv['name']}　{wv['level']} 级",
     ]
-    wp = {}
-    for k, base in cfg.WEAPON["stats"].items():
-        wp[k] = cfg.weapon_stat(base, w) if w < 9 else cfg.WEAPON["max_stats"][k]
+    wp = wv["stats"]
     rows.append(f"　力量 {wp['力量']}　敏捷 {wp['敏捷']}")
     rows.append(f"　斗气 {wp['斗气']}　防御 {wp['防御']}")
     role = cfg.STAT_BATTLE_ROLE
@@ -585,10 +589,10 @@ async def cmd_enhance(store, qq) -> str:
         return NOT_ENTERED
     pv = core.enhance_preview(p)
     if int(p.get("weapon", 0)) > 8:
-        return f"🗡️ {cfg.WEAPON['name_max']} 已至十级巅峰，无法再强化。"
+        return f"🗡️ {core.weapon_panel(p)['name']} 已至十级巅峰，无法再强化。"
 
     head = [
-        f"🗡️ {cfg.weapon_name(int(p['weapon']))}",
+        f"🗡️ {core.weapon_panel(p)['name']}",
         f"　{pv['disp']} 级 ↗ {pv['next_disp']} 级",
         f"　力量 ↗{pv['next']['力量'] - pv['cur']['力量']}　"
         f"敏捷 ↗{pv['next']['敏捷'] - pv['cur']['敏捷']}",
@@ -1438,3 +1442,202 @@ async def cmd_give(store, qq, target, amount) -> str:
     await store.put_player(p)
     await store.put_player(to)
     return f"🎁 你赠予对方 {amt} 金币，善缘结下。"
+
+
+# ---------------------------------------------------------------------------
+# 爬塔副本（2026-11-17）—— 无限层冲榜 / 武器宝箱掉落 / 三选一
+# ---------------------------------------------------------------------------
+async def cmd_tower(store, qq, arg="") -> str:
+    """爬塔：无参开新塔/继续下一层；带 1/2/3 选三选一战利品。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = ts.STORE.get(str(qq))
+    arg = (arg or "").strip()
+
+    # 选战利品
+    if arg in ("1", "2", "3"):
+        if not st or not st.get("pending_loot"):
+            return "当前没有待选的战利品。"
+        choices = st["pending_loot"]
+        i = int(arg) - 1
+        if i >= len(choices):
+            return "没有第 %s 个选项。" % arg
+        loot = choices[i]
+        _apply_loot(p, st, loot)
+        st["loot_taken"].append(loot["key"])
+        st["pending_loot"] = None
+        ts.STORE.save(qq, st)
+        return f"✅ 获得「{loot['label']}」：{loot['desc']}\n发送「爬塔」继续登塔。"
+
+    # 新一轮 / 继续
+    if st is None:
+        if arg and arg not in ("新", "重开"):
+            return "用法：爬塔（开始/继续）；爬塔 1/2/3（选战利品）；塔层；塔结算。"
+        st = ts.STORE.begin(qq)
+        next_floor = 1
+        header = f"🗼 【试炼之塔】开启！历史最高 {int(p.get('tower_best', 0))} 层\n"
+    else:
+        if st.get("pending_loot"):
+            return "请先选战利品：发送「爬塔 1 / 2 / 3」。"
+        next_floor = int(st.get("floor", 0)) + 1
+        header = ""
+
+    st["floor"] = next_floor - 1
+    rng = ts.STORE.rng(qq)
+    r = core.tower_floor(p, st, rng,
+                         temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st))
+    st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
+    if r["win"]:
+        # 通过层数必须推进，否则「爬塔」会永远停在第 1 层（真实踩过的坑）。
+        st["floor"] = int(r["floor"])
+
+    kind_tag = {"normal": "普通", "elite": "精英", "boss": "BOSS"}[r["kind"]]
+    aff = ("｜词缀：" + "、".join(r["affixes"])) if r["affixes"] else ""
+    if r["win"]:
+        lines = [
+            f"{header}🗼 第 {r['floor']} 层【{kind_tag}】{r['name']} {aff}",
+            f"　{core.equipped_weapon(p)}·{cfg.weapon_display_level(int(p.get('weapon', 0)))} 级出战"
+            f"　{r['rounds']} 回合破敌",
+            f"　气血 {r['hp']}/{core.stats(p)['体力']}" +
+            (f"（歇息 +{r['rest_heal']}）" if r.get("rest_heal") else ""),
+        ]
+        # 开宝箱（按**本层**层数判定，不能读 st['floor']：胜利后 st 已推进到本层）
+        chest = core.tower_open_chest(p, st, rng, floor=int(r["floor"]))
+        if chest:
+            st.setdefault("chests", []).extend([{"floor": r["floor"], **c} for c in chest])
+            for c in chest:
+                if c["type"] == "weapon":
+                    lines.append(f"🎁 宝箱开出神兵【{c['name']}】！已入背包，发「装备 {c['name']}」佩戴。")
+                else:
+                    lines.append(f"🎁 宝箱：{c['name']}×{c['n']}")
+        else:
+            lines.append("　（本层无宝箱）")
+        # 三选一
+        choices = td.roll_loot_choices(rng)
+        st["pending_loot"] = choices
+        lines.append("")
+        lines.append("📜 战利品三选一（回复「爬塔 1/2/3」）：")
+        for i, c in enumerate(choices, 1):
+            lines.append(f"　{i}. {c['label']} — {c['desc']}")
+        # 会话是进程内状态：begin() 返回副本，必须显式 save 才推进（否则永远第1层）。
+        ts.STORE.save(qq, st)
+    else:
+        # 阵亡：结算
+        res = core.tower_settle(p, st)
+        ts.STORE.clear(qq)
+        lines = [
+            f"{header}🗼 第 {r['floor']} 层【{kind_tag}】{r['name']} {aff}",
+            f"　💀 力竭倒下，止步第 {res['floors']} 层。",
+            f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
+            + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
+            "　发「爬塔」再冲一次。",
+        ]
+    await store.put_player(p)
+    return "\n".join(lines)
+
+
+def _temp_bonus(st) -> dict:
+    """会话里的三选一属性增益（累加后的绝对值）。"""
+    # 属性类在 _apply_loot 时已并入 st['temp_bonus']
+    return dict(st.get("temp_bonus", {}))
+
+
+def _temp_effects(st) -> list:
+    return list(st.get("temp_effect_items", []))
+
+
+def _labels(items) -> str:
+    """增益/词缀标签聚合：同名只写一次并带 ×N（战报里连选三次破防不该列三遍）。"""
+    order, seen = [], {}
+    for it in items:
+        lb = str((it or {}).get("label") or "").strip()
+        if not lb:
+            continue
+        if lb not in seen:
+            seen[lb] = 0
+            order.append(lb)
+        seen[lb] += 1
+    return "、".join(f"{lb}×{seen[lb]}" if seen[lb] > 1 else lb for lb in order)
+
+
+def _apply_loot(p, st, loot) -> None:
+    """应用三选一（只写会话临时态，不写永久存档）。"""
+    kind, key, v = loot["kind"], loot["key"], float(loot.get("v", 0))
+    if kind == "hp":
+        mx = core.stats(p)["体力"]
+        st["temp_hp"] = min(mx, int(st.get("temp_hp") or mx) + int(mx * v))
+    elif kind == "mp":
+        st["temp_mp"] = core.mp_max(p)
+    elif kind == "attr":
+        tb = dict(st.get("temp_bonus", {}))
+        mx = core.stats(p).get(key, 100)
+        tb[key] = int(tb.get(key, 0)) + int(mx * v)
+        st["temp_bonus"] = tb
+    elif kind == "effect":
+        items = list(st.get("temp_effect_items", []))
+        items.append(loot)
+        st["temp_effect_items"] = items
+
+
+async def cmd_tower_status(store, qq) -> str:
+    """塔层：查看当前爬塔状态。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = ts.STORE.get(str(qq))
+    best = int(p.get("tower_best", 0))
+    if st is None:
+        return (f"🗼 试炼之塔 · 历史最高 {best} 层\n"
+                "　发「爬塔」开始攀登；无限层、每10层一位守塔强者。\n"
+                "　武器从宝箱极低概率掉落，可「装备 <名>」替换玄重尺。")
+    floor = int(st.get("floor", 0))
+    nxt = floor + 1
+    to_boss = (10 - nxt % 10) % 10
+    bonus = st.get("temp_bonus") or {}
+    effs = st.get("temp_effect_items") or []
+    lines = [
+        f"🗼 试炼之塔 · 当前通过 {floor} 层（下一层第 {nxt} 层）",
+        f"　历史最高 {best} 层　距下个守塔者 {to_boss} 层",
+        f"　气血 {st.get('temp_hp', '—')}　斗气 {st.get('temp_mp', '—')}",
+        f"　本轮增益：{('、'.join(f'{k}+{v}' for k, v in bonus.items()) or '无')}"
+        + (("｜" + _labels(effs)) if effs else ""),
+        f"　宝箱 {len(st.get('chests', []))} 次",
+    ]
+    if st.get("pending_loot"):
+        lines.append("　⏳ 有战利品待选：爬塔 1/2/3")
+    else:
+        lines.append("　发「爬塔」继续；「塔结算」收手领奖。")
+    return "\n".join(lines)
+
+
+async def cmd_tower_settle(store, qq) -> str:
+    """塔结算：主动收手，按已通过层数结算一次。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = ts.STORE.get(str(qq))
+    if st is None or int(st.get("floor", 0)) <= 0:
+        return "当前没有可结算的爬塔进度。"
+    res = core.tower_settle(p, st)
+    ts.STORE.clear(qq)
+    await store.put_player(p)
+    return (f"🗼 收手结算：通过 {res['floors']} 层，+{res['gold']} 金币、+{res['exp']} 修为"
+            + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
+
+
+async def cmd_equip(store, qq, name) -> str:
+    """装备 <武器名>：切换当前武器。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    if not name:
+        ws = core.owned_weapons(p)
+        return "可装备：" + "、".join(ws) + "（发「装备 <名>」切换）"
+    res = core.equip_weapon(p, name.strip())
+    if not res["ok"]:
+        return res["msg"]
+    await store.put_player(p)
+    st = core.stats(p)
+    return (f"🗡️ {res['msg']}　力量 {st['力量']} 敏捷 {st['敏捷']} "
+            f"斗气 {st['斗气']} 防御 {st['防御']}")
