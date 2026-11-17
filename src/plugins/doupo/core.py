@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import random
 import re
 import time
@@ -476,7 +477,11 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
         dmg = max(1, int(raw * mitigation(eff_def) * (1.5 if crit else 1.0)))
         if r["bonus"] > 0:
             dmg = max(1, int(dmg * (1.0 + r["bonus"])))
+    # 2026-11-17 完整战斗回看：kind 本来就是招式名（普攻叫「普攻」），这里再补一个
+    # 显式 move / tier，避免文案层靠 kind 猜是不是技能；旧调用方继续只读原字段，
+    # 新增字段不会改变任何既有战斗数值或回包。
     return {"dmg": dmg, "crit": crit, "kind": kind, "skill": entry is not None,
+            "move": kind, "tier": str((entry or {}).get("tier") or ""),
             "notes": notes, "heal_ratio": heal_ratio}
 
 
@@ -718,6 +723,17 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
     p_fx, m_fx = fx.new_state(), fx.new_state()
     m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
 
+    # 2026-11-17 完整战斗回看的「逐条快照」：每条 log 都带当时的敌我血量/斗气，
+    # 回看卡直接读字段，不再靠上下文猜。只加字段，不改任何结算顺序。
+    def _mark(entry: dict, foe_hp: int | None = None) -> dict:
+        entry["round"] = max(1, rounds)
+        entry["foe"] = str(mon.get("name") or "敌手")
+        entry["hp_after"] = int(hp)
+        entry["mp_after"] = int(mp)
+        if foe_hp is not None:
+            entry["foe_hp_after"] = max(0, int(foe_hp))
+        return entry
+
     # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
     # 多敌 encounter 传 roll_aid=False + 传入整场预掷的 aid，把掷骰权上收到
     # 整场一次——修复「每敌各掷 → 累积概率突破 2% 硬顶」的 bug（2026-11-16）。
@@ -726,11 +742,13 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
         aid = roll_hero_aid(p, rng)
     if aid:
         m_hp = 0
-        dmg_log.append({"dmg": int(mon["hp"]), "kind": "贵人相助", "source": "机缘",
-                        "helper": aid["name"], "aid": True, "skill": False})
+        dmg_log.append(_mark({"dmg": int(mon["hp"]), "kind": "贵人相助", "source": "机缘",
+                              "helper": aid["name"], "aid": True, "skill": False,
+                              "move": "贵人相助"}, m_hp))
 
     while not aid and rounds < 15 and m_hp > 0 and hp > 0:
         rounds += 1
+        hp_before, mp_before, foe_hp_before = hp, mp, m_hp
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
@@ -738,7 +756,12 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
         if entry is not None:
             mp -= cost
         m_hp -= hit["dmg"]
-        dmg_log.append(hit)
+        hit.update({
+            "hp_before": int(hp_before), "mp_before": int(mp_before),
+            "mp_cost": int(cost if entry is not None else 0),
+            "foe_hp_before": max(0, int(foe_hp_before)),
+        })
+        dmg_log.append(_mark(hit, m_hp))
         # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）× 塔禁疗倍率
         heal_frac = (lifesteal + float(hit.get("heal_ratio", 0))) * heal_mult
         if heal_frac > 0:
@@ -748,7 +771,10 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
             back = max(1, int(hit["dmg"] * reflect))
             hp -= back
             taken += back
-            dmg_log.append({"dmg": back, "kind": "反伤", "taken": True, "reflect": True})
+            dmg_log.append(_mark({"dmg": back, "kind": "反伤", "taken": True,
+                                  "reflect": True, "move": "反伤"}, m_hp))
+        # 吸血/反伤都发生在本次出手之后，回头把第一条的 hp_after 改成最终值
+        hit["hp_after"] = int(hp)
         # 逐维文案并入主 hit 的 notes（主日志 kind/dmg/skill 字段一律不动）
 
         if m_hp <= 0:
@@ -757,14 +783,15 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
         start = fx.on_turn_start(m_fx, rng)
         if start["dot_dmg"]:
             m_hp -= start["dot_dmg"]
-            dmg_log.append({"dmg": start["dot_dmg"], "kind": "持续伤害", "dot": True,
-                            "notes": start["notes"]})
+            dmg_log.append(_mark({"dmg": start["dot_dmg"], "kind": "持续伤害", "dot": True,
+                                  "move": "持续伤害", "notes": start["notes"]}, m_hp))
         if m_hp <= 0:
             break
         # 怪反击（被眩晕/定身则跳过）
         if not start["skip"]:
             if rng() * 100 < dodge:
-                dmg_log.append({"dmg": 0, "kind": "闪避", "miss": True})
+                dmg_log.append(_mark({"dmg": 0, "kind": "闪避", "miss": True,
+                                      "move": "闪避"}))
             else:
                 roll = 1.0 - var + 2.0 * var * rng()
                 dealt = max(1, int(m_atk * mitigation(st["防御"]) * roll))
@@ -772,15 +799,18 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
                 inc = fx.on_incoming(p_fx, dealt, rng)
                 hp -= inc["final"]
                 taken += inc["final"]
-                log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True}
+                log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True,
+                             "move": "兽击"}
                 if inc["notes"]:
                     log_entry["notes"] = inc["notes"]
-                dmg_log.append(log_entry)
+                dmg_log.append(_mark(log_entry, m_hp))
                 if inc["reflect"]:
                     m_hp -= inc["reflect"]
-                    dmg_log.append({"dmg": inc["reflect"], "kind": "反伤", "reflect": True})
+                    dmg_log.append(_mark({"dmg": inc["reflect"], "kind": "反伤",
+                                          "reflect": True, "move": "反伤"}, m_hp))
         else:
-            dmg_log.append({"dmg": 0, "kind": "被控", "miss": True})
+            dmg_log.append(_mark({"dmg": 0, "kind": "被控", "miss": True,
+                                  "move": "被控"}))
         fx.expire_turn(p_fx)
         fx.expire_turn(m_fx)
 
@@ -937,6 +967,74 @@ def encounter(p, rng=random.random) -> dict:
         "detail": detail, "enemies": [x["name"] for x in detail],
         "enemy_count": len(detail), "hero_aid": hero_aid,
     }
+
+
+# ---------------------------------------------------------------------------
+# 完整战斗回看（2026-11-17）—— 唯一的「战斗结束」落盘点
+#
+# 为什么不在 fight() 内直接写：爬塔/周本用玩家深副本战斗，战斗结果只回会话，
+# 写 p 只会污染临时对象。由 commands 层在真实玩家上调用本函数，所有战斗入口
+# 共用同一份结构，既不改 SQLite schema，也不新增任何落盘路径。
+# ---------------------------------------------------------------------------
+def _jsonable(value):
+    """log 里的 notes 可能是非 str 对象；落盘前统一夹成 JSON 可序列化值。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    return str(value)
+
+
+def record_last_battle(p: dict, kind: str, res: dict, opponent: str = "",
+                       extra: dict | None = None) -> dict:
+    """把一场战斗的完整逐条 log 快照写入 ``p["last_battle"]``。
+
+    :param p: **真实玩家存档**（爬塔/周本传永久档，不传战斗用深副本）
+    :param kind: 遭遇 / 切磋 / 掠夺 / 爬塔 / 周副本
+    :param res: fight/encounter/duel/tower_floor/weekly_floor 的返回值
+    :param opponent: 供卡片标题展示的对手名
+    :param extra: 各玩法特有字段（floor/week/kind_tag 等），只进摘要不进 log
+    """
+    st = stats(p)
+    logs = []
+    for i, item in enumerate(res.get("log") or [], 1):
+        if not isinstance(item, dict):
+            continue
+        row = {str(k): _jsonable(v) for k, v in item.items()}
+        row.setdefault("index", i)
+        logs.append(row)
+
+    snap = {
+        "version": 1,
+        "ts": time.time(),
+        "kind": str(kind or "战斗"),
+        "win": bool(res.get("win")),
+        "rounds": int(res.get("rounds") or 0),
+        "opponent": str(opponent or ""),
+        "player": {
+            "name": str(p.get("name") or "无名"),
+            "lv": int(p.get("lv") or 1),
+            "power": int(power(p)),
+            "hp": int(p.get("hp") or 0), "hp_max": int(st["体力"]),
+            "mp": int(p.get("mp") or 0), "mp_max": int(mp_max(p)),
+        },
+        "summary": {
+            "taken": int(res.get("taken") or 0),
+            "exp": int(res.get("exp") or 0),
+            "gold": int(res.get("gold") or 0),
+            "drops": [[str(n), int(c)] for n, c in (res.get("drops") or [])],
+            "enemy_count": int(res.get("enemy_count") or 0),
+            "enemies": [str(x) for x in (res.get("enemies") or [])],
+            "hero_aid": _jsonable(res.get("hero_aid")),
+            "hp_p": res.get("hp_p"), "hp_v": res.get("hp_v"),
+            "extra": _jsonable(extra or {}),
+        },
+        "log": logs,
+    }
+    p["last_battle"] = snap
+    return snap
 
 
 # ---------------------------------------------------------------------------
@@ -1309,30 +1407,51 @@ def duel(p, vic, rng=random.random) -> dict:
     v_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
     p_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
     hp_p0, hp_v0 = max(1, hp_p), max(1, hp_v)
+
+    def _mark(entry: dict, actor: str, hp: int, mp: int, foe_hp: int | None = None) -> dict:
+        """PVP 逐条快照：与 fight() 同字段，回看卡可共用一套渲染。"""
+        entry["who"] = actor
+        entry["round"] = max(1, rounds)
+        entry["foe"] = "对手"
+        entry["hp_after"] = int(hp)
+        entry["mp_after"] = int(mp)
+        if foe_hp is not None:
+            entry["foe_hp_after"] = max(0, int(foe_hp))
+        return entry
+
     while rounds < 15 and hp_p > 0 and hp_v > 0:
         rounds += 1
         # p 出手
+        hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
         v_ctx["target_hp_ratio"] = hp_v / hp_v0
         e, c = _pick_skill(p, mp_p, rng)
         hit = _hit(p, int(sv["防御"]), e, rng, p_fx, v_fx, v_ctx)
         if e is not None:
             mp_p -= c
         hp_v -= hit["dmg"]
-        log.append({"who": "p", **hit})
+        hit.update({"hp_before": int(hp_before), "mp_before": int(mp_before),
+                    "mp_cost": int(c if e is not None else 0),
+                    "foe_hp_before": max(0, int(foe_hp_before))})
+        log.append(_mark(hit, "p", hp_p, mp_p, hp_v))
         if hit.get("heal_ratio"):
             hp_p = min(hp_p0, hp_p + int(hit["dmg"] * hit["heal_ratio"]))
+            log[-1]["hp_after"] = int(hp_p)
         if hp_v <= 0:
             break
         # vic 行动前：DoT + 控制
         vs = fx.on_turn_start(v_fx, rng)
         if vs["dot_dmg"]:
             hp_v -= vs["dot_dmg"]
-            log.append({"who": "v", "dmg": vs["dot_dmg"], "kind": "持续伤害",
-                        "dot": True, "notes": vs["notes"]})
+            log.append(_mark({"dmg": vs["dot_dmg"], "kind": "持续伤害", "dot": True,
+                              "notes": vs["notes"], "move": "持续伤害",
+                              "hp_before": int(hp_v + vs["dot_dmg"]),
+                              "mp_before": int(mp_v), "foe_hp_before": int(hp_v + vs["dot_dmg"])},
+                             "v", hp_v, mp_v, hp_v))
         if hp_v <= 0:
             break
         if not vs["skip"]:
             # vic 出手
+            hp_before_v, mp_before_v, foe_hp_before_v = hp_v, mp_v, hp_p
             p_ctx["target_hp_ratio"] = hp_p / hp_p0
             e2, c2 = _pick_skill(vic, mp_v, rng)
             hit2 = _hit(vic, int(sp["防御"]), e2, rng, v_fx, p_fx, p_ctx)
@@ -1342,14 +1461,20 @@ def duel(p, vic, rng=random.random) -> dict:
             hp_p -= inc["final"]
             if inc["notes"]:
                 hit2["notes"] = (hit2.get("notes") or []) + inc["notes"]
-            log.append({"who": "v", **hit2})
+            hit2.update({"hp_before": int(hp_before_v), "mp_before": int(mp_before_v),
+                         "mp_cost": int(c2 if e2 is not None else 0),
+                         "foe_hp_before": max(0, int(foe_hp_before_v))})
+            log.append(_mark(hit2, "v", hp_v, mp_v, hp_p))
             if hit2.get("heal_ratio"):
                 hp_v = min(hp_v0, hp_v + int(inc["final"] * hit2["heal_ratio"]))
+                log[-1]["hp_after"] = int(hp_v)
             if inc["reflect"]:
                 hp_v -= inc["reflect"]
-                log.append({"who": "p", "dmg": inc["reflect"], "kind": "反伤", "reflect": True})
+                log.append(_mark({"dmg": inc["reflect"], "kind": "反伤", "reflect": True,
+                                  "move": "反伤"}, "p", hp_v, mp_p, hp_p))
         else:
-            log.append({"who": "v", "dmg": 0, "kind": "被控", "miss": True})
+            log.append(_mark({"dmg": 0, "kind": "被控", "miss": True,
+                              "move": "被控"}, "v", hp_v, mp_v, hp_p))
         if hp_p <= 0:
             break
         fx.expire_turn(p_fx)

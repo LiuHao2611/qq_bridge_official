@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 import time
 
+from . import battle_comments as bc
+from . import battle_review as br
 from . import config as cfg
 from . import core
 from . import duel_challenge as dc
@@ -250,6 +252,8 @@ MENU_GROUPS = (
         ("修炼", "结算离线修为（每分钟自动 +6，陨落心炎每级 +50%）"),
         ("突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
+        ("战斗回看", "查看最后一次战斗完整过程：逐招、气血/斗气、词条（出卡片）"),
+        ("战斗评价", "根据最后一场战斗的真实数据，给一句/一段毒舌评语"),
         # 注意：MENU_GROUPS 必须保持**纯字面量**——tests/test_doupo_buttons.py 用
         # ast.literal_eval 静态解析它；写成 "…%d 秒" % cfg.CHOICE_TTL 会让 BinOp
         # 解析失败（4 条按钮门禁直接 ValueError）。改口径先改那条门禁。
@@ -535,6 +539,11 @@ async def cmd_fight(store, qq) -> str:
     # 难度仍按玩家等级反解，不会出现越级秒杀；斗气跨战结转（见底转普攻）、
     # 气血结转+小幅回复。回满斗气只能靠突破/升级。
     res = core.encounter(p)
+    # 2026-11-17：统一「战斗结束」落盘点。普通回包仍只给高光，完整 log 只落盘，
+    # 玩家主动「战斗回看」时才展开，绝不把 1~5 敌的中间回合塞进普通回包。
+    core.record_last_battle(
+        p, "遭遇", res, opponent="、".join(str(x) for x in (res.get("enemies") or []))
+    )
     p["last_fight"] = now
     chance = None
     if res["win"]:
@@ -598,6 +607,31 @@ async def cmd_fight(store, qq) -> str:
         lines.append(f"⬆️ 修为已满（{cfg.full_realm(lv)}），发送「突破」晋升")
     lines.extend(_chance_lines(chance, qq))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 完整战斗回看 / 战斗评价（2026-11-17 用户硬要求）
+# ---------------------------------------------------------------------------
+async def cmd_battle_review(store, qq) -> str:
+    """最后一次战斗的完整逐招文本兜底；正常路径由 matcher 出卡片。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    last = p.get("last_battle")
+    if not isinstance(last, dict) or not last.get("log"):
+        return "还没有可回看的战斗记录。先打一场「战斗」再来。"
+    return br.text(last)
+
+
+async def cmd_battle_comment(store, qq) -> str:
+    """基于最后一场战斗真实数据给一句毒舌；同一场结果稳定。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    last = p.get("last_battle")
+    if not isinstance(last, dict) or not last.get("log"):
+        return "还没有可评价的战斗。先打一场「战斗」，再看看自己表现。"
+    return bc.pick(last, str(qq))
 
 
 # ---------------------------------------------------------------------------
@@ -1316,6 +1350,10 @@ async def cmd_rob(store, qq, target) -> str:
         return "对方囊中空空。"
     # 掠夺也走四槽：双方各用自己上阵的 4 门斗技随机互殴（核心模块骨架）
     res = core.duel(p, vic)
+    core.record_last_battle(
+        p, "掠夺", res,
+        opponent=str(vic.get("name") or f"道友{str(target)[-4:]}"),
+    )
     seq = res["log"]
     show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
     lines = [f"⚔️ 与对手交手 {res['rounds']} 回合"]
@@ -1398,10 +1436,13 @@ async def cmd_duel_accept(store, qq, group) -> str:
 
     # 发起方先手，复用现成 duel 内核：四槽自动随机放技，不改任何 hp/gold。
     res = core.duel(rival, p)
-    seq = res["log"]
-    show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
     a_name = str(rival.get("name") or f"道友{ch.challenger[-4:]}")
     b_name = str(p.get("name") or f"道友{str(qq)[-4:]}")
+    # 无惩罚切磋：双方都留一份回看；发起方是 log 里的 who=p，应战方是 who=v。
+    core.record_last_battle(rival, "切磋", res, opponent=b_name)
+    core.record_last_battle(p, "切磋", res, opponent=a_name)
+    seq = res["log"]
+    show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
     lines = [
         f"⚔️ 切磋 · {a_name} vs {b_name}（{res['rounds']} 回合）",
         "　无惩罚切磋：不扣血、不掉钱，只记荣誉战绩",
@@ -1540,6 +1581,10 @@ async def cmd_tower(store, qq, arg="") -> str:
     rng = ts.STORE.rng(qq)
     r = core.tower_floor(p, st, rng,
                          temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st))
+    core.record_last_battle(
+        p, "爬塔", r, opponent=f"第{r['floor']}层 {r['name']}",
+        extra={"floor": int(r["floor"]), "kind_tag": str(r.get("kind") or "")},
+    )
     st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
     if r["win"]:
         # 通过层数必须推进，否则「爬塔」会永远停在第 1 层（真实踩过的坑）。
@@ -1798,6 +1843,10 @@ async def cmd_weekly(store, qq) -> str:
     snap = core.weekly_snapshot(p, week)
     rng = ws.STORE.rng(qq)
     r = core.weekly_floor(p, snap, st, rng)
+    core.record_last_battle(
+        p, "周副本", r, opponent=f"第{r['floor']}/7层 {r['name']}",
+        extra={"floor": int(r["floor"]), "week": week, "kind_tag": str(r.get("kind") or "")},
+    )
 
     kind_tag = {"normal": "普通", "elite": "精英", "boss": "BOSS"}[r["kind"]]
     aff = ("｜" + "、".join(r["affixes"])) if r["affixes"] else ""
