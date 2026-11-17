@@ -309,20 +309,24 @@ def register_builtin_tools(registry: ToolRegistry, deps: Deps | None = None) -> 
     if callable(deps.get("doupo_code_explain")):
         async def doupo_code_explain(args: dict, ctx) -> str:
             return await deps["doupo_code_explain"](
-                str(args.get("topic", "")), ctx)
+                str(args.get("topic", "")), str(args.get("file", "")), ctx)
 
         registry.register(_tool(
             "doupo_code_explain",
-            "查斗破小游戏的源码设计：当用户想了解斗破某个功能/口令/机制"
-            "「是怎么设计的」「为什么这么做」「具体怎么实现」时使用，例如爬塔电梯、"
-            "周副本、战斗属性、宗门、异火、斗技学习、完整战斗回看等。传入话题关键词，"
-            "会返回相关源码片段与设计文档摘录，你据此用大白话把设计逻辑给讲清楚，"
-            "举出关键规则与数值口径。",
+            "查斗破小游戏的源码设计。用户想了解斗破某个功能/口令/机制"
+            "「是怎么设计的」「为什么这么做」「具体怎么实现」时使用（宗门、斗技、"
+            "爬塔电梯、周副本、异火、战斗属性、战斗评价…）。**两步用**："
+            "① 先传 topic（用户问的话题）拿到候选模块清单（模块名 | 职责）；"
+            "② 从清单里挑最相关的 1~2 个，传 file（模块名，如 factions / skills / "
+            "doupo_faction）读该模块的设计说明、关键定义与代码节选。"
+            "然后用自己的话把设计逻辑讲清楚，带上关键规则与数值口径。",
             {
                 "topic": {"type": "string",
-                          "description": "用户想了解的功能/口令/机制，如「爬塔电梯」「周副本难度」「战斗评价」"},
+                          "description": "用户问的话题，如「宗门系统」「斗技怎么学」「爬塔电梯」"},
+                "file": {"type": "string",
+                         "description": "要读的模块名（候选清单里的名字，如 factions / skills / core）；指定后直接返回该模块设计说明"},
             },
-            ["topic"],
+            [],   # 两个参数都可选：只传 topic=候选清单；只传 file=直接读；都不传=全部模块
             doupo_code_explain,
         ))
         registered.append("doupo_code_explain")
