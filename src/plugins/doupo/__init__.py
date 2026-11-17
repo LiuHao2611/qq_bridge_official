@@ -277,15 +277,26 @@ async def _(event: Event):
 
 # ---------------------------------------------------------------------------
 # 试炼之塔（2026-11-17）：无限层冲榜 / 宝箱掉神兵 / 三选一
+# 同一个 matcher 兼顾「爬塔」与「裸数字 1/2/3」：
+#   * 用户要求战利品直接回 1/2/3，不要「爬塔 1」这种复杂口令；
+#   * 不新增 matcher —— 菜单数 37 = matcher 数（test_e2e 等量守门），
+#     单开一个数字 matcher 会破坏这条基准。
 # ---------------------------------------------------------------------------
-tower = on_regex(_pat(r"爬塔") + r"\s*(.*)", priority=PRI, block=True,
-                 rule=_mode_is("doupo"))
+tower = on_regex(_pat(r"爬塔") + r"\s*(.*)" + r"|^#?\s*([1-9])\s*$",
+                 priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
 @tower.handle()
 async def _(event: Event):
     event = view(event)
     await _need_group(event, tower)
+    raw = _plain(event).strip().lstrip("#").strip()
+    if raw.isdigit():
+        # 裸数字：塔战利品优先，其次机遇竞猜；都没有时静默（不吞群聊、不回复）
+        msg = await commands.cmd_pick(store, str(event.user_id), int(raw))
+        if msg:
+            await finish_text(tower, event, msg)
+        return
     arg = _arg(event, "爬塔")
     await finish_text(tower, event, await commands.cmd_tower(store, str(event.user_id), arg))
 

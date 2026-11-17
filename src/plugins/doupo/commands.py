@@ -173,10 +173,13 @@ def _chance_lines(ch: dict | None, qq: str = "") -> list[str]:
         q = qs.STORE.start(qq, quiz["question"], quiz["options"],
                            quiz["answer"], quiz.get("reward") or {})
         qs.arm_button(q.token)   # 让发送层给本条回复挂选项按钮
-        opts = " / ".join("%d.%s" % (i, o) for i, o in enumerate(q.options))
+        # 序号从 1 开始：文案让玩家「直接回复 1/2/3」，若这里按 0 开始展示，
+        # 玩家照屏幕上的号回答就会错位（真实踩过：显示 2.二十二，回 2 判成二十）。
+        opts = " / ".join("%d.%s" % (i + 1, o) for i, o in enumerate(q.options))
         return ["", f"{mark} 机遇 · {ch['name']}",
                 f"　{ch['text']}", f"　选项 {opts}",
-                "　点选选项作答，答对方可得奖"]
+                "　点选选项、或直接回复 1/2/3 作答；答对方可得奖"
+                "（限 %d 秒，超时作废并失去奖励）" % cfg.CHOICE_TTL]
     return ["", f"{mark} 机遇 · {ch['name']}",
             f"　{ch['text']}", f"　结算：{ch['gain']}"]
 
@@ -212,12 +215,15 @@ async def cmd_answer_quiz(store, qq: str, token: str, idx) -> str:
     res = qs.STORE.answer(qq, token, idx)
     if not res.valid:
         if res.reason == "no_session":
+            if qs.STORE.take_expired(qq):
+                return ("⏰ 这题已超时作废（限 %d 秒），本题奖励已失去。"
+                        % cfg.CHOICE_TTL)
             return "这题已失效（或已作答），重新做任务碰碰新机遇吧。"
         return "作答无效，请点选当前这道题的选项。"
     q = res.quiz
     if not res.correct:
         return ("❌ 答错了。正确答案是 %d.%s" %
-                (res.answer_idx, q.options[res.answer_idx]) +
+                (res.answer_idx + 1, q.options[res.answer_idx]) +
                 "\n　这题没有奖励，继续修行再觅机缘。")
     p = await _player(store, qq)
     if not p:
@@ -242,7 +248,11 @@ MENU_GROUPS = (
         ("修炼", "结算离线修为（每分钟自动 +6，陨落心炎每级 +50%）"),
         ("突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
-        ("爬塔", "试炼之塔：无限层冲榜，每10层守塔者，宝箱极低概率掉神兵"),
+        # 注意：MENU_GROUPS 必须保持**纯字面量**——tests/test_doupo_buttons.py 用
+        # ast.literal_eval 静态解析它；写成 "…%d 秒" % cfg.CHOICE_TTL 会让 BinOp
+        # 解析失败（4 条按钮门禁直接 ValueError）。改口径先改那条门禁。
+        ("爬塔", "试炼之塔：无限层冲榜，每10层守塔者，宝箱极低概率掉神兵；"
+                 "战利品直接回 1/2/3（1 分钟内）"),
         ("塔层", "查看爬塔进度：层数 / 气血 / 增益 / 距下个守塔者"),
         ("塔结算", "收手结算本轮爬塔奖励（死亡也会自动结算）"),
     )),
@@ -275,7 +285,7 @@ MENU_GROUPS = (
         ("排行", "本群战力榜前 10"),
         ("抢 @某人", "掠夺对方 10% 金币（输了自己掉）"),
         ("切磋 @某人", "无惩罚切磋：对方「应战」后自动随机放技，只记荣誉战绩"),
-        ("应战", "接受本群道友的切磋邀请（60 秒内有效）"),
+        ("应战", "接受本群道友的切磋邀请（1 分钟内有效）"),
         ("拒战", "婉拒切磋邀请"),
         ("送 100 @某人", "赠金币"),
     )),
@@ -359,6 +369,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "推进任务进度时有 22% 概率撞见原版随机事件。",
         "天降炎星石 / 张大善人 / 神秘老者索丹 / 有奖竞猜 / 时空风暴…",
         "也有劫匪、深渊、女大王等破财事；金币不够时对方嫌你穷，不会倒扣。",
+    )),
+    ("选择", (
+        "凡是要你回话的地方（爬塔战利品 / 竞猜选项 / 切磋应战）都直接回 1、2、3。",
+        "限 %d 秒内作答；超时即失效，对应的奖励一并失去。" % cfg.CHOICE_TTL,
     )),
 )
 
@@ -1449,38 +1463,48 @@ async def cmd_give(store, qq, target, amount) -> str:
 # 爬塔副本（2026-11-17）—— 无限层冲榜 / 武器宝箱掉落 / 三选一
 # ---------------------------------------------------------------------------
 async def cmd_tower(store, qq, arg="") -> str:
-    """爬塔：无参开新塔/继续下一层；带 1/2/3 选三选一战利品。"""
+    """爬塔：无参开新塔/继续下一层；带 1/2/3 选三选一战利品。
+
+    2026-11-17 用户要求：三选一不必打「爬塔 1」，直接回 1/2/3 即可；
+    且所有「等玩家回话」的业务统一 60 秒（超时奖励作废）。
+    """
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
     st = ts.STORE.get(str(qq))
     arg = (arg or "").strip()
 
-    # 选战利品
+    # 先处理超时：待选过期即作废（奖励不补发），并在本次回复里提示。
+    warn = ""
+    if st is not None and ts.expire_loot(st):
+        warn = "⏰ 上一层的战利品已超时作废（限 %d 秒），该层奖励已失去。\n" % cfg.CHOICE_TTL
+
+    # 选战利品（爬塔 1/2/3 与裸数字 1/2/3 共用这里）
     if arg in ("1", "2", "3"):
-        if not st or not st.get("pending_loot"):
-            return "当前没有待选的战利品。"
-        choices = st["pending_loot"]
-        i = int(arg) - 1
-        if i >= len(choices):
+        loot, reason = ts.take_loot(st, int(arg) - 1)
+        if reason == "none":
+            return warn + "当前没有待选的战利品。"
+        if reason == "expired":
+            return ("⏰ 战利品已超时作废（限 %d 秒），该层奖励已失去。\n"
+                    "发送「爬塔」继续登塔。" % cfg.CHOICE_TTL)
+        if reason == "bad_index":
             return "没有第 %s 个选项。" % arg
-        loot = choices[i]
         _apply_loot(p, st, loot)
         st["loot_taken"].append(loot["key"])
-        st["pending_loot"] = None
         ts.STORE.save(qq, st)
-        return f"✅ 获得「{loot['label']}」：{loot['desc']}\n发送「爬塔」继续登塔。"
+        return warn + f"✅ 获得「{loot['label']}」：{loot['desc']}\n发送「爬塔」继续登塔。"
 
     # 新一轮 / 继续
     if st is None:
         if arg and arg not in ("新", "重开"):
-            return "用法：爬塔（开始/继续）；爬塔 1/2/3（选战利品）；塔层；塔结算。"
+            return "用法：爬塔（开始/继续）；战利品直接回 1/2/3；塔层；塔结算。"
         st = ts.STORE.begin(qq)
         next_floor = 1
         header = f"🗼 【试炼之塔】开启！历史最高 {int(p.get('tower_best', 0))} 层\n"
     else:
         if st.get("pending_loot"):
-            return "请先选战利品：发送「爬塔 1 / 2 / 3」。"
+            return ("请先选战利品：直接回复 1 / 2 / 3（还剩 %d 秒，超时作废）。"
+                    % ts.loot_left(st))
         next_floor = int(st.get("floor", 0)) + 1
         header = ""
 
@@ -1514,11 +1538,12 @@ async def cmd_tower(store, qq, arg="") -> str:
                     lines.append(f"🎁 宝箱：{c['name']}×{c['n']}")
         else:
             lines.append("　（本层无宝箱）")
-        # 三选一
+        # 三选一（60 秒时效：直接回 1/2/3，超时该层奖励作废）
         choices = td.roll_loot_choices(rng)
-        st["pending_loot"] = choices
+        ts.set_loot(st, choices, cfg.CHOICE_TTL)
         lines.append("")
-        lines.append("📜 战利品三选一（回复「爬塔 1/2/3」）：")
+        lines.append("📜 战利品三选一（%d 秒内直接回复 1 / 2 / 3，超时作废）："
+                     % cfg.CHOICE_TTL)
         for i, c in enumerate(choices, 1):
             lines.append(f"　{i}. {c['label']} — {c['desc']}")
         # 会话是进程内状态：begin() 返回副本，必须显式 save 才推进（否则永远第1层）。
@@ -1534,6 +1559,8 @@ async def cmd_tower(store, qq, arg="") -> str:
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
             "　发「爬塔」再冲一次。",
         ]
+    if warn:
+        lines.insert(0, warn.rstrip("\n"))
     await store.put_player(p)
     return "\n".join(lines)
 
@@ -1592,6 +1619,7 @@ async def cmd_tower_status(store, qq) -> str:
         return (f"🗼 试炼之塔 · 历史最高 {best} 层\n"
                 "　发「爬塔」开始攀登；无限层、每10层一位守塔强者。\n"
                 "　武器从宝箱极低概率掉落，可「装备 <名>」替换玄重尺。")
+    expired = ts.expire_loot(st)
     floor = int(st.get("floor", 0))
     nxt = floor + 1
     to_boss = (10 - nxt % 10) % 10
@@ -1606,7 +1634,9 @@ async def cmd_tower_status(store, qq) -> str:
         f"　宝箱 {len(st.get('chests', []))} 次",
     ]
     if st.get("pending_loot"):
-        lines.append("　⏳ 有战利品待选：爬塔 1/2/3")
+        lines.append("　⏳ 有战利品待选：剩 %d 秒，直接回复 1/2/3" % ts.loot_left(st))
+    elif expired:
+        lines.append("　⏰ 战利品已超时作废（限 %d 秒），该层奖励已失去。" % cfg.CHOICE_TTL)
     else:
         lines.append("　发「爬塔」继续；「塔结算」收手领奖。")
     return "\n".join(lines)
@@ -1642,3 +1672,34 @@ async def cmd_equip(store, qq, name) -> str:
     st = core.stats(p)
     return (f"🗡️ {res['msg']}　力量 {st['力量']} 敏捷 {st['敏捷']} "
             f"斗气 {st['斗气']} 防御 {st['防御']}")
+
+
+async def cmd_pick(store, qq, n) -> str:
+    """裸数字选择（1/2/3…）：优先爬塔战利品，其次机遇有奖竞猜。
+
+    返回**空串**表示当前没有待选业务 —— 调用方必须保持沉默（不回复任何东西），
+    否则会把群里普通的数字聊天吞掉。
+    2026-11-17 用户要求：凡是等玩家回话的业务都用 1/2/3，且 60 秒内有效。
+    """
+    qq = str(qq)
+    p = await _player(store, qq)
+    if not p:
+        return ""
+    st = ts.STORE.get(qq)
+    if st is not None:
+        if ts.expire_loot(st):        # 战利品刚超时 → 明说奖励没了，别静默
+            return "⏰ 战利品已超时作废（限 %d 秒），该层奖励已失去。" % cfg.CHOICE_TTL
+        if st.get("pending_loot"):
+            # 交给 cmd_tower 统一处理（含越界、应用增益、剩余时间提示）
+            return await cmd_tower(store, qq, str(n))
+    from . import quiz_session as qs  # noqa: PLC0415
+
+    q = qs.STORE.pending_for(qq)
+    if q is not None:
+        idx = int(n) - 1
+        if 0 <= idx < len(q.options):
+            return await cmd_answer_quiz(store, qq, q.token, idx)
+        return "没有第 %d 个选项（本题共 %d 项）。" % (int(n), len(q.options))
+    if qs.STORE.take_expired(qq):
+        return "⏰ 这题已超时作废（限 %d 秒），本题奖励已失去。" % cfg.CHOICE_TTL
+    return ""

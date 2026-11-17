@@ -324,11 +324,30 @@ def _p_give(p):
     p["gold"] = 1000000
 
 
+def _p_loot(p):
+    """给该玩家挂一组待选战利品，让「裸数字 1」用例走正向分支。
+
+    2026-11-17 用户要求：三选一不必打「爬塔 1」，直接回 1/2/3。
+    """
+    # 本文件在容器内以 src.plugins.doupo.test_menu_full 身份运行，没有顶层 doupo 包，
+    # 只能借用 commands 侧已导入的模块对象（同一个 tower_session 实例）。
+    _ts = cmds.ts
+
+    st = _ts.STORE.begin(str(p["qq"]), seed="menu_loot")
+    _ts.set_loot(st, [
+        {"kind": "hp", "key": "回春散", "v": 0.35, "label": "回春散", "desc": "回复35%气血"},
+        {"kind": "attr", "key": "力量", "v": 0.15, "label": "力量+15%", "desc": "本轮力量提升"},
+        {"kind": "mp", "key": "回气丹", "v": 1.00, "label": "回气丹", "desc": "斗气回满"},
+    ])
+    _ts.STORE.save(str(p["qq"]), st)
+
+
 PREPS = {
     "break": _p_break, "fight": _p_fight, "enhance": _p_enhance,
     "skillup": _p_skillup, "feed": _p_feed, "flames": _p_flames, "buy": _p_buy,
     "craft": _p_craft, "use": _p_use, "taccept": _p_taccept,
     "tsubmit": _p_tsubmit, "main": _p_main, "rob": _p_rob, "give": _p_give,
+    "loot": _p_loot,
 }
 
 
@@ -414,6 +433,10 @@ CASES = [
          must=["结算", "爬塔进度"], ban=["用法"]),
     dict(id="38_equip", text="装备", img=None,
          must=["可装备"], ban=["用法", "尚未入道"]),
+    # 39：2026-11-17 用户要求——战利品直接回 1/2/3，不打「爬塔 1」。
+    # prep 先挂一组待选；这条不是菜单口令，用 pick=True 豁免「口令必须在菜单里」。
+    dict(id="39_pick", text="1", pick=True, prep="loot", img=None,
+         must=["获得"], ban=["超时作废", "没有待选", "用法"]),
 ]
 
 
@@ -505,8 +528,12 @@ async def static_checks():
     fe = check_text(menu_txt)
     record("STATIC 菜单纯文本格式", not fe, "；".join(fe) or f"{len(menu_txt)} 字")
     missing = [c["text"].split()[0] for c in CASES
-               if c["text"].split()[0] not in menu_txt and c["text"] not in menu_txt]
+               if not c.get("pick")
+               and c["text"].split()[0] not in menu_txt and c["text"] not in menu_txt]
     record("STATIC 每条口令都写进了菜单", not missing, f"缺失={missing}")
+    # 裸数字用例的唯一豁免条件：文本必须真的是纯数字（防止拿 pick 逃逸菜单覆盖）
+    bad_pick = [c["text"] for c in CASES if c.get("pick") and not c["text"].isdigit()]
+    record("STATIC 裸数字用例必须是纯数字", not bad_pick, f"违例={bad_pick}")
 
     # out picture commands must stay unthrottled
     record("STATIC 未接回 _throttle（出图红线）",

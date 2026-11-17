@@ -26,8 +26,10 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-#: 答题有效期（秒）。超时后选项按钮点击会被判为「题目已过期」。
-DEFAULT_TTL = 300.0
+#: 答题有效期（秒）。超时后选项按钮点击会被判为「题目已过期」，奖励一并失去。
+#: 2026-11-17 用户要求：所有「等玩家回一句话」的业务统一 1 分钟，超时失效。
+#: 产品唯一源是 ``config.CHOICE_TTL``；此处默认值必须与之一致（有守门测试）。
+DEFAULT_TTL = 60.0
 
 
 @dataclass
@@ -60,6 +62,8 @@ class QuizStore:
     def __init__(self, ttl: float = DEFAULT_TTL) -> None:
         self._ttl = float(ttl)
         self._data: dict[str, Quiz] = {}
+        #: 刚刚超时的 qq（只留到下一次交互，用于回一句「超时作废、奖励没了」）
+        self._expired: set[str] = set()
 
     def start(self, qq, question, options, answer: int, reward,
               now: float | None = None) -> Quiz:
@@ -74,17 +78,27 @@ class QuizStore:
             created_at=(time.time() if now is None else float(now)),
         )
         self._data[q.qq] = q
+        self._expired.discard(q.qq)
         return q
 
     def pending_for(self, qq, now: float | None = None) -> Quiz | None:
-        """查看待答题目（不消费）；超时顺手清理。"""
+        """查看待答题目（不消费）；超时顺手清理，并记一笔「刚超时」。"""
         q = self._data.get(str(qq))
         if q is None:
             return None
         if q.expired(self._ttl, now):
             self._data.pop(str(qq), None)
+            self._expired.add(str(qq))
             return None
         return q
+
+    def take_expired(self, qq) -> bool:
+        """取出并清除「刚刚超时」标记；True 表示该玩家有题已超时作废。"""
+        k = str(qq)
+        if k in self._expired:
+            self._expired.discard(k)
+            return True
+        return False
 
     def answer(self, qq, token, idx, now: float | None = None) -> AnswerResult:
         """作答并一次性消费该题。token 必须匹配、题目未过期。
@@ -108,6 +122,7 @@ class QuizStore:
 
     def clear(self, qq) -> None:
         self._data.pop(str(qq), None)
+        self._expired.discard(str(qq))
 
     def peek_by_token(self, token: str) -> Quiz | None:
         """按 token 反查待答题（供发送层取选项文字挂按钮；不消费、不校验 qq）。"""
