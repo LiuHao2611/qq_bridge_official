@@ -30,6 +30,12 @@ for _p in (REPO_ROOT, PLUGINS_DIR):
 # 机遇是概率事件，会让既有金币/文本断言变 flaky；这里默认关掉，
 # 随机逻辑本身由 test_chance.py 用注入 rng 做确定性验收。
 os.environ["DOUPO_CHANCE_RATE"] = "0"
+# 爬塔会话现在会落盘（2026-11-17）：给单测一个临时文件，
+# 免得把测试会话写进插件包 data/ 或相互串档。
+os.environ.setdefault(
+    "DOUPO_TOWER_SESSION_PATH",
+    os.path.join(tempfile.mkdtemp(prefix="doupo_tower_"), "tower_session.json"),
+)
 
 
 def _stub_nonebot():
@@ -494,6 +500,19 @@ async def main():
     r = await commands.cmd_pick(store, C, 2)
     check("无待选时保持沉默（不吞群聊）", r == "", r[:40])
     commands.ts.STORE.clear(C)
+
+    # 超时不是丢：把会话 ts 拨到 TTL 之前，「塔结算」必须补结算并发奖
+    # （2026-11-17 用户「爬塔层数被你重置掉了」：早期实现直接把过期会话删掉）。
+    s = commands.ts.STORE.begin(C, seed="overtime")
+    s["floor"] = 5
+    s["temp_hp"] = 123
+    commands.ts.STORE.save(C, s)
+    s["ts"] = time.time() - (commands.ts.DEFAULT_TTL + 60)   # save 只改 ts，这里再拨旧
+    gold_before = int((await store.get_player(C))["gold"])
+    r = await commands.cmd_tower_settle(store, C)
+    gold_after = int((await store.get_player(C))["gold"])
+    check("超时会话 塔结算仍发奖", "自动结算" in r and gold_after > gold_before, r[:60])
+    check("超时结算后会话已清空", commands.ts.STORE.get(C) is None)
 
     # 机遇竞猜：属于同一类「等玩家回话」的业务，必须同样教会裸数字作答 + 60 秒时限，
     # 且裸数字入口要能直接作答（2026-11-17 用户要求统一口径）。
