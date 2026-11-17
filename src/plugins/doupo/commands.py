@@ -21,6 +21,8 @@ from . import flame_skills as fs
 from . import skill_book as book
 from . import tower_data as td
 from . import tower_session as ts
+from . import weekly_data as wd
+from . import weekly_session as ws
 
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
@@ -253,8 +255,11 @@ MENU_GROUPS = (
         # 解析失败（4 条按钮门禁直接 ValueError）。改口径先改那条门禁。
         ("爬塔", "试炼之塔：无限层冲榜，每10层守塔者，宝箱极低概率掉神兵；"
                  "战利品直接回 1/2/3（1 分钟内）"),
+        ("电梯", "花金币直达上次止步层，满状态重打；旧层已领奖励不重复"),
         ("塔层", "查看爬塔进度：层数 / 气血 / 增益 / 距下个守塔者"),
         ("塔结算", "收手结算本轮爬塔奖励（死亡也会自动结算）"),
+        ("周副本", "7层一命通关；周一快照锁定难度，失败奖励全清含神兵"),
+        ("周本状态", "看本周快照难度 / 当前层 / 暂存奖励 / 是否已通关"),
     )),
     ("养成 · 变强", (
         ("强化", "强化当前武器：等级对任何武器生效；玄重尺十级觉醒异火恒古尺"),
@@ -1580,8 +1585,14 @@ async def cmd_tower(store, qq, arg="") -> str:
             f"　💀 力竭倒下，止步第 {res['floors']} 层。",
             f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
-            "　发「爬塔」再冲一次。",
         ]
+        # 电梯提示（2026-11-17）：止步层 > 1 才值得坐；已领过的层不重复给奖励。
+        cp = int(p.get("tower_checkpoint", 0))
+        if cp > 1:
+            cost = td.elevator_cost(cp)
+            lines.append(f"　🛗 发「电梯」花 {cost} 金币直达第 {cp} 层"
+                         f"（满状态；旧层已领的奖励不再重复）。")
+        lines.append("　发「爬塔」从第 1 层再冲。")
     if warn:
         lines.insert(0, warn.rstrip("\n"))
     await store.put_player(p)
@@ -1691,6 +1702,175 @@ async def cmd_tower_settle(store, qq) -> str:
     await store.put_player(p)
     return (f"🗼 收手结算：通过 {res['floors']} 层，+{res['gold']} 金币、+{res['exp']} 修为"
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
+
+
+async def cmd_tower_elevator(store, qq) -> str:
+    """电梯（2026-11-17）：花金币直达上次止步层，满状态重打，旧层奖励不重复。
+
+    硬约束：
+      * 必须有止步层（checkpoint > 1），否则没意义；
+      * 当前不能有未结算会话（防止叠加刷层）；
+      * 金币必须够，不够明说差额，不扣不进；
+    扣费与开会话在同一处完成，put_player 落盘后才回包。
+    """
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    cp = max(0, int(p.get("tower_checkpoint", 0)))
+    if cp <= 1:
+        return ("🛗 还没有可直达的层数——先「爬塔」打到第 2 层及以上，"
+                "失败或收手后就能坐电梯了。")
+    if ts.STORE.get(str(qq)) is not None:
+        return "当前还有未结算的爬塔进度，请先「爬塔」继续或「塔结算」收手，再坐电梯。"
+    cost = td.elevator_cost(cp)
+    gold = int(p.get("gold", 0))
+    if gold < cost:
+        return f"🛗 直达第 {cp} 层需 {cost} 金币，你还差 {cost - gold} 金币。"
+    p["gold"] = gold - cost
+    paid = max(0, int(p.get("tower_paid_floor", 0)))
+    # 从 cp-1 起（下一层就是止步层 cp）；满状态：temp_* 全空，增益清空。
+    st = ts.STORE.begin(qq, floor=cp - 1)
+    await store.put_player(p)
+    reuse = "；第 %d 层及以下的奖励已领过，重打不再发" % paid if paid >= cp - 1 else ""
+    return (f"🛗 花 {cost} 金币直达第 {cp} 层！满状态挑战"
+            f"（气血/斗气全满，无上轮增益）{reuse}。\n"
+            f"　发「爬塔」迎战第 {cp} 层。")
+
+
+# ---------------------------------------------------------------------------
+# 周副本（2026-11-17）—— 7 层一命通关 / 周一快照难度 / 奖励暂存锁定
+# ---------------------------------------------------------------------------
+def _staged_line(st: dict) -> str:
+    s = st.get("staged") or {}
+    parts = [f"+{int(s.get('gold',0))} 金币", f"+{int(s.get('exp',0))} 修为"]
+    items = s.get("items") or {}
+    if items:
+        parts.append("、".join(f"{k}×{v}" for k, v in items.items()))
+    w = s.get("weapons") or []
+    if w:
+        parts.append("神兵" + "、".join(w))
+    return "、".join(parts) or "无"
+
+
+def _weekly_expired_line(st: dict) -> str:
+    """超时会话：按失败处理——暂存奖励整段丢弃（失败路径绝不调用 weekly_commit）。"""
+    if not st:
+        return ""
+    return ("⏰ 上周副本闲置超时，本轮挑战失败——"
+            "暂存的 %s 全部清空（含神兵），需从第 1 层重来。" % _staged_line(st))
+
+
+async def cmd_weekly(store, qq) -> str:
+    """周副本：无参开新轮/继续下一层。7 层一命通关，中途失败奖励全清。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    week = wd.week_key()
+    cleared = str(p.get("weekly_cleared_week", "")) == week
+    st = ws.STORE.get(str(qq))
+
+    # 超时：按失败处理（暂存全清），本次回复明示，不给任何奖励。
+    stale = ws.STORE.take_expired(str(qq))
+    stale_line = _weekly_expired_line(stale) if stale else ""
+
+    if cleared and st is None:
+        tail = "\n　本周已通关周副本，下周再来。" if not stale_line else ""
+        return stale_line + ("🗼 周副本 · 本周（%s）已通关，奖励已入账。%s" % (week, tail))
+
+    if st is None:
+        snap = core.weekly_snapshot(p, week)   # 锁定本周难度（新入道固定新手档）
+        st = ws.STORE.begin(qq, week=week)
+        header = (f"{stale_line}\n" if stale_line else "") + (
+            f"🗼 【周副本】{week} · 7 层一命通关开启！\n"
+            f"　难度按本周快照锁定（画像 lv{snap.get('lv', '?')}）；"
+            f"这一周变强，怪不会跟着变强。\n")
+    else:
+        if st.get("pending_loot"):
+            return "请先选战利品。"
+        header = (stale_line + "\n") if stale_line else ""
+
+    floor = int(st.get("floor", 0))
+    if floor >= wd.WEEKLY_FLOORS:
+        # 理论上不含这种会话（通关即 clear），兜底：放行重开提示
+        ws.STORE.clear(qq)
+        return header + "本周已通关，发「周副本」下周再来。"
+
+    snap = core.weekly_snapshot(p, week)
+    rng = ws.STORE.rng(qq)
+    r = core.weekly_floor(p, snap, st, rng)
+
+    kind_tag = {"normal": "普通", "elite": "精英", "boss": "BOSS"}[r["kind"]]
+    aff = ("｜" + "、".join(r["affixes"])) if r["affixes"] else ""
+    head = f"{header}🗼 第 {r['floor']}/7 层【{kind_tag}】{r['name']}{aff}\n　{r['rounds']} 回合交锋"
+
+    if not r["win"]:
+        # 一命通关：失败 → 暂存奖励整段丢弃（含武器），会话清空，从头再来。
+        lost = _staged_line(st)
+        ws.STORE.clear(qq)
+        await store.put_player(p)   # 快照已更新，但奖励一律不入账
+        return (head + f"\n　💀 力竭倒下，止步第 {r['floor']} 层。"
+                f"\n　本轮暂存奖励（{lost}）全部清空，含神兵。"
+                f"\n　发「周副本」从第 1 层重来。")
+
+    # 胜利：奖励入暂存区（不写永久），开宝箱也只入暂存
+    core.weekly_stage(st, r)
+    chest = core.weekly_open_chest(p, snap, st, int(r["floor"]), rng)
+    st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
+    st["floor"] = int(r["floor"])
+
+    lines = [
+        head,
+        f"　气血 {r['hp']}/{core.stats(p)['体力']}"
+        + (f"（歇息 +{r['rest_heal']}）" if r.get("rest_heal") else ""),
+        f"　本层 +{r['reward']['gold']} 金币 / +{r['reward']['exp']} 修为（暂存，通关才到账）",
+    ]
+    if chest:
+        for c in chest:
+            lines.append("　🎁 宝箱暂存：" + (f"神兵【{c['name']}】" if c["type"] == "weapon"
+                                      else f"{c['name']}×{c['n']}"))
+    lines.append(f"　【暂存合计】{_staged_line(st)}")
+
+    if r["floor"] >= wd.WEEKLY_FLOORS:
+        # 通关：一次性 commit 到永久存档（含武器）
+        res = core.weekly_commit(p, st)
+        p["weekly_cleared_week"] = week
+        ws.STORE.clear(qq)
+        await store.put_player(p)
+        lines.append(f"　🏆 七层通关！结算到账：+{res['gold']} 金币、+{res['exp']} 修为"
+                     + (f"，神兵 {('、'.join(res['weapons']))} 入包" if res["weapons"] else "")
+                     + "。")
+        lines.append("　本周已通关，下周再来挑战自己的新快照。")
+    else:
+        ws.STORE.save(qq, st)
+        await store.put_player(p)   # 本周快照落盘（难度锁定）
+        lines.append(f"　发「周副本」挑战第 {r['floor'] + 1} 层；"
+                     f"中途失败则暂存奖励（含神兵）全部清零。")
+    return "\n".join(lines)
+
+
+async def cmd_weekly_status(store, qq) -> str:
+    """周本状态：本周快照难度、当前层、暂存奖励、是否已通关。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    week = wd.week_key()
+    snap = dict((p.get("weekly_snapshot") or {}).get("profile") or {})
+    cleared = str(p.get("weekly_cleared_week", "")) == week
+    lines = [f"🗼 周副本 · {week}"]
+    if snap:
+        lv = snap.get("lv", "?")
+        tag = "固定新手档" if int(lv or 0) <= int(wd.ROOKIE_PROFILE["lv"]) else "本周锁定画像"
+        lines.append(f"　难度：{tag}（快照 lv{lv}）")
+    else:
+        lines.append("　难度：尚未锁定（发「周副本」开启）")
+    lines.append(f"　本周状态：{'✅ 已通关' if cleared else '未通关'}")
+    st = ws.STORE.get(str(qq))
+    if st and not cleared:
+        lines.append(f"　当前：第 {int(st.get('floor',0)) + 1} 层 / 7 层")
+        lines.append(f"　暂存奖励：{_staged_line(st)}（失败即全清，含神兵）")
+    else:
+        lines.append("　发「周副本」开始/继续 7 层一命通关。")
+    return "\n".join(lines)
 
 
 async def cmd_equip(store, qq, name) -> str:

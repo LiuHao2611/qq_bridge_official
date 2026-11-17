@@ -39,6 +39,13 @@ TOWER_SESSION_PATH = os.environ.get(
     str(Path(DATA_PATH).parent / "tower_session.json"),
 )
 
+#: 周副本会话（2026-11-17）：与爬塔会话同目录但**分开文件**，互不顶掉。
+#: 同样只从 DATA_PATH 推导（单源），不新开环境变量；容器里落在 /app/data/doupo/。
+WEEKLY_SESSION_PATH = os.environ.get(
+    "DOUPO_WEEKLY_SESSION_PATH",
+    str(Path(DATA_PATH).parent / "weekly_session.json"),
+)
+
 # ---------------------------------------------------------------------------
 # 玩家存档库（SQLite，2026-11-17 从 doupo.json 迁来）
 #

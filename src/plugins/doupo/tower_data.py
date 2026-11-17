@@ -222,12 +222,45 @@ REWARD_EXP_PER_FLOOR = 90
 
 
 def clear_reward(floors: int) -> dict:
-    """本轮通过 floors 层的金币/经验奖励（轻微非线性，鼓励高层）。"""
+    """从 0 连续爬到 floors 层的**累计**金币/经验奖励（非线性）。
+
+    ⚠ 电梯分层重打时必须用 ``incremental_reward(to_floor, paid_floor)`` 取差值，
+    不能把每轮的 clear_reward 相加——那会重复发低层奖励（2026-11-17 用户硬要求
+    「不会重复获得之前挑战过层数的奖励」）。
+    """
     f = max(0, int(floors))
     return {
         "gold": int(REWARD_GOLD_PER_FLOOR * f * (1 + 0.05 * f)),
         "exp": int(REWARD_EXP_PER_FLOOR * f * (1 + 0.05 * f)),
     }
+
+
+def incremental_reward(to_floor: int, paid_floor: int) -> dict:
+    """增量奖励：只发 ``(paid_floor, to_floor]`` 这段从未领过的层。
+
+    ``paid_floor`` 是已结算水位线（玩家存档 ``tower_paid_floor``）。
+    用累计差而非逐段求和，保证「分 N 轮电梯打完」与「一口气打完」总额完全相同，
+    既不重复也不缩水。to_floor <= paid_floor 时返回全 0（电梯重打旧层不白嫖）。
+    """
+    hi = max(0, int(to_floor))
+    lo = min(max(0, int(paid_floor)), hi)
+    a, b = clear_reward(lo), clear_reward(hi)
+    return {"gold": max(0, b["gold"] - a["gold"]),
+            "exp": max(0, b["exp"] - a["exp"])}
+
+
+# ---------------------------------------------------------------------------
+# 电梯（2026-11-17）：失败回 1 层后，花金币直达上次止步层，满状态重打。
+# ---------------------------------------------------------------------------
+ELEVATOR_GOLD_RATIO = 0.35   # 电梯费 = 目标层累计金币奖励的这个比例
+ELEVATOR_MIN_GOLD = 200      # 费用下限（低层也要有代价）
+
+
+def elevator_cost(floor: int) -> int:
+    """直达 ``floor`` 层的金币费用；目标层越高越贵，占累计奖励固定比例。"""
+    f = max(1, int(floor))
+    return max(ELEVATOR_MIN_GOLD,
+               int(clear_reward(f)["gold"] * ELEVATOR_GOLD_RATIO))
 
 
 # ---------------------------------------------------------------------------
