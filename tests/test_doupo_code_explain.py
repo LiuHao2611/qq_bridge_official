@@ -109,6 +109,30 @@ def test_explain_topic_finds_source_with_line_numbers(tmp_path):
     assert re.search(r"^\s*\d+\|", out, re.M) is not None
 
 
+def test_relevance_ranks_topic_doc_above_long_unrelated_file(tmp_path):
+    """相关度排序：主题命中的文档/源码应排在「靠篇幅刷分」的长文件之前。
+
+    真机教训：正文按 count 累加会让 commands.py 这类长文件虚高，把真正讲
+    「电梯」的设计文档挤出前三（随后被 6000 字截断，模型拿不到关键内容）。
+    """
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("ce_prod", _CE_PATH)
+    ce = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ce)
+    ex = ce.CodeExplainer()                  # 用真实仓库源码树
+    toks = ex._tokens("爬塔失败后电梯直达上次失败层怎么设计的")
+    scored = []
+    for p in ex._iter_allowed():
+        rel = ex._rel(p)
+        sc = ex._score(rel, ex._load(p), toks)
+        if sc > 0:
+            scored.append((sc, rel))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    top = [rel for _sc, rel in scored[:3]]
+    # 电梯主题前三必须出现真正讲它的文件，而不是只有长文件 commands.py
+    assert any(("tower" in r) or ("无限塔" in r) or ("core.py" in r) for r in top), top
+
+
 def test_explain_empty_topic_falls_back_to_map(tmp_path):
     ce = _load_ce()
     ex = ce.CodeExplainer(root=_make_tree(tmp_path))
