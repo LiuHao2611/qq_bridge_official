@@ -2,13 +2,30 @@
 """tools.code_explain —— 斗破源码讲解用的**只读**检索模块（2026-11-17）。
 
 用途：AI 模式下群友问「斗破某功能/口令是怎么设计的」，模型调本工具拿到
-相关源码片段，再用自己的话把设计逻辑讲清楚。工具只喂素材，讲解由模型完成。
+模块清单与源码，再用自己的话把设计逻辑讲清楚。工具只喂素材，讲解由模型完成。
 
-安全（默认拒绝，白名单制）：
+## 为什么不靠「关键词→文件名」的别名表（2026-11-17 返工教训）
+
+初版维护了一张中文别名表（斗技→skill、宗门→faction…），每遇到一个新话题
+答不对就加一条。用户原话：**「你这是打算一个模块改一次呢？我要是有一百个
+模块你是不是打算让我测试一百次？」** —— 别名表本质是枚举，漏一个错一个，
+新增模块还得再改代码，方向就是错的。
+
+现方案把「判断该看哪个模块」交还给**模型自己**（它本来就懂中文语义）：
+  1. ``explain(topic)`` 只返回**候选模块清单**（模块名 + 职责一句话），
+     排序仅用于「把相关的排前面」，不要求排第一正确 —— 只要进候选，模型
+     看职责就能挑对；
+  2. ``explain(file="factions")`` 按模型点名的模块返回**设计说明 + 关键定义
+     + 代码节选**；
+  3. 话题完全匹配不上时返回**全部模块清单**（35 行，约 2K 字），模型照样能挑。
+新增模块只要写了 docstring，自动出现在清单里，**不需要改本文件**。
+
+## 安全（默认拒绝，白名单制）
+
   * 只放 doupo 业务源码 / 斗破卡片模板 / 斗破设计文档；
-  * 排除 test_* / _gen_* / _verify_* / _throttle 等脚本与工具脚本；
+  * 排除 test_* / _gen_* / _verify_* / _throttle 等脚本；
   * 拒绝绝对路径、路径穿越、符号链接逃逸；
-  * 单次结果文件数 / 行数封顶（tools.registry 另有 6000 字兜底截断）。
+  * 单次结果行数封顶（tools.registry 另有 6000 字兜底截断）。
 
 纪律：本模块零 nonebot / 零主包依赖，可裸单测；**只有读，没有任何写操作**；
 返回给模型的文本里不出现「只读 / 不能改」之类字样（讲设计时不主动声明）。
@@ -27,38 +44,20 @@ _SPECS: tuple[tuple[str, str], ...] = (
 #: 文件名前缀黑名单（测试 / 一次性生成/校验脚本 / 已停用模块）
 _EXCLUDE_PREFIX = ("test_", "_gen_", "_verify_", "_throttle")
 
-_MAX_FILES = 3          # 单次最多喂给模型几个文件
-_MAX_LINES_PER_FILE = 30
-_CONTEXT_BEFORE = 5
-_CONTEXT_AFTER = 6
-_MAX_DOC_CHARS = 700    # 每文件模块说明（docstring）上限
+_MAX_CANDIDATES = 8        # 候选清单最多列几个模块（模型从中自选）
+_MAX_DOC_CHARS = 1200      # 读模块时设计说明上限
+_MAX_DEFS = 30             # 关键定义清单条数上限
+_MAX_CODE_LINES = 60       # 代码节选行数上限
+_MAX_DEF_DOC = 60          # 定义摘要字数
+_CONTEXT_BEFORE = 3
+_CONTEXT_AFTER = 4
 
-#: 中文主题词 → 英文文件名词根（2026-11-17 真机教训）。
-#: 话题是中文、文件名是英文，纯字符串匹配会让「斗技」命中 button_dispatch.py
-#: 这类顺带提到该词的无关文件，而 skills.py / skill_book.py 反而排不上来。
-#: 别名只参与**文件级打分**，不参与片段行定位（否则 skill 会命中所有 skill 字样）。
-_ALIAS: dict[str, tuple[str, ...]] = {
-    "斗技": ("skill",), "技能": ("skill",), "招式": ("skill",), "功法": ("skill",),
-    "爬塔": ("tower",), "塔": ("tower",),
-    "周副本": ("weekly",), "周本": ("weekly",),
-    "异火": ("flame",),
-    "宗门": ("faction",), "门派": ("faction",), "势力": ("faction",),
-    "战斗": ("battle",), "战报": ("battle",),
-    "丹药": ("recipe",), "丹方": ("recipe",), "炼药": ("recipe",),
-    "切磋": ("duel",), "对战": ("duel",), "pvp": ("duel",),
-    "人物卡": ("card", "avatar"), "卡片": ("card",), "形象": ("avatar",),
-    "境界": ("realm", "core"), "修为": ("realm", "core"), "突破": ("realm", "core"),
-    "武器": ("weapon",), "装备": ("weapon", "core"),
-    "答题": ("quiz",), "竞猜": ("quiz",),
-    "按钮": ("button",),
-    "存档": ("store",), "存储": ("store",),
-    "难度": ("balance", "monster"),
-}
-# 中文话题里这些 2~4 gram 无区分度，去掉免得刷屏
+#: 中文停用 2~4gram（无区分度，避免刷屏）
 _STOP = {
-    "怎么", "如何", "设计", "逻辑", "功能", "什么", "为什", "什么", "这个",
-    "那个", "看看", "讲讲", "说说", "帮我", "一下", "的设", "设计逻", "计逻辑",
-    "是怎么", "么设计", "介绍", "说明", "原理", "机制", "实现",
+    "怎么", "如何", "设计", "逻辑", "功能", "什么", "为什", "这个", "那个",
+    "看看", "讲讲", "说说", "帮我", "一下", "的设", "设计逻", "计逻辑",
+    "是怎么", "么设计", "介绍", "说明", "原理", "机制", "实现", "模块",
+    "现在", "是不", "不是", "有没", "没有",
 }
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
@@ -122,79 +121,92 @@ class CodeExplainer:
         self._mtime[rel] = mt
         return text
 
-    # ---------------- 文件地图 ----------------
+    # ---------------- 模块职责（docstring 首段）----------------
+    @staticmethod
+    def _docstring(text: str) -> str:
+        """取模块开头 docstring —— 斗破各模块的 docstring 就是设计说明本身
+        （如 skills.py 写明「三阶 / 四槽 / 随机释放 / 斗气消耗」）。"""
+        m = re.search(r'"""(.+?)"""', text, re.S)
+        if not m:
+            return ""
+        return m.group(1).strip()
+
+    @staticmethod
+    def _brief(doc: str, limit: int = 42) -> str:
+        """docstring → 一句话职责（取首行有效内容）。"""
+        for line in (doc or "").splitlines():
+            s = line.strip().strip("：:·-—")
+            if s and not set(s) <= set("-—=· "):
+                return s[:limit]
+        return ""
+
+    @classmethod
+    def _desc(cls, text: str, limit: int = 42) -> str:
+        """模块职责：优先 docstring 首行；md 文档退化为第一个标题行。
+
+        设计文档没有 ``\"\"\"`` docstring，不回退标题会显示「无模块说明」，
+        模型就不知道该文档讲什么（2026-11-17 真机）。
+        """
+        d = cls._brief(cls._docstring(text), limit)
+        if d:
+            return d
+        for line in (text or "").splitlines():
+            s = line.strip()
+            if s.startswith("#"):
+                t = s.lstrip("#").strip()
+                if t:
+                    return t[:limit]
+        return ""
+
+    # ---------------- 模块清单 ----------------
     def map_text(self) -> str:
-        """文件地图：相对路径 + 一句话职责（取模块 docstring 首行）。"""
+        """全部模块清单：``模块名 | 职责``。模型据此自己挑要读哪个。"""
         lines: list[str] = []
         for p in self._iter_allowed():
-            text = self._load(p)
-            doc = ""
-            m = re.search(r'^\s*"""\s*(.+?)[。.\n]', text, re.M)
-            if m:
-                doc = m.group(1).strip()[:46]
-            lines.append("%s —— %s" % (self._rel(p), doc or p.stem))
+            name = p.name[:-3] if p.name.endswith(".py") else p.stem
+            doc = self._desc(self._load(p))
+            lines.append("%s | %s" % (name, doc or "（无模块说明）"))
         return "\n".join(lines)
 
-    # ---------------- 话题 → 检索词 ----------------
+    # ---------------- 话题 → 候选模块 ----------------
     @staticmethod
-    def _tokens(topic: str) -> tuple[list[str], list[str]]:
-        """拆词。返回 (用于定位片段的话题词, 用于文件打分的话题词+英文别名)。
-
-        中文话题拿不到英文文件名（「斗技」≠ skill），只靠正文词频会让
-        button_dispatch.py 这种顺带提到该词的无关文件排到前面；别名只加进
-        打分集合，片段定位仍用原话题词，避免 skill 命中满屏。
-        """
-        topic_toks: set[str] = set()
-        low = (topic or "").lower()
+    def _tokens(topic: str) -> list[str]:
+        """中文 2/3/4gram + 英文标识符，长词优先（命中更精准）。"""
+        toks: set[str] = set()
         for run in _CJK_RE.findall(topic or ""):
             for n in (2, 3, 4):
                 for i in range(len(run) - n + 1):
                     g = run[i:i + n]
                     if g not in _STOP:
-                        topic_toks.add(g)
+                        toks.add(g)
         for w in _WORD_RE.findall(topic or ""):
-            topic_toks.add(w.lower())
-        score_toks = set(topic_toks)
-        for zh, ens in _ALIAS.items():
-            if zh in low:
-                score_toks.update(ens)
-        order = lambda s: (-len(s), s)          # noqa: E731 长词优先、同长稳定
-        return sorted(topic_toks, key=order), sorted(score_toks, key=order)
-
-    @staticmethod
-    def _docstring(text: str) -> str:
-        """取模块开头的 docstring —— 斗破各模块的 docstring 就是设计说明本身
-        （如 skills.py 写明「三阶 / 四槽 / 随机释放 / 斗气消耗」），
-        比命中行片段更能让模型讲清设计。"""
-        m = re.search(r'"""(.+?)"""', text, re.S)
-        if not m:
-            return ""
-        doc = m.group(1).strip()
-        if len(doc) > _MAX_DOC_CHARS:
-            doc = doc[:_MAX_DOC_CHARS] + "……"
-        return doc
+            toks.add(w.lower())
+        return sorted(toks, key=lambda s: (-len(s), s))
 
     @staticmethod
     def _score(rel: str, text: str, toks: list[str]) -> int:
-        """相关度打分。
+        """候选排序打分（只用于「把相关的排前面」，不要求排第一正确）。
 
-        教训（2026-11-17 真机）：初版正文用 ``min(count,12)`` 累加，长文件
-        （commands.py 几百行）靠篇幅把分数堆到 100，真正讲「电梯」的设计文档
-        反被挤出前三 —— registry 6000 字截断后模型拿不到关键内容。改为：
-          * 文件名命中 = 极强信号（×20）；标题/docstring 命中 = 强（×6）；
-          * 正文命中按「是否出现 + 少量计数」算，封顶防止长文件刷分；
-          * 长 token（4gram / 英文词）比 2gram 更准，权重随词长线性放大。
+        分层依据（2026-11-17 真机教训）：
+          * docstring 是模块**自述职责**，命中权重最高（×10）；
+          * 文件名次之（英文词根精确匹配 +70 / 包含 +26）；
+          * 正文命中权重最低且封顶 —— 否则 skill_book.py 因正文大量提到
+            「宗门」会挤掉真正讲门派系统的 factions.py；
+          * 卡片模板 ×0.6（问「怎么设计」多指玩法，不是绘制）。
         """
         name = rel.rsplit("/", 1)[-1].lower()
         stem = name.rsplit(".", 1)[0]
         stem_s = stem[:-1] if stem.endswith("s") else stem   # skills → skill
-        head = "\n".join(text.splitlines()[:8]).lower()
+        doc = ""
+        m = re.search(r'"""(.+?)"""', text, re.S)
+        if m:
+            doc = m.group(1).lower()
         low = text.lower()
         s = 0
         for t in toks:
             w = len(t)
-            # 文件名：英文词根「精确等于」远强于「包含」——skills.py 是斗技内核，
-            # doupo_skills.py 只是卡片模板，二者都含 skill，必须区分开。
+            if t in doc:
+                s += w * 10
             if t.isascii():
                 if stem_s == t or stem == t:
                     s += 70
@@ -202,27 +214,99 @@ class CodeExplainer:
                     s += 26
             elif t in name:
                 s += w * 12
-            if t in head:
-                s += w * 6
             c = low.count(t)
             if c:
-                s += w * (2 + min(c, 4))   # 正文最多按 6 次计，篇幅不再压倒主题
-        # 卡片模板降权：问「模块怎么设计」时主要想听玩法逻辑，不是绘制细节
+                s += w * (1 + min(c, 3))    # 正文最多按 4 次计，严格封顶
         if "/pic/templates/" in rel:
             s = int(s * 0.6)
         return s
 
-    @staticmethod
-    def _snippets(text: str, toks: list[str]) -> tuple[str, bool]:
-        """命中行 ±上下文的合并片段，带行号。返回 (片段, 是否截断)。"""
+    def candidates(self, topic: str) -> tuple[list[tuple[int, Path, str]], str]:
+        """返回 (候选列表, 兜底文本)。候选为空时兜底文本=全部模块清单。"""
+        toks = self._tokens(topic)
+        if not toks:
+            return [], self.map_text()
+        scored: list[tuple[int, Path, str]] = []
+        for p in self._iter_allowed():
+            rel = self._rel(p)
+            text = self._load(p)
+            sc = self._score(rel, text, toks)
+            if sc > 0:
+                scored.append((sc, p, text))
+        scored.sort(key=lambda x: (-x[0], self._rel(x[1])))
+        return scored[:_MAX_CANDIDATES], self.map_text()
+
+    # ---------------- 读指定模块 ----------------
+    def _resolve_module(self, name: str) -> tuple[Path | None, list[str]]:
+        """模块名 → 文件。支持 factions / factions.py / doupo/factions.py 全路径。
+
+        精确同名优先；同名多命中（skills vs doupo_skills）时返回候选让模型再点名。
+        """
+        raw = (name or "").strip().replace("\\", "/")
+        if not raw:
+            return None, []
+        base = raw.rsplit("/", 1)[-1]
+        # 不预设扩展名：文档是 .md、源码是 .py，按 stem 比对才能同时命中
+        stem_target = base[:-3] if base.endswith((".py", ".md")) else base
+        exact: list[Path] = []
+        loose: list[Path] = []
+        for p in self._iter_allowed():
+            if p.name == base or p.stem == stem_target:
+                exact.append(p)
+            elif stem_target in p.stem:
+                loose.append(p)
+        # 全路径指定时只认该路径
+        if "/" in raw:
+            hit = [p for p in exact + loose if self._rel(p) == raw.lstrip("/")]
+            if hit:
+                return hit[0], []
+        if len(exact) == 1:
+            return exact[0], []
+        if exact:
+            return None, [self._rel(p) for p in exact]
+        if len(loose) == 1:
+            return loose[0], []
+        return None, [self._rel(p) for p in loose]
+
+    def _defs(self, text: str) -> list[str]:
+        """关键定义清单：def/class + 首行 docstring 摘要。"""
+        out: list[str] = []
         lines = text.splitlines()
-        low = [ln.lower() for ln in lines]
-        hits = [i for i, ln in enumerate(low)
-                if any(t in ln for t in toks)]
+        for i, line in enumerate(lines):
+            m = re.match(r"^(def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", line)
+            if not m:
+                continue
+            sig = line.strip().rstrip(":")
+            summary = ""
+            for j in range(i + 1, min(i + 6, len(lines))):
+                s = lines[j].strip()
+                if s.startswith('"""') and len(s) > 3:
+                    summary = s.strip('"')[:_MAX_DEF_DOC]
+                    break
+                if s.startswith('"""'):
+                    for k in range(j + 1, min(j + 4, len(lines))):
+                        t = lines[k].strip()
+                        if t and not t.startswith('"""'):
+                            summary = t[:_MAX_DEF_DOC]
+                            break
+                    break
+                if s and not s.startswith(("#", "@")):
+                    break
+            out.append("- %s%s" % (sig, ("  // " + summary) if summary else ""))
+            if len(out) >= _MAX_DEFS:
+                out.append("- ……（更多定义见源码）")
+                break
+        return out
+
+    def _excerpt(self, text: str, toks: list[str]) -> str:
+        """代码节选：有话题词就给命中行附近，否则给文件头部。"""
+        lines = text.splitlines()
+        hits = [i for i, ln in enumerate(lines)
+                if any(t in ln.lower() for t in toks)] if toks else []
         if not hits:
-            head = lines[:_MAX_LINES_PER_FILE]
+            head = lines[:_MAX_CODE_LINES]
             return "\n".join("%4d| %s" % (i + 1, ln)
-                             for i, ln in enumerate(head)), len(lines) > len(head)
+                             for i, ln in enumerate(head))
         ranges: list[list[int]] = []
         for h in hits:
             a = max(0, h - _CONTEXT_BEFORE)
@@ -233,67 +317,73 @@ class CodeExplainer:
                 ranges.append([a, b])
         out: list[str] = []
         used = 0
-        truncated = False
         for a, b in ranges:
-            room = _MAX_LINES_PER_FILE - used
+            room = _MAX_CODE_LINES - used
             if room <= 0:
-                truncated = True
+                out.append("  ...（节选到此，需要更多可用别的模块名或看源码）")
                 break
             end = min(b, a + room)
             out.extend("%4d| %s" % (i + 1, lines[i]) for i in range(a, end))
             used += end - a
-            if end < b:
-                truncated = True
-            out.append("  ...")
-        return "\n".join(out).rstrip("  ...\n"), truncated
+            if used >= _MAX_CODE_LINES:
+                out.append("  ...（节选到此）")
+                break
+        return "\n".join(out)
+
+    def read_module(self, name: str, topic: str = "") -> str:
+        p, alts = self._resolve_module(name)
+        if p is None:
+            if alts:
+                return ("「%s」匹配到多个模块，请用完整文件名再指定一次：\n%s"
+                        % (name, "\n".join(alts[:12])))
+            return ("没找到模块「%s」。可用模块：\n%s" % (name, self.map_text()))
+        text = self._load(p)
+        doc = self._docstring(text)
+        if len(doc) > _MAX_DOC_CHARS:
+            doc = doc[:_MAX_DOC_CHARS] + "……"
+        toks = self._tokens(topic) if topic else []
+        defs = self._defs(text)
+        parts = ["【斗破模块】%s" % self._rel(p)]
+        if doc:
+            parts.append("【设计说明】\n" + doc)
+        if defs:
+            parts.append("【关键定义】\n" + "\n".join(defs))
+        parts.append("【代码节选】\n" + self._excerpt(text, toks))
+        return "\n\n".join(parts)
 
     # ---------------- 主入口 ----------------
-    def explain(self, topic: str) -> str:
-        """topic = 用户想了解的功能/口令/问题。返回给模型当素材的源码文本。"""
+    def explain(self, topic: str = "", file: str = "") -> str:
+        """模型入口。
+
+        * 传 ``file``：读该模块（设计说明 + 关键定义 + 代码节选）；
+        * 只传 ``topic``：给候选模块清单（模块名 | 职责），由模型自己挑；
+        * 都不传：给全部模块清单。
+        """
+        if (file or "").strip():
+            return self.read_module(file, topic)
         topic = (topic or "").strip()
-        files = self._iter_allowed()
         if not topic:
-            return "【斗破源码文件地图】\n" + self.map_text()
-        topic_toks, score_toks = self._tokens(topic)
-        if not topic_toks:
-            return "话题里没有可检索的关键词。\n【斗破源码文件地图】\n" + self.map_text()
-        scored: list[tuple[int, Path, str]] = []
-        for p in files:
-            rel = self._rel(p)
-            text = self._load(p)
-            sc = self._score(rel, text, score_toks)
-            if sc > 0:
-                scored.append((sc, p, text))
-        scored.sort(key=lambda x: (-x[0], self._rel(x[1])))
-        if not scored:
-            return ("没在斗破源码里定位到「%s」。\n【斗破源码文件地图】\n%s"
-                    % (topic[:40], self.map_text()))
-        picked = scored[:_MAX_FILES]
-        brief = " | ".join("%s（%s）" % (self._rel(p).rsplit("/", 1)[-1],
-                                        (self._docstring(t).splitlines() or [""])[0][:30])
-                           for _sc, p, t in picked)
-        parts = ["【斗破源码速查】话题：%s" % topic[:60],
-                 "相关模块：%s" % brief]
+            return "【斗破模块清单】\n" + self.map_text()
+        picked, fallback = self.candidates(topic)
+        if not picked:
+            return ("没在斗破源码里定位到「%s」，下面是全部模块，挑一个用 "
+                    "file 参数读：\n%s" % (topic[:40], fallback))
+        lines = ["【斗破候选模块】话题：%s" % topic[:60],
+                 "（挑最相关的 1~2 个，用 file 参数读详细设计与代码）"]
         for _sc, p, text in picked:
-            rel = self._rel(p)
-            doc = self._docstring(text)
-            snip, cut = self._snippets(text, topic_toks)
-            block = ["\n===== %s =====" % rel]
-            if doc:
-                block.append("【模块设计说明】\n" + doc)
-            block.append("【相关代码片段】\n" + snip
-                         + ("\n（此文件还有更多内容，仅摘相关片段）" if cut else ""))
-            parts.append("\n".join(block))
-        return "\n".join(parts)
+            name = p.name[:-3] if p.name.endswith(".py") else p.stem
+            doc = self._desc(text, 60)
+            lines.append("- %s | %s" % (name, doc or "（无模块说明）"))
+        return "\n".join(lines)
 
 
 #: 默认实例（root 由 __file__ 推导；热更新靠 mtime 自失效）
 _default: CodeExplainer | None = None
 
 
-def explain(topic: str) -> str:
+def explain(topic: str = "", file: str = "") -> str:
     """模块级快捷入口（deps 注入用）。"""
     global _default
     if _default is None:
         _default = CodeExplainer()
-    return _default.explain(topic)
+    return _default.explain(topic, file)

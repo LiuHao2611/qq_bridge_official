@@ -5,11 +5,14 @@
   - 路径安全：绝对/盘符/../ 反斜杠一律拒绝（默认拒绝）
   - 白名单：只 doupo 业务源码 / 斗破模板 / 斗破文档；.env、config.py
     （含密钥读取）等敏感文件绝不会被检索到
-  - 检索功能：文件地图、话题定位、带行号、空话题兜底
-  - 工具注册：safe 权限（群聊可用）、topic 参数、描述/提示不含「只读/不能改」
-  - 只读纪律：模块源码无任何写操作（open('w')/write/unlink 等）
+  - 两段式：topic→候选清单（带职责）；file→设计说明+关键定义+代码节选
+  - **通用性（回应用户「一百个模块」批评）**：
+      * 白名单里每个模块都必须出现在 map_text（新增模块自动被覆盖）
+      * 每个模块名都必须能被 read_module 读到（不靠手工别名表）
+  - 工具注册：safe 权限（群聊可用）、topic+file 参数、描述不含「只读/不能改」
+  - 只读纪律：模块源码无任何写操作
 
-测试全部用 tmp 树注入 root，绝不读生产数据、更不写生产数据。
+测试全部用 tmp 树注入 root 或只读真实仓库，绝不写生产数据。
 """
 from __future__ import annotations
 
@@ -23,8 +26,8 @@ _REPO = Path(__file__).resolve().parent.parent
 _CE_PATH = _REPO / "src" / "plugins" / "qq_bridge" / "tools" / "code_explain.py"
 
 
-def _load_ce():
-    spec = importlib.util.spec_from_file_location("ce_under_test", _CE_PATH)
+def _load_ce(name: str = "ce_under_test"):
+    spec = importlib.util.spec_from_file_location(name, _CE_PATH)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
@@ -40,6 +43,13 @@ def _make_tree(tmp_path: Path) -> Path:
         "def tower_elevator(floor):\n"
         "    # 电梯直达失败层，消耗金币，满状态挑战\n"
         "    return floor - 1\n", encoding="utf-8")
+    (tmp_path / "src/plugins/doupo/factions.py").write_text(
+        '"""斗破门派系统 · 纯数据层。\n\n'
+        "用途：新手入道随机分配宗门。\n"
+        '"""\nFACTIONS = ["云岚宗"]\n\n\n'
+        "def change_faction(p, fid):\n"
+        '    """转宗：保留通用技，赠一门新宗门入门技。"""\n'
+        "    return p\n", encoding="utf-8")
     (tmp_path / "src/plugins/doupo/test_core.py").write_text(
         "def test_x():\n    assert True\n", encoding="utf-8")
     (tmp_path / "src/plugins/qq_bridge/pic/templates/doupo_battle.py").write_text(
@@ -73,114 +83,113 @@ def test_whitelist_excludes_secrets_and_tests(tmp_path):
     assert "src/plugins/doupo/core.py" in rels
     assert "docs/斗破无限塔_设计方案.md" in rels
     assert "src/plugins/qq_bridge/pic/templates/doupo_battle.py" in rels
-    # 测试文件 / 无关模板 / 无关文档 / 密钥文件 / 主配置 —— 全部排除
     for banned in ("test_core.py", "warframe.py", "其他项目.md",
                    ".env", "qq_bridge/config.py"):
         assert not any(banned in r for r in rels), banned
 
 
-def test_explain_never_leaks_secret(tmp_path):
+def test_never_leaks_secret(tmp_path):
     ce = _load_ce()
-    root = _make_tree(tmp_path)
-    ex = ce.CodeExplainer(root=root)
-    for topic in ("电梯", "API Key", "BOT_OWNER", "core", "周副本"):
-        out = ex.explain(topic)
+    ex = ce.CodeExplainer(root=_make_tree(tmp_path))
+    for out in (ex.explain("API Key"), ex.explain("BOT_OWNER"), ex.map_text()):
         assert "sk-SHOULD-NOT-LEAK" not in out
         assert "BOT_OWNER_QQ" not in out
 
 
-# ---------------- 检索功能 ----------------
-def test_map_text_lists_allowed_files_with_doc(tmp_path):
+# ---------------- 两段式：候选清单 → 读模块 ----------------
+def test_topic_returns_candidate_list_with_responsibility(tmp_path):
     ce = _load_ce()
     ex = ce.CodeExplainer(root=_make_tree(tmp_path))
-    m = ex.map_text()
-    assert "src/plugins/doupo/core.py" in m
-    assert "核心逻辑" in m
-    assert "test_core.py" not in m
+    out = ex.explain("宗门系统是怎么设计的")
+    assert "【斗破候选模块】" in out
+    assert "factions" in out
+    assert "门派系统" in out          # 带职责，模型据此判断
 
 
-def test_explain_topic_finds_source_with_line_numbers(tmp_path):
+def test_read_module_gives_design_doc_defs_and_code(tmp_path):
     ce = _load_ce()
     ex = ce.CodeExplainer(root=_make_tree(tmp_path))
-    out = ex.explain("爬塔电梯怎么设计的")
-    assert "斗破源码速查" in out
-    assert "core.py" in out or "斗破无限塔" in out
-    # 带行号
-    assert re.search(r"^\s*\d+\|", out, re.M) is not None
+    out = ex.read_module("factions")
+    assert "【斗破模块】" in out
+    assert "【设计说明】" in out and "用途：新手入道随机分配宗门" in out
+    assert "【关键定义】" in out
+    assert "【代码节选】" in out
+    # 不需要 topic 也能读
+    assert "门派系统" in ex.explain(file="factions")
 
 
-def test_relevance_ranks_topic_doc_above_long_unrelated_file(tmp_path):
-    """相关度排序：主题命中的文档/源码应排在「靠篇幅刷分」的长文件之前。
+def test_read_module_accepts_full_path_and_reports_unknown(tmp_path):
+    ce = _load_ce()
+    ex = ce.CodeExplainer(root=_make_tree(tmp_path))
+    assert "core" in ex.read_module("src/plugins/doupo/core.py")
+    miss = ex.read_module("不存在的模块")
+    assert "没找到模块" in miss and "factions" in miss   # 兜底给全部清单
 
-    真机教训：正文按 count 累加会让 commands.py 这类长文件虚高，把真正讲
-    「电梯」的设计文档挤出前三（随后被 6000 字截断，模型拿不到关键内容）。
+
+def test_ambiguous_module_name_asks_to_disambiguate(tmp_path):
+    ce = _load_ce()
+    ex = ce.CodeExplainer(root=_make_tree(tmp_path))
+    (tmp_path / "src/plugins/doupo/skills.py").write_text('"""斗技内核。"""\n',
+                                                         encoding="utf-8")
+    (tmp_path / "src/plugins/doupo/doupo_skills.py").write_text('"""斗技卡。"""\n',
+                                                              encoding="utf-8")
+    ex2 = ce.CodeExplainer(root=tmp_path)
+    out = ex2.read_module("skill")
+    assert "匹配到多个模块" in out or "没找到模块" in out
+
+
+# ---------------- 通用性：不靠枚举，新增模块自动覆盖 ----------------
+def test_every_allowed_module_listed_in_map():
+    """白名单里**每一个**文件都必须出现在模块清单里。
+
+    这是对「一百个模块难道测一百次」的回答：不逐个枚举模块名，
+    而是遍历白名单验证覆盖 —— 新增模块只要写了 docstring 就自动出现。
     """
-    import importlib.util as _ilu
-    spec = _ilu.spec_from_file_location("ce_prod", _CE_PATH)
-    ce = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(ce)
-    ex = ce.CodeExplainer()                  # 用真实仓库源码树
-    _topic_toks, score_toks = ex._tokens("爬塔失败后电梯直达上次失败层怎么设计的")
-    scored = []
+    ce = _load_ce("ce_cov")
+    ex = ce.CodeExplainer()          # 真实仓库
+    listed = ex.map_text()
+    missing = []
     for p in ex._iter_allowed():
-        rel = ex._rel(p)
-        sc = ex._score(rel, ex._load(p), score_toks)
-        if sc > 0:
-            scored.append((sc, rel))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    top = [rel for _sc, rel in scored[:3]]
-    # 电梯主题前三必须出现真正讲它的文件，而不是只有长文件 commands.py
-    assert any(("tower" in r) or ("无限塔" in r) or ("core.py" in r) for r in top), top
+        name = p.name[:-3] if p.name.endswith(".py") else p.stem
+        if name not in listed:
+            missing.append(name)
+    assert not missing, missing
 
 
-def test_douji_topic_hits_skill_core_not_button_dispatch(tmp_path):
-    """「斗技模块怎么设计的」必须命中 skills/skill_book/skill_effects 三件套。
-
-    真机事故（2026-11-17 22:30）：AI 答不出斗技设计，日志显示工具确实调了
-    （result_len=5334）——是检索把 button_dispatch.py 排到前面，真正的斗技内核
-    skills.py 没进前三。根因：中文话题「斗技」匹配不到英文名 skill*，
-    且正文词频让长文件/顺带提词的文件刷分。
-    """
-    import importlib.util as _ilu
-    spec = _ilu.spec_from_file_location("ce_douji", _CE_PATH)
-    ce = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(ce)
+def test_every_module_name_is_readable():
+    """每个模块名都必须能被 read_module 读到（含唯一化/消歧路径）。"""
+    ce = _load_ce("ce_read")
     ex = ce.CodeExplainer()
-    out = ex.explain("斗技模块是怎么设计的")
-    files = [f.rsplit("/", 1)[-1] for f in
-             __import__("re").findall(r"===== (.+?) =====", out)]
-    assert files, out[:200]
-    assert files[0] == "skills.py", files          # 内核排第一
-    assert "skill_book.py" in files, files
-    assert "button_dispatch.py" not in files, files
-    # 必须带模块设计说明（docstring），否则模型只能看到零散代码
-    assert "【模块设计说明】" in out
+    bad = []
+    for p in ex._iter_allowed():
+        name = p.name[:-3] if p.name.endswith(".py") else p.stem
+        out = ex.read_module(name)
+        if "【斗破模块】" not in out:
+            bad.append((name, out[:60]))
+    assert not bad, bad
 
 
-def test_module_docstring_is_included():
-    """模块 docstring 就是设计说明（skills.py 写明三阶/四槽），必须喂给模型。"""
-    import importlib.util as _ilu
-    spec = _ilu.spec_from_file_location("ce_doc", _CE_PATH)
-    ce = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(ce)
+def test_common_topics_put_right_module_in_candidates():
+    """常见话题的**正确模块必须进候选**（不要求排第一 —— 模型会看职责自选）。"""
+    ce = _load_ce("ce_topics")
     ex = ce.CodeExplainer()
-    out = ex.explain("斗技怎么设计的")
-    assert "三阶" in out and "四槽" in out, out[:400]
-    # docstring 截断保护
-    doc = ex._docstring("def x():\n    pass\n")
-    assert doc == ""
-
-
-def test_explain_empty_topic_falls_back_to_map(tmp_path):
-    ce = _load_ce()
-    ex = ce.CodeExplainer(root=_make_tree(tmp_path))
-    out = ex.explain("")
-    assert "文件地图" in out
-    assert "src/plugins/doupo/core.py" in out
+    cases = {
+        "宗门系统是怎么设计的": "factions",
+        "斗技怎么学": "skills",
+        "爬塔电梯怎么设计的": "tower_session",
+        "周副本难度怎么定的": "weekly_data",
+        "异火怎么养成": "flame_skills",
+    }
+    failed = {}
+    for topic, expect in cases.items():
+        out = ex.explain(topic)
+        if expect not in out:
+            failed[topic] = out[:300]
+    assert not failed, failed
 
 
 # ---------------- 工具注册口径 ----------------
-def test_tool_registered_safe_with_topic_and_no_readonly_wording():
+def test_tool_registered_safe_with_two_params_and_no_readonly_wording():
     import sys as _sys
     _sys.path.insert(0, str(_REPO / "src"))
     from plugins.qq_bridge.tools.registry import ToolRegistry, RISK_SAFE
@@ -188,16 +197,15 @@ def test_tool_registered_safe_with_topic_and_no_readonly_wording():
 
     reg = ToolRegistry()
 
-    async def cb(topic, ctx):
+    async def cb(topic, file, ctx):
         return "stub"
 
     names = register_builtin_tools(reg, {"doupo_code_explain": cb})
     assert "doupo_code_explain" in names
     t = reg.get("doupo_code_explain")
     assert t.risk == RISK_SAFE          # 群聊可用
-    assert "topic" in t.parameters["properties"]
-    assert "topic" in t.parameters["required"]
-    # 工具描述不主动声明「只读/不能改」
+    assert {"topic", "file"} <= set(t.parameters["properties"])
+    assert t.parameters["required"] == []   # 都可选：能只传 topic 或只传 file
     for w in ("只读", "不能改", "readonly", "不可编辑"):
         assert w not in t.description
 
@@ -208,3 +216,13 @@ def test_no_write_operations_in_module_source():
     for pattern in (r"open\([^)]*['\"][wa]", r"\.write_text\(", r"\.write\(",
                     r"unlink\(", r"rmtree\(", r"os\.remove\("):
         assert re.search(pattern, src) is None, pattern
+
+
+def test_no_hardcoded_alias_table():
+    """禁止退回「中文关键词→文件名」手工别名表。
+
+    2026-11-17 返工教训：别名表是枚举，漏一个错一个，新增模块还得改代码。
+    正确的做法是让模型自己看模块清单的职责来选。
+    """
+    src = _CE_PATH.read_text(encoding="utf-8")
+    assert "_ALIAS" not in src, "别名表已废弃，不要再加回来"

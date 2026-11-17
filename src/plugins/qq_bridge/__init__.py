@@ -4329,10 +4329,13 @@ def _doupo_code_hint() -> str:
         不提这个口径，你只管把设计讲明白。
     """
     return ("（系统注记·斗破源码：群里有人问斗破某个功能/口令/机制「怎么设计的」"
-            "「为什么这么做」「具体怎么实现」，如爬塔电梯、周副本、战斗属性关联、"
-            "异火、斗技学习、完整战斗回看等，请先调用 doupo_code_explain 传入话题"
-            "关键词读相关源码与设计文档，再结合返回内容用大白话把设计逻辑讲清楚，"
-            "带上关键规则和数值口径；回答基于工具返回的真实代码，不要凭空编。"
+            "「为什么这么做」「具体怎么实现」时，用 doupo_code_explain **分两步**查："
+            "① 先用 topic 传用户问的话题（如「宗门系统」「斗技怎么学」「爬塔电梯」），"
+            "拿到候选模块清单（模块名 | 职责）；② 再从清单里挑最相关的 1~2 个，"
+            "用 file 传模块名（如 factions、skills、doupo_faction、core）读该模块的"
+            "设计说明与代码。然后用自己的话把设计逻辑讲清楚，带上关键规则和数值口径。"
+            "回答必须基于工具返回的真实代码，不要凭空编；候选清单里的职责描述通常"
+            "已经说明该模块管什么，据此判断，不要因为模块名是英文就跳过。"
             "讲解时正常说设计本身，不要主动声明「只读」「不能改代码」之类的话。）")
 
 
@@ -4414,10 +4417,10 @@ def _register_m2_tools() -> list[str]:
     # ---- 斗破源码讲解（2026-11-17：群里玩斗破时让 AI 读源码讲设计逻辑）----
     # 纯只读检索：白名单/路径校验/截断都在 code_explain 内。同步文件读放到线程，
     # 不阻塞事件循环（tools.registry.dispatch 已有超时哨兵）。
-    async def _doupo_code_explain(topic: str, tctx) -> str:
+    async def _doupo_code_explain(topic: str, file: str, tctx) -> str:
         import asyncio
         from .tools import code_explain as _ce
-        return await asyncio.to_thread(_ce.explain, topic)
+        return await asyncio.to_thread(_ce.explain, topic, file)
 
     # ---- M8 智能家居 FC 工具回调（2026-10-21：AI 对话自然语言控设备闭环）----
     # 口径同 /ha 命令族：白名单由 HAClient._check 双保险；高敏设备（门锁/摄像头）
