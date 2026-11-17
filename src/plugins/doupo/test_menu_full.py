@@ -404,6 +404,16 @@ CASES = [
          must=["切磋 ·", "荣誉"], ban=["没有待应"]),
     dict(id="34_duel_decline", text="拒战", uid=B, prep="duel_challenge", img=None,
          must=["婉拒"], ban=["没有待应"]),
+    # 35~38：2026-11-17 新增爬塔副本（无限层 / 宝箱极低概率掉武器 / 三选一）
+    # 与「装备」替换玄重尺。塔是纯文本密集战报，不出图（img=None 由 runner 通用判据守）。
+    dict(id="35_tower", text="爬塔", img=None,
+         must=["第 1 层"], ban=["用法"]),
+    dict(id="36_tower_status", text="塔层", img=None,
+         must=["试炼之塔"], ban=["用法"]),
+    dict(id="37_tower_settle", text="塔结算", img=None,
+         must=["结算", "爬塔进度"], ban=["用法"]),
+    dict(id="38_equip", text="装备", img=None,
+         must=["可装备"], ban=["用法", "尚未入道"]),
 ]
 
 
@@ -484,7 +494,7 @@ async def run_case(case):
 
 
 async def static_checks():
-    # 菜单唯一源 = MENU_GROUPS（当前 33 条），每条口令都要出现在纯文本菜单里（格式无缺失）
+    # 菜单唯一源 = MENU_GROUPS（当前 37 条），每条口令都要出现在纯文本菜单里（格式无缺失）
     menu_txt = cmds.menu_text()
     total = cmds.menu_total()
     # 用例数可多于菜单条数：同一口令按状态分流会有多条用例（如异火「有传承出图」+

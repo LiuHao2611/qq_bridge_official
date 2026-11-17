@@ -100,7 +100,8 @@ async def main():
     check("菜单含 斗破菜单 口令", "斗破菜单" in menu)
     # 关键：菜单条数必须等于 __init__.py 里注册的 matcher 数（e2e 里再做静态断言）
     # 2026-11-16 新增「学斗技」→ 29 + 1 = 30（必须仍等于 __init__.py 的 matcher 数）
-    check("菜单条数 = menu_total()", commands.menu_total() == 33,
+    # 2026-11-17 新增爬塔副本 4 条（爬塔/塔层/塔结算/装备）→ 33 + 4 = 37
+    check("菜单条数 = menu_total()", commands.menu_total() == 37,
           f"menu_total={commands.menu_total()}")
     # 新设计：菜单是唯一切换口（斗破菜单），其余口令全部纯中文、不再带前缀
     lines = [l.split(" —— ")[0].strip() for l in menu.splitlines() if " —— " in l]
@@ -406,7 +407,76 @@ async def main():
     check("抢 缺目标被挡", "用法" in r, r[:40])
 
     # ------------------------------------------------------------------
-    # 12. 存档落盘可回读
+    # 12. 爬塔副本 / 装备替换（2026-11-17）
+    # ------------------------------------------------------------------
+    # 塔会话是进程内 STORE，先清干净避免跨用例串味。
+    commands.ts.STORE.clear(A)
+    r = await commands.cmd_tower_status(store, A)
+    check("塔层 无会话给入口", "试炼之塔" in r and "历史最高" in r, r[:60])
+
+    r = await commands.cmd_tower(store, A, "")
+    check("爬塔 首层出战报", "第 1 层" in r, r[:60])
+    check("爬塔 有战利品或阵亡结算", "1." in r or "力竭" in r, r[:60])
+
+    # 强制一段进度，验结算奖与防重复领
+    st = commands.ts.STORE.begin(A, seed="cmdtest")
+    st["floor"] = 3
+    st["temp_hp"] = 100
+    commands.ts.STORE.save(A, st)
+    gold_before = int((await store.get_player(A))["gold"])
+    r = await commands.cmd_tower_settle(store, A)
+    check("塔结算 按层发奖", "3 层" in r and "金币" in r, r[:60])
+    pa2 = await store.get_player(A)
+    check("塔结算 金币到手", int(pa2["gold"]) > gold_before,
+          f"{gold_before} -> {pa2['gold']}")
+    check("塔结算 记录最高层", int(pa2.get("tower_best", 0)) >= 3, str(pa2.get("tower_best")))
+    r = await commands.cmd_tower_settle(store, A)
+    check("塔结算 不可重复领", "没有可结算" in r, r[:40])
+    commands.ts.STORE.clear(A)
+
+    r = await commands.cmd_equip(store, A, "")
+    check("装备 无参列可装备", "可装备" in r and "玄重尺" in r, r[:60])
+    r = await commands.cmd_equip(store, A, "血斧")
+    check("装备 未拥有被挡", "没有" in r or "未拥有" in r, r[:40])
+    pa3 = await store.get_player(A)
+    core.grant_weapon(pa3, "血斧")
+    await store.put_player(pa3)
+    r = await commands.cmd_equip(store, A, "血斧")
+    check("装备 换成血斧", "血斧" in r and "力量" in r, r[:60])
+    pa4 = await store.get_player(A)
+    check("装备 已写回存档", core.equipped_weapon(pa4) == "血斧", core.equipped_weapon(pa4))
+    r = await commands.cmd_equip(store, A, "玄重尺")
+    check("装备 换回玄重尺", "玄重尺" in r, r[:40])
+
+    # 层数推进：真实踩过的坑——cmd_tower 忘了 st["floor"]=r["floor"] 且没 save，
+    # 导致「爬塔」永远停在第 1 层，可以无限刷第一层奖励。
+    C = "100009"
+    pc = core.create_player(C, "塔客", G)
+    pc["lv"] = 100
+    pc["hp"] = core.stats(pc)["体力"]
+    pc["mp"] = core.mp_max(pc)
+    await store.put_player(pc)
+    won = False
+    stx = None
+    for _ in range(6):
+        commands.ts.STORE.clear(C)
+        r = await commands.cmd_tower(store, C, "")
+        stx = commands.ts.STORE.get(C)
+        if "力竭" not in r:
+            won = True
+            break
+    check("爬塔 高等级首层必胜", won, r[:50])
+    if won:
+        check("爬塔 胜利后层数推进", int(stx["floor"]) == 1, str(stx["floor"]))
+        r = await commands.cmd_tower(store, C, "1")      # 先领三选一
+        r = await commands.cmd_tower(store, C, "")        # 再打下一层
+        st2 = commands.ts.STORE.get(C)
+        check("爬塔 能进入第 2 层", "第 2 层" in r or (st2 and int(st2["floor"]) >= 2),
+              (r[:50], st2 and st2.get("floor")))
+    commands.ts.STORE.clear(C)
+
+    # ------------------------------------------------------------------
+    # 13. 存档落盘可回读
     # ------------------------------------------------------------------
     store2 = Store(os.path.join(tmp, "doupo.json"))
     await store2.load()

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 import re
 import time
@@ -17,6 +18,65 @@ from . import config as cfg
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
+from . import weapon_data as wd
+from . import tower_data as td
+
+#: 装备默认武器名（老档没有 equipped_weapon 字段时兜底）
+DEFAULT_WEAPON = "玄重尺"
+
+
+def _load_weapon_data():
+    """weapon_data 模块（已 import，包一层便于测试替换 / 语义清晰）。"""
+    return wd
+
+
+def equipped_weapon(p) -> str:
+    """当前装备的武器名；老档 / 空值兜底玄重尺。"""
+    return p.get("equipped_weapon") or DEFAULT_WEAPON
+
+
+def weapon_base_row(p) -> dict:
+    """当前装备武器的四词条**基础值**（未乘强化成长）。
+
+    唯一口径：``stats()`` / ``enhance_preview()`` / 人物面板三处共用，
+    杜绝「人物卡写玄重尺、实际拿血斧」的图文不一致（2026-11-17 用户要求武器可替换）。
+    """
+    name = equipped_weapon(p)
+    if name == "玄重尺":
+        return dict(cfg.WEAPON["stats"])
+    row = (wd.WEAPONS.get(name) or {}).get("stats")
+    return dict(row) if row else dict(cfg.WEAPON["stats"])
+
+
+def _weapon_rows(p) -> tuple[dict, dict]:
+    """(当前, 下一级) 四词条实际值。满级只有玄重尺走硬编码 max_stats 表。"""
+    name = equipped_weapon(p)
+    w = int(p.get("weapon", 0))
+    base = weapon_base_row(p)
+    cap = cfg.WEAPON["max_internal"]      # 9
+    top = cap - 1                          # 无硬编码表的武器封顶用 L=8
+
+    def at(internal: int) -> dict:
+        if name == "玄重尺" and internal >= cap:
+            return {k: int(cfg.WEAPON["max_stats"][k]) for k in base}
+        return {k: cfg.weapon_stat(v, min(internal, top)) for k, v in base.items()}
+
+    return at(w), at(w + 1)
+
+
+def weapon_panel(p) -> dict:
+    """当前武器的面板/卡片展示数据（名称、显示强化级、四词条）。
+
+    强化等级是「武器强化」而非某把武器专属，换武器后成长一并继承，
+    所以 level 对任意武器都返回 ``L+1``（1~10）。
+    玄重尺升到十级觉醒为「异火恒古尺」——显示名沿用原实机文案，键名仍是玄重尺。
+    """
+    w = int(p.get("weapon", 0))
+    cur, _ = _weapon_rows(p)
+    name = equipped_weapon(p)
+    if name == "玄重尺" and w >= cfg.WEAPON["max_internal"]:
+        name = cfg.WEAPON["name_max"]
+    return {"name": name, "level": cfg.weapon_display_level(w), "stats": cur}
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +107,9 @@ def create_player(qq, name, group) -> dict:
         "lv_ver": 3,          # 原著13阶存档标记（store 用它判断要不要迁移）
         "gold": cfg.START_GOLD, "luck": cfg.START_LUCK,
         "weapon": 0,
+        # 2026-11-17 装备/爬塔：weapon 保留为玄重尺强化等级 0-9；
+        # weapons=持有武器表、equipped_weapon=当前装备、tower_best=历史最高层。
+        "weapons": ["玄重尺"], "equipped_weapon": "玄重尺", "tower_best": 0,
         "hp": 0, "mp": 0,
         "skills": {},
         "flames": {n: 0 for n in cfg.FLAME_NAMES},
@@ -96,17 +159,19 @@ def stats(p) -> dict:
     """当前六维（力量/敏捷/斗气/防御/体力）+ 机缘。
 
     [源码] 基础值走 c_stat；玄重尺 4 词条加算；L=9 走硬编码 2000/2000/1000/1200。
+
+    2026-11-17 装备系统：默认装备玄重尺时**逐字节沿用原逻辑**（实机数值断言 / 平衡
+    全部不动）；装备副本掉落的其他武器时，四词条改取 weapon_data.WEAPONS[name]["stats"]，
+    仍按同一强化等级成长（weapon_stat），保证换武器真实改变面板与战斗。
     """
     lv = int(p.get("lv", 1))
     out = {k: c_stat(v, lv) for k, v in cfg.HERO_BASE.items()}
 
-    w = int(p.get("weapon", 0))
-    if w >= cfg.WEAPON["max_internal"]:
-        for k, v in cfg.WEAPON["max_stats"].items():
-            out[k] = out.get(k, 0) + v
-    else:
-        for k, v in cfg.WEAPON["stats"].items():
-            out[k] = out.get(k, 0) + cfg.weapon_stat(v, w)
+    # 武器四词条：与 weapon_panel / enhance_preview 同一口径（_weapon_rows）。
+    # 装备玄重尺且 w<9 时逐字节等于原逻辑（实机数值断言 / 平衡全部不动）。
+    cur_weapon, _ = _weapon_rows(p)
+    for k, v in cur_weapon.items():
+        out[k] = out.get(k, 0) + v
 
     for k, v in (p.get("bonus") or {}).items():
         out[k] = out.get(k, 0) + int(v)
@@ -377,7 +442,8 @@ def _pick_skill(p, mp: int, rng=random.random):
     return e, c
 
 
-def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None) -> dict:
+def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
+         crit_add=0.0, extra_effects=None) -> dict:
     """一次出手：entry 为 None 时用武器普攻，否则按该斗技算伤害。
 
     2026-11-15 多维效果：传入 ``fx_target`` 时才结算技能效果（破防/连击/增伤/
@@ -385,7 +451,7 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None) -> d
     改造前逐字节一致**，只是多两个空字段，任何既有调用方/测试都不受影响。
     """
     st = stats(p)
-    crit = rng() * 100 < crit_rate(p)
+    crit = rng() * 100 < (crit_rate(p) + float(crit_add or 0))
     if entry is not None:
         lv = int((p.get("skills") or {}).get(entry["name"], 1))
         raw = (st["力量"] * 0.5 + st["斗气"] * 1.5) * sk_mod.skill_mult(entry, lv)
@@ -401,7 +467,8 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None) -> d
     dmg = base
     if entry is not None and fx_target is not None:
         self_st = fx_self if fx_self is not None else fx.new_state()
-        r = fx.on_hit(entry.get("effects") or [], self_st, fx_target, base, rng, ctx)
+        effs = list(entry.get("effects") or []) + list(extra_effects or [])
+        r = fx.on_hit(effs, self_st, fx_target, base, rng, ctx)
         heal_ratio, notes = r["heal_ratio"], r["notes"]
         # 破防在 on_hit 里写入 fx_target["def_shred"]，这里读取后重算本次伤害；
         # 条件/连击/增幅加成走 bonus。
@@ -602,8 +669,16 @@ def roll_hero_aid(p, rng=random.random) -> dict | None:
     return {"name": name, "rate": rate, "luck": max(0, int(p.get("luck", 0)))}
 
 
-def fight(p, mon, rng=random.random, aid=None, roll_aid=True) -> dict:
+def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
+
+    ``tower_mod``（2026-11-17 爬塔扩展点，默认 None 时逐字节不影响任何既有调用）：
+      塔词缀/三选一增益通过它注入，**不改内核战斗逻辑、不新增 effect 类型**：
+        atk_mult / hp_mult / def_mult —— 怪物数值缩放（狂暴/难度）
+        self_effects  —— 玩家每次出手追加的 effect 列表（连击/破防/吸血）
+        evade_add / crit_add —— 玩家闪避/暴击率加成（百分点）
+        heal_mult —— 玩家吸血/回血倍率（Boss 禁疗 <1）
+        reflect —— 怪物反伤比例（Boss 反弹玩家伤害的占比）
 
     斗气是**跨战斗结转的资源**（2026-11-16 用户「去掉强制回满斗气，不然突破
     就失去了意义」）：开战用玩家当前剩余 ``p["mp"]``，战中按技能阶位逐次扣减，
@@ -624,9 +699,20 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True) -> dict:
     m_atk = int(mon["atk"])
     m_def = int(mon["def"])
 
+    tm = tower_mod or {}
+    if tm:
+        m_hp = max(1, int(m_hp * float(tm.get("hp_mult", 1.0))))
+        m_atk = max(1, int(m_atk * float(tm.get("atk_mult", 1.0))))
+        if tm.get("def_mult"):
+            m_def = max(0, int(m_def * float(tm["def_mult"])))
+
     rounds, dmg_log, taken = 0, [], 0
-    dodge = dodge_rate(p)
+    dodge = min(95, dodge_rate(p) + float(tm.get("evade_add", 0)))
+    crit_add = float(tm.get("crit_add", 0))
     lifesteal = 0.02 * int((p.get("flames") or {}).get("三千焱炎火", 0))
+    heal_mult = float(tm.get("heal_mult", 1.0))
+    self_effects = list(tm.get("self_effects") or [])
+    reflect = float(tm.get("reflect", 0))
     var = max(0.0, float(cfg.MON_DMG_VAR))
     # 2026-11-15 多维效果：本场临时状态（战后即弃，绝不写回 p/mon）
     p_fx, m_fx = fx.new_state(), fx.new_state()
@@ -647,15 +733,22 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True) -> dict:
         rounds += 1
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
-        hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx)
+        hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
+                   crit_add=crit_add, extra_effects=self_effects)
         if entry is not None:
             mp -= cost
         m_hp -= hit["dmg"]
         dmg_log.append(hit)
-        # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）
-        heal_frac = lifesteal + float(hit.get("heal_ratio", 0))
+        # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）× 塔禁疗倍率
+        heal_frac = (lifesteal + float(hit.get("heal_ratio", 0))) * heal_mult
         if heal_frac > 0:
             hp = min(st["体力"], hp + int(hit["dmg"] * heal_frac))
+        # 塔·怪物反伤：玩家造成伤害后按比例反弹（Boss 词缀）
+        if reflect > 0 and hit["dmg"] > 0:
+            back = max(1, int(hit["dmg"] * reflect))
+            hp -= back
+            taken += back
+            dmg_log.append({"dmg": back, "kind": "反伤", "taken": True, "reflect": True})
         # 逐维文案并入主 hit 的 notes（主日志 kind/dmg/skill 字段一律不动）
 
         if m_hp <= 0:
@@ -846,6 +939,175 @@ def encounter(p, rng=random.random) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# 爬塔副本（2026-11-17）—— 见 docs/斗破爬塔副本_设计方案.md
+#
+# 纪律：
+#   * 塔战斗用 player 的**深副本**，会话临时增益并入副本，战斗结果只回写会话，
+#     绝不污染永久存档的 hp/mp/wins/exp；只有死亡/结算时才据层数结算一次。
+#   * 怪物数值仍走 monster_scaled 反解，难度只通过虚拟 species 的 hard 调，
+#     不碰 MON_ROUND_RATIO / TTK_PLAYER 全局平衡常量。
+#   * 词缀/增益全部映射到 fight 的 tower_mod 扩展点，不新增 effect 类型。
+# ---------------------------------------------------------------------------
+def tower_mod_from_affixes(affixes: list[str], temp_effects: list[dict]) -> dict:
+    """把 Boss 词缀 + 玩家三选一效果折算成 fight 的 tower_mod。"""
+    mod = {"hp_mult": 1.0, "atk_mult": float(td.TOWER_ATK_SCALE), "def_mult": 1.0,
+           "evade_add": 0.0, "crit_add": 0.0, "heal_mult": 1.0,
+           "reflect": 0.0, "self_effects": []}
+
+    # 怪物侧词缀（AFFIXES 的 effect → 数值化注入）
+    for a in affixes or []:
+        e = td.AFFIXES.get(a)
+        if not e:
+            continue
+        t, v = e["t"], float(e.get("v", 0))
+        if t == "empower":          # 狂暴 → 怪物攻击提升
+            mod["atk_mult"] *= 1.0 + v
+        elif t == "lifesteal":      # 再生 → 怪物更耐打（等效血上限）
+            mod["hp_mult"] *= 1.0 + v
+        elif t == "reflect":        # 反伤 → 怪物反弹
+            mod["reflect"] += v
+        elif t == "debuff_heal":    # 禁疗 → 玩家回血减半
+            mod["heal_mult"] *= 1.0 - v
+        elif t == "debuff_atk":     # 吸攻 → 玩家伤害降低（等效怪防提升）
+            mod["def_mult"] *= 1.0 + v
+        elif t == "pierce":         # 破甲 → 怪物无视部分防御（等效攻击提升）
+            mod["atk_mult"] *= 1.0 + v
+
+    # 玩家侧三选一（temp_effects 是 loot 的 effect 类条目）
+    for loot in temp_effects or []:
+        t = td.LOOT_EFFECT_T.get(loot.get("key"))
+        v = float(loot.get("v", 0))
+        if t == "crit":
+            mod["crit_add"] += v * 100
+        elif t in ("chain", "pierce", "lifesteal"):
+            mod["self_effects"].append({"t": t, "v": v, "d": 99, "kind": "塔增益"})
+    return mod
+
+
+def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
+                temp_effects=None) -> dict:
+    """打塔里的一层（第 st['floor']+1 层）。
+
+    :param p        玩家（只读；战斗在深副本上进行）
+    :param st       会话状态 dict（tower_session.new_state）
+    :param rng      确定性随机（按会话种子）
+    :return {win, floor, kind, name, affixes, rounds, taken, hp, mp, log, ...}
+            其中 hp/mp 是**战斗后会话应保留的值**，由调用方写回 st，不动 p。
+    """
+    floor = int(st.get("floor", 0)) + 1
+    kind = td.floor_kind(floor)
+    affixes = td.affixes_for(floor, rng)
+    name = td.boss_name(floor) if kind == "boss" else (
+        "精英·" + rng_choice(cfg.MONSTERS, rng)["name"] if kind == "elite"
+        else rng_choice(cfg.MONSTERS, rng)["name"])
+
+    # 玩家深副本：并入本轮临时属性增益
+    fp = copy.deepcopy(p)
+    bonus = dict(fp.get("bonus") or {})
+    for k, v in (temp_bonus or {}).items():
+        bonus[k] = int(bonus.get(k, 0)) + int(v)
+    fp["bonus"] = bonus
+    # 气血/斗气来自会话临时态（首层用满值）
+    st_max = stats(fp)
+    fp["hp"] = int(st.get("temp_hp") if st.get("temp_hp") is not None else st_max["体力"])
+    fp["mp"] = int(st.get("temp_mp") if st.get("temp_mp") is not None else mp_max(fp))
+
+    # 虚拟 species：只给 hard/lv/倍率，数值由 monster_scaled 反解
+    species = {
+        "name": name,
+        "lv": td.floor_monster_lv(floor, int(p.get("lv", 1))),
+        "hard": td.floor_hard(floor),
+        "exp_mul": 1.0, "gold_mul": 1.0,
+        "kind": "塔·" + kind,
+    }
+    mon = monster_scaled(fp, species)
+    mod = tower_mod_from_affixes(affixes, temp_effects)
+    # 武器专属效果注入（2026-11-17 用户"武器影响斗技效果"）：当前装备武器的
+    # special 按 DIM_MAP 映射到 tower_mod。仅玄重尺默认时同样生效，
+    # 让"换武器真的改变战斗"，而不是只有面板数字变化。
+    eq = equipped_weapon(p)
+    sp = (wd.WEAPONS.get(eq) or {}).get("special") or {}
+    wdim, wv = sp.get("dim"), float(sp.get("v", 0))
+    if wdim == "damage":
+        mod["self_effects"].append({"t": "empower", "v": wv, "d": 99, "kind": eq + "·" + sp.get("scope", "")})
+    elif wdim == "hits":
+        mod["self_effects"].append({"t": "chain", "v": wv, "d": 99, "kind": eq})
+    elif wdim == "evade":
+        mod["evade_add"] += wv * 100
+    elif wdim == "defense":
+        mod["heal_mult"] *= (1.0 + wv)   # 减伤用等效回血近似（不改内核减伤口径）
+    elif wdim == "speed":
+        mod["crit_add"] += wv * 50       # 敏捷→暴击的一半（映射口径见 weapon_data）
+    # Boss/精英层提高攻击基数（在 TOWER_ATK_SCALE 之上），让机制层真正更难：
+    # Boss 1.6×、精英 1.25×、普通 1.0×。难度的"血"维度已由 hard 承担。
+    atk_tier = {"boss": 1.6, "elite": 1.25, "normal": 1.0}[kind]
+    # 随层数持续叠加的难度（无限层的终点），叠加在词缀倍率之上。
+    diff = td.floor_difficulty(floor)
+    mod["atk_mult"] = float(mod.get("atk_mult", 1.0)) * atk_tier * diff["atk_mult"]
+    mod["hp_mult"] = float(mod.get("hp_mult", 1.0)) * diff["hp_mult"]
+    r = fight(fp, mon, rng=rng, tower_mod=mod)
+
+    # 层间回血：胜利后回一口，写进返回 hp（由调用方写回会话），避免连爬必死。
+    # 战斗副本 fp 的 hp 已被 fight 写为剩余；这里只在胜利时加成。
+    hp_after = int(fp.get("hp", 0))
+    rest = 0
+    if r["win"]:
+        cap = int(st_max["体力"])
+        want = int(cap * float(td.FLOOR_REST_HEAL))
+        # 只报「实际回了多少」：满血时 rest=0，战报不该出现「歇息 +12040」的假数字。
+        rest = max(0, min(cap, hp_after + want) - hp_after)
+        hp_after += rest
+
+    return {
+        "win": bool(r["win"]), "floor": floor, "kind": kind, "name": name,
+        "affixes": affixes, "rounds": int(r["rounds"]), "taken": int(r["taken"]),
+        "hp": hp_after, "mp": int(fp.get("mp", 0)), "rest_heal": rest,
+        "log": r["log"], "mon": mon, "hero_aid": r.get("hero_aid"),
+    }
+
+
+def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None) -> list[dict]:
+    """本层开宝箱：判定宝箱 → 判定武器 → 入背包/持有表。返回掉落记录。
+
+    ``floor`` 必须是**刚打完的这一层**。不能默认读 ``st['floor']``：
+    胜利后调用方已把通过层数推进到本层，若再读 st 会按下一层判定（曾经错位一层，
+    导致第 10 层 Boss 宝箱按第 11 层算、武器解锁层提前）。
+    """
+    floor = int(floor if floor is not None else st.get("floor", 0))
+    if rng() >= td.chest_rate(floor):
+        return []
+    out = []
+    owned = set(owned_weapons(p))
+    pool = td.weapon_pool_for(floor, owned)
+    if pool and rng() < td.WEAPON_DROP_IN_CHEST:
+        w = rng_choice(pool, rng)
+        if grant_weapon(p, w):
+            out.append({"type": "weapon", "name": w})
+            return out
+    # 否则给材料（炎星石 1~3）
+    n = 1 + int(rng() * 3)
+    add_item(p, "炎星石", n)
+    out.append({"type": "material", "name": "炎星石", "n": n})
+    return out
+
+
+def tower_settle(p, st: dict) -> dict:
+    """结算本轮：按已通过层数给金币/经验、更新 tower_best。仅调用一次。"""
+    if st.get("settled"):
+        return {"ok": False, "msg": "本轮已结算", "gold": 0, "exp": 0}
+    floors = int(st.get("floor", 0))
+    rew = td.clear_reward(floors)
+    p["gold"] = int(p.get("gold", 0)) + rew["gold"]
+    p["exp"] = int(p.get("exp", 0)) + rew["exp"]
+    best = int(p.get("tower_best", 0))
+    new_best = max(best, floors)
+    p["tower_best"] = new_best
+    st["settled"] = True
+    return {"ok": True, "floors": floors, "gold": rew["gold"], "exp": rew["exp"],
+            "best": new_best, "new_record": new_best > best}
+
+
 def duel(p, vic, rng=random.random) -> dict:
     """掠夺：双方各用自己四槽随机互殴（p 先手）。斗气不足转武器普攻。
 
@@ -959,6 +1221,38 @@ def bag_slots(p) -> list:
 
 
 # ---------------------------------------------------------------------------
+# 装备系统（2026-11-17：副本掉落武器 → 持有表 → 切换装备）
+# ---------------------------------------------------------------------------
+def owned_weapons(p) -> list[str]:
+    """玩家持有的武器名。老档无字段时兜底只有玄重尺。"""
+    ws = p.get("weapons")
+    if not ws:
+        ws = ["玄重尺"]
+        p["weapons"] = ws
+    return list(ws)
+
+
+def grant_weapon(p, name: str) -> bool:
+    """获得一把武器；已有返回 False（不重复发放）。"""
+    if name not in wd.WEAPONS:
+        return False
+    ws = owned_weapons(p)
+    if name in ws:
+        return False
+    ws.append(name)
+    p["weapons"] = ws
+    return True
+
+
+def equip_weapon(p, name: str) -> dict:
+    """切换当前装备；须已持有。返回 {ok, name, msg}。"""
+    if name not in owned_weapons(p):
+        return {"ok": False, "msg": "你还没有「%s」，去爬塔开宝箱吧。" % name}
+    p["equipped_weapon"] = name
+    return {"ok": True, "name": name, "msg": "已装备「%s」。" % name}
+
+
+# ---------------------------------------------------------------------------
 # 强化（玄重尺）  [源码 l.java:361-368 / h.java:80-102]
 # ---------------------------------------------------------------------------
 def enhance_cost(p) -> int:
@@ -975,22 +1269,24 @@ def enhance(p) -> dict:
         return {"ok": False, "reason": "stone", "need": cost, "have": count_item(p, "炎星石")}
     p["weapon"] = w + 1
     _refill(p)
+    # 「异火恒古尺」是玄重尺专属觉醒；装备其它武器时只报等级，不冒这条文案。
+    evolved = p["weapon"] > 8 and equipped_weapon(p) == "玄重尺"
     return {
         "ok": True, "internal": p["weapon"],
         "display": cfg.weapon_display_level(p["weapon"]),
-        "name": cfg.weapon_name(p["weapon"]),
-        "evolved": p["weapon"] > 8,
+        "name": cfg.WEAPON["name_max"] if evolved else equipped_weapon(p),
+        "evolved": evolved,
     }
 
 
 def enhance_preview(p) -> dict:
-    """强化框预览：当前 4 词条 -> 下一级 4 词条（实机那个「1级 ↗ 2级」框）。"""
+    """强化框预览：当前 4 词条 -> 下一级 4 词条（实机那个「1级 ↗ 2级」框）。
+
+    2026-11-17：改用 ``_weapon_rows``，换武器后预览的是**当前武器**成长，
+    不再永远显示玄重尺（否则强化血斧时预览数字与实际面板不一致）。
+    """
     w = int(p.get("weapon", 0))
-    cur, nxt = {}, {}
-    for k, base in cfg.WEAPON["stats"].items():
-        cur[k] = cfg.weapon_stat(base, w) if w < 9 else cfg.WEAPON["max_stats"][k]
-        n2 = w + 1
-        nxt[k] = cfg.weapon_stat(base, n2) if n2 < 9 else cfg.WEAPON["max_stats"][k]
+    cur, nxt = _weapon_rows(p)
     return {"cur": cur, "next": nxt, "cost": w + 1,
             "disp": cfg.weapon_display_level(w),
             "next_disp": cfg.weapon_display_level(w + 1)}
