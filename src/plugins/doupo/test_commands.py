@@ -16,6 +16,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 import types
 
 # PLUGINS_DIR 供 `from doupo import ...`；REPO_ROOT 供插件 __init__.py 里的
@@ -468,12 +469,52 @@ async def main():
     check("爬塔 高等级首层必胜", won, r[:50])
     if won:
         check("爬塔 胜利后层数推进", int(stx["floor"]) == 1, str(stx["floor"]))
-        r = await commands.cmd_tower(store, C, "1")      # 先领三选一
+        # 2026-11-17 用户要求：战利品直接回 1/2/3，不要「爬塔 1」
+        r = await commands.cmd_pick(store, C, 1)
+        check("裸数字 1 直接领取战利品", "获得" in r, r[:50])
+        check("领取后待选清空",
+              not (commands.ts.STORE.get(C) or {}).get("pending_loot"))
         r = await commands.cmd_tower(store, C, "")        # 再打下一层
         st2 = commands.ts.STORE.get(C)
         check("爬塔 能进入第 2 层", "第 2 层" in r or (st2 and int(st2["floor"]) >= 2),
               (r[:50], st2 and st2.get("floor")))
+
+    # 超时作废：把截止时间拨到 2 分钟前，再回 1 必须领不到（奖励失去）
+    s = commands.ts.STORE.begin(C, seed="ttl")
+    commands.ts.set_loot(s, [
+        {"kind": "hp", "key": "回春散", "v": 0.35, "label": "回春散", "desc": "回复35%"},
+        {"kind": "hp", "key": "b", "v": 0.1, "label": "备选B", "desc": "x"},
+        {"kind": "hp", "key": "c", "v": 0.1, "label": "备选C", "desc": "x"},
+    ], ttl=60.0, now=time.time() - 120)
+    commands.ts.STORE.save(C, s)
+    r = await commands.cmd_pick(store, C, 1)
+    check("超时 1 分钟领不到奖励", "超时作废" in r, r[:50])
+    check("超时后待选被清空",
+          not (commands.ts.STORE.get(C) or {}).get("pending_loot"))
+    r = await commands.cmd_pick(store, C, 2)
+    check("无待选时保持沉默（不吞群聊）", r == "", r[:40])
     commands.ts.STORE.clear(C)
+
+    # 机遇竞猜：属于同一类「等玩家回话」的业务，必须同样教会裸数字作答 + 60 秒时限，
+    # 且裸数字入口要能直接作答（2026-11-17 用户要求统一口径）。
+    from doupo import quiz_session as _qs  # noqa: PLC0415
+    ch_quiz = {"name": "古墓残卷", "text": "残卷上写着一道题。", "tone": "good",
+               "quiz": {"question": "异火榜共收录多少种异火？",
+                        "options": ["十九", "二十", "二十二"], "answer": 1,
+                        "reward": {"gold": 120}}}
+    txt = "\n".join(commands._chance_lines(ch_quiz, A))
+    check("机遇竞猜 教会直接回 1/2/3", "1/2/3" in txt, txt[-60:])
+    check("机遇竞猜 说明时限秒数", "%d 秒" % cfg.CHOICE_TTL in txt, txt[-60:])
+    r = await commands.cmd_pick(store, A, 2)
+    check("竞猜 裸数字 2 直接作答", "答对" in r and "金币" in r, r[:50])
+    # 序号必须从 1 开始，且「照屏幕上的数字回答」必须命中同一个选项。
+    # 真实踩过的错位：选项按 0 开始打印，玩家回 2 却判到第 2 个（0-based 下标 2）。
+    txt2 = "\n".join(commands._chance_lines(ch_quiz, A))
+    check("竞猜选项从 1 编号", "1.十九 / 2.二十 / 3.二十二" in txt2, txt2[-60:])
+    r = await commands.cmd_pick(store, A, 3)
+    check("回 3 命中屏幕上第 3 项（判错并报正确项）",
+          "答错" in r and "2.二十" in r, r[:60])
+    _qs.STORE.clear(A)
 
     # ------------------------------------------------------------------
     # 13. 存档落盘可回读

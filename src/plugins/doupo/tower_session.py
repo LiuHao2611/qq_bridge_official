@@ -9,12 +9,18 @@
 """
 from __future__ import annotations
 
+import math
 import random
 import threading
 import time
 
 #: 会话超时（秒）：长时间无操作自动结算，不吞奖励
 DEFAULT_TTL = 900          # 15 分钟
+
+#: 战利品三选一有效期（秒）：超过就作废且**该层奖励失去**。
+#: 2026-11-17 用户要求「凡是需要回答的业务都 1 分钟内回复，超时失效并失去奖励」。
+#: 产品唯一源是 ``config.CHOICE_TTL``；此处默认值必须与之一致（有守门测试）。
+DEFAULT_LOOT_TTL = 60.0
 
 
 def new_state(qq, seed=None) -> dict:
@@ -33,6 +39,8 @@ def new_state(qq, seed=None) -> dict:
         "chests": [],            # 本轮开箱记录 [{floor, item, weapon?}]
         "loot_taken": [],        # 已选战利品 key（展示用）
         "pending_loot": None,    # 当前待选的三选一 [{key,...}]
+        "loot_deadline": 0.0,    # 待选的截止时间（epoch 秒）；0 = 无待选
+        "loot_expired": False,   # 本轮是否发生过「战利品超时作废」（战报提示用）
         "settled": False,        # 是否已结算（防重复领取）
         "ts": time.time(),
     }
@@ -84,3 +92,58 @@ class TowerStore:
 
 
 STORE = TowerStore()
+
+
+# ---------------------------------------------------------------------------
+# 战利品三选一：60 秒时效（2026-11-17 用户要求）
+# ---------------------------------------------------------------------------
+def set_loot(st: dict, choices, ttl: float = DEFAULT_LOOT_TTL,
+             now: float | None = None) -> dict:
+    """挂起一组三选一，并写入截止时间。"""
+    st["pending_loot"] = list(choices or [])
+    st["loot_deadline"] = (time.time() if now is None else float(now)) + float(ttl)
+    return st
+
+
+def loot_left(st: dict | None, now: float | None = None) -> int:
+    """待选剩余秒数（向上取整）。无待选 / 已过期返回 0。"""
+    if not st or not st.get("pending_loot"):
+        return 0
+    deadline = float(st.get("loot_deadline") or 0)
+    t = time.time() if now is None else float(now)
+    return max(0, int(math.ceil(deadline - t)))
+
+
+def expire_loot(st: dict | None, now: float | None = None) -> bool:
+    """待选若已超时则作废（奖励失去）。返回「本次是否刚刚作废」。"""
+    if not st or not st.get("pending_loot"):
+        return False
+    if loot_left(st, now) > 0:
+        return False
+    st["pending_loot"] = None
+    st["loot_deadline"] = 0.0
+    st["loot_expired"] = True
+    return True
+
+
+def take_loot(st: dict | None, idx: int, now: float | None = None) -> tuple:
+    """消费第 ``idx``（0-based）个选项。返回 ``(loot, reason)``。
+
+    reason：``ok`` 成功 / ``none`` 当前没有待选 / ``expired`` 已超时作废 /
+    ``bad_index`` 越界。超时路径会把待选清掉——奖励不再补发（用户明确要求）。
+    """
+    if not st or not st.get("pending_loot"):
+        return None, "none"
+    if expire_loot(st, now):
+        return None, "expired"
+    choices = st["pending_loot"]
+    try:
+        i = int(idx)
+    except (TypeError, ValueError):
+        return None, "bad_index"
+    if i < 0 or i >= len(choices):
+        return None, "bad_index"
+    loot = choices[i]
+    st["pending_loot"] = None
+    st["loot_deadline"] = 0.0
+    return loot, "ok"
