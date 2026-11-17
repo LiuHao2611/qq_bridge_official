@@ -95,10 +95,46 @@ def test_floor_kind_and_hard():
 
 
 def test_tower_is_sustainable_but_finite():
-    """连爬可持续（见得到精英/Boss），但强者也有终点（不无限爬）。"""
-    reached = [_climb(70, "s%d" % i)[0] for i in range(8)]
-    assert max(reached) >= 10, "强者见不到第10层Boss：%s" % reached
-    assert min(reached) < 200, "强者无限爬（难度失控）：%s" % reached
+    """连爬可持续（见得到精英/Boss），但强者也有终点（不无限爬）。
+
+    用**中位**判定「见得到第10层」：随机种子下 lv70 偶尔会 9 层止步（Boss 词缀歪），
+    拿 max 当门槛会把正常波动判成失败；无限层失控看 max，那才是真的失控。
+    """
+    reached = sorted(_climb(70, "s%d" % i)[0] for i in range(8))
+    med = (reached[3] + reached[4]) / 2.0
+    assert med >= 10, "强者中位爬不到第10层（见不到Boss）：%s" % reached
+    assert max(reached) < 200, "强者无限爬（难度失控）：%s" % reached
+
+
+def test_hp_monotonic_across_floors():
+    """连爬时气血必须单调不增（用户 2026-11-17：气血怎么没降低）。
+
+    真实错：FLOOR_REST_HEAL=0.35 时，单层伤害只要小于 35% 上限就被回血全部盖掉，
+    实测 lv60 连爬 8 层每层都是满血 —— 玩家看到的就像「每层重置状态」，爬塔没有消耗感。
+    修法：回血同时受「本层实际损失的一半」约束（FLOOR_REST_DMG_RATIO）。
+
+    口径边界：本用例**不带任何战利品**。三选一里的「回春散」会主动回血、
+    「吸血+12%」会在战斗中回血，那两种情况下气血允许上涨（是玩家自己选的续航）。
+    """
+    for lv in (30, 60, 90):
+        p = _player(lv, seed="mono%d" % lv)
+        st = ts.new_state("mono%d" % lv, seed="mono:%d" % lv)
+        rng = random.Random("mono:%d" % lv).random
+        prev = int(core.stats(p)["体力"])
+        ups, drops = [], 0
+        for i in range(1, 13):
+            st["floor"] = i - 1
+            r = core.tower_floor(p, st, rng)
+            if not r["win"]:
+                break
+            if int(r["hp"]) > prev:
+                ups.append((i, prev, int(r["hp"])))
+            if int(r["hp"]) < prev:
+                drops += 1
+            prev = int(r["hp"])
+            st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
+        assert not ups, "连爬出现掉血后回满（像重置状态）：%s" % ups[:3]
+        assert drops >= 1, "lv%d 连爬完全没有掉血，塔不消耗气血" % lv
 
 
 def test_weapon_changes_panel_and_battle():
