@@ -30,9 +30,10 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 | 数据 | 容器路径 | 宿主路径 |
 |---|---|---|
 | 6 个 SQLite 库 | `/app/data/*.db` | `qq_bridge_official/data/` |
-| 斗破存档 | `/app/data/doupo/doupo.json` | 同左（卷） |
+| 斗破存档（**SQLite**） | `/app/data/doupo/doupo.sqlite` | 同左（卷） |
+| 修仙存档（**SQLite**） | `/app/data/xiuxian/xiuxian.sqlite` | 同左（卷） |
+| 旧 JSON（**只读备份/导入源**） | `/app/data/doupo/doupo.json`、`xiuxian/xiuxian.json` | 同左（卷） |
 | 爬塔会话 | `/app/data/doupo/tower_session.json` | 同左（卷） |
-| 修仙存档 | `/app/data/xiuxian/xiuxian.json` | 同左（卷） |
 | warframe 缓存 | `/app/data/wm_cache` | 同左（卷） |
 | 表情包库 | `/app/data/stickers` | 同左（卷） |
 | 素材映射（image_id 缓存） | `/app/data/media_assets.json` | 同左（卷） |
@@ -49,6 +50,15 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
   环境变量指向 tmp（`proof001` 假条目就是这么混进生产档的，已清）。
 * 别反复 `docker cp src/. /app/src/`：会生成 `/app/src/src` 陈旧副本，R1/R3 会红，
   那是真有第二份旧源码在容器里，不是误报。
+
+### 玩家存档已迁 SQLite（2026-11-17，别改回 JSON）
+* 位置：`/app/data/doupo/doupo.sqlite`、`/app/data/xiuxian/xiuxian.sqlite`；
+  旧 `*.json` 降级为**一次性导入源 + 回滚备份**，代码绝不改写它。
+* 结构：一人一行（`players`，`data` 列存完整 JSON，`lv/exp/gold/realm` 提成列便于查/排行）。
+* 写法约定：`get_player()` 返回的仍是**活字典**（36 个调用点就地把改），
+  `put_player()` 单行 UPSERT；`save()` 是兜底 diff（防"改了没 put"的未来写法）。
+* **不许加自动回退到 JSON**：出错抛 `StoreError`。迁移门禁 `tests/test_game_save_sqlite.py` 11 条。
+* 回滚：先用 sqlite 导出回 JSON，再 git 回退到迁移前的 commit（命令见 2026-11-17 日志）。
 
 ## 其他既有事实（沿用）
 * 原件 `D:/AI/manju_agent/qq_bridge`（NapCat）**永久只读**，所有改动只在
