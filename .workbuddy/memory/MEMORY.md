@@ -151,6 +151,16 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 数据源分层：`battle_review.py` 只把 log 变行/文本兜底/标签，不重算数值；
   `battle_comments.py` 40 条毒舌评语（24 短 + 16 长），原创改写并带 source，
   只嘲讽战斗表现、不攻击玩家；同场用 openid+ts+log_len 做种子保证稳定。
+* **AI 群聊「斗破源码讲解」工具 `doupo_code_explain`（2026-11-17）**：群里玩斗破时问
+  「某功能怎么设计的」，模型自动读源码+设计文档讲清楚。**safe 权限（群聊可用）**，
+  纯只读（白名单 `src/plugins/doupo/*.py` 排 test/_gen/_verify/_throttle + `pic/templates/doupo_*.py`
+  + `docs/斗破*.md`；路径安全拒绝绝对/盘符/../反斜杠；模块源码无任何写操作）。
+  讲解时**不主动声明「只读/不能改」**（用户硬要求）——安全在代码层，不在话术。
+  守门 `tests/test_doupo_code_explain.py`（9 条，tmp 树隔离，绝不读生产）+ `tmp/prove_code_explain.py`
+  四反例。相关度打分：文件名×20 / 标题×6 / 正文封顶（初版按 count 累加被长文件 commands.py 刷分，
+  设计文档被挤出前三——别改回）。**部署坑**：Dockerfile 只 COPY src/tools，不含 docs/；
+  已加 `COPY docs/斗破*.md ./docs/` + `.dockerignore` 的 `docs/*` 放行 `!docs/斗破*.md`，
+  改白名单加 docs 路径时务必同步确认镜像真的带该文件。
 * 卡片 `doupo_battle` 复用 help 单列版式（sword 图标 + boxes 自检），
   `card_key="battle"` → `CARD_ACTIONS["battle"]=("战斗评价",)`；
   官方通道图片+按钮同条发送，素材上传失败仍 image_only，绝不分离按钮。
