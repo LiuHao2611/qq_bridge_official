@@ -69,6 +69,18 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 原件 `D:/AI/manju_agent/qq_bridge`（NapCat）**永久只读**，所有改动只在
   `qq_bridge_official`；从原件再同步会覆盖官方专属改造，需重新打补丁。
 * 官方通道身份是 **openid**，与 NapCat 的 QQ 号不是同一命名空间，旧档不继承。
+  openid 经 `channel/official.py::pseudo_id()` md5 映射成**稳定负整数**供 int 型业务层使用。
+  **主人命令也一样认 ID**：官方通路要用 `/ai on` 等主人命令，必须把该负数伪 ID 一并写进
+  `.env` 的 `BOT_OWNER_QQ`（如 `1743124119,-268041124`），否则 `_is_owner` 静默拒绝
+  （日志 `ai_cmd_denied`），用户只会看到「没反应」。
+  `config_api._validate_and_format` 的 intlist 校验已改为放行负整数（旧版 isdigit 会在配置页
+  保存时抹掉负数 ID）；`Config._as_int_set` 与 dispatcher `is_owner` 均已支持负数，守门见
+  `tests/test_config_api.py` / `tests/test_dispatcher.py`。
+  ⚠️ `member_openid` 可能按群不同，换群需重新登记该群对应的伪 ID。
+* 部署踩坑：`docker compose up -d --build` 偶发 `failed to execute bake: exit status 1`
+  （buildx 0.38.1 / compose bake 兼容问题）。绕过：`docker build -f docker/Dockerfile.bridge
+  -t qq-bridge-official:latest .` 后再 `docker compose -f docker-compose.official.yml up -d
+  --force-recreate`，数据卷与 .env 挂载不变。
 * 官方 msg_type 互斥：0=文本 / 2=markdown+keyboard / 7=富媒体图片；
   图片与按钮合并必须「素材上传 → 内嵌 markdown + keyboard 同段」，GIF 无法合并。
 * **图片+按钮绝不分离（2026-11-16 用户硬要求）**：`official.py` 的

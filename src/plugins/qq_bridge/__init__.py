@@ -2997,6 +2997,9 @@ async def _handle_ai_chat(ev, trace_id: str) -> None:
         # 当前时间注入（模型把「N 分钟后」算成 fire_at 绝对时间戳用）
         extra_system = ((extra_system + "\n" + _tools_time_hint())
                         if extra_system else _tools_time_hint())
+        # 斗破源码讲解引导（2026-11-17）：仅当工具真的注册了才注入，避免空指引
+        if _fc_runner.registry.get("doupo_code_explain") is not None:
+            extra_system = extra_system + "\n" + _doupo_code_hint()
         from .tools import ToolContext as _ToolCtx
         _tctx = _ToolCtx(scope=scope, user_id=ev.user_id, group_id=ev.group_id,
                          is_private=not ev.is_group,
@@ -4316,6 +4319,23 @@ def _tools_time_hint() -> str:
             % (now, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))))
 
 
+def _doupo_code_hint() -> str:
+    """斗破源码讲解引导（2026-11-17）：群里聊斗破功能设计时的行为规范。
+
+    只注入 FC 路径（工具已注册），纯对话路径无工具也不受影响。关键口径：
+      * 用户问斗破某功能/口令/机制「怎么设计的」→ 先调 doupo_code_explain 读源码，
+        再结合返回的源码与设计文档，用自己的话把设计逻辑讲清楚（规则、数值、why）；
+      * **不要主动声明「我只能读 / 不能改代码 / 只读模式」**——用户明确要求讲解时
+        不提这个口径，你只管把设计讲明白。
+    """
+    return ("（系统注记·斗破源码：群里有人问斗破某个功能/口令/机制「怎么设计的」"
+            "「为什么这么做」「具体怎么实现」，如爬塔电梯、周副本、战斗属性关联、"
+            "异火、斗技学习、完整战斗回看等，请先调用 doupo_code_explain 传入话题"
+            "关键词读相关源码与设计文档，再结合返回内容用大白话把设计逻辑讲清楚，"
+            "带上关键规则和数值口径；回答基于工具返回的真实代码，不要凭空编。"
+            "讲解时正常说设计本身，不要主动声明「只读」「不能改代码」之类的话。）")
+
+
 def _register_m2_tools() -> list[str]:
     """M2 首批 FC 工具注册（register() 调用）。
 
@@ -4391,6 +4411,14 @@ def _register_m2_tools() -> list[str]:
         data = await frp_status.status()
         return frp_status.format_status(data)
 
+    # ---- 斗破源码讲解（2026-11-17：群里玩斗破时让 AI 读源码讲设计逻辑）----
+    # 纯只读检索：白名单/路径校验/截断都在 code_explain 内。同步文件读放到线程，
+    # 不阻塞事件循环（tools.registry.dispatch 已有超时哨兵）。
+    async def _doupo_code_explain(topic: str, tctx) -> str:
+        import asyncio
+        from .tools import code_explain as _ce
+        return await asyncio.to_thread(_ce.explain, topic)
+
     # ---- M8 智能家居 FC 工具回调（2026-10-21：AI 对话自然语言控设备闭环）----
     # 口径同 /ha 命令族：白名单由 HAClient._check 双保险；高敏设备（门锁/摄像头）
     # 仅主人（ToolContext.is_owner 由 FCRunner 注入）。未开 SMARTHOME_ENABLE →
@@ -4443,6 +4471,7 @@ def _register_m2_tools() -> list[str]:
         "download_cancel": _download_cancel,
         "ops_git_status": _ops_git_status,
         "ops_frp_status": _ops_frp_status,
+        "doupo_code_explain": _doupo_code_explain,
         "ha_control": _ha_control,
         "ha_scene": _ha_scene,
         "ha_state": _ha_state,
