@@ -23,6 +23,23 @@ DATA_PATH = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
+# 爬塔会话落盘（2026-11-17 用户「爬塔层数被你重置掉了」事故后新增）
+#
+# 事故：TowerStore 原先只存进程内存，我为了改平衡连续 `docker compose up -d --build`
+# 重建容器 3 次，正在爬的层数/气血/增益全部清零，玩家看到的就是「层数被重置」。
+#
+# 铁律（见 .workbuddy/memory/MEMORY.md）：容器运行态数据只许落挂载卷，且不许用
+# `__file__` 当默认目录（会被 COPY src 烘进镜像，重建即回滚）。
+# 因此这里**不写**"插件内 data/"这种默认，而是跟着 DATA_PATH 走：
+#   容器：DOUPO_DATA_PATH=/app/data/doupo/doupo.json → /app/data/doupo/tower_session.json
+#   宿主/单测：改了 DOUPO_DATA_PATH 就自动跟着改，不需要第二套路径逻辑。
+# ---------------------------------------------------------------------------
+TOWER_SESSION_PATH = os.environ.get(
+    "DOUPO_TOWER_SESSION_PATH",
+    str(Path(DATA_PATH).parent / "tower_session.json"),
+)
+
+# ---------------------------------------------------------------------------
 # 境界 / 星级  [原著小说]
 # 原著《斗破苍穹》完整修为体系（据百度百科 / 360 百科 / 互动百科「修炼体系」表，
 # 三处一致）：

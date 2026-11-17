@@ -14,6 +14,10 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 ### 判定与做法
 * **唯一判断标准**：`docker diff <container>` 里是否出现该文件。出现即「写进镜像层」，必错。
 * **"重启不丢" ≠ "重建不丢"**。模块注释里写「重启不丢」不能作为安全依据。
+* **会话态也算持久化**（2026-11-17 事故）：爬塔进度原先只在进程内存，重建容器就清零，
+  用户直接质问「爬塔层数被你重置掉了」。凡是「玩家会期待回来还在」的状态一律落盘，
+  不许用「反正是临时的」当借口。落盘路径跟 `doupo.json` 同目录（`config.TOWER_SESSION_PATH`），
+  写盘必须原子（tmp + `os.replace` + `fsync`），失败要抛错而不是静默。
 * 任何新增持久化，必须同时满足：
   1. `docker-compose.official.yml` 里把路径覆盖到 `/app/data/...`（卷内绝对路径）；
   2. `.dockerignore` 排除其在镜像内的默认目录；
@@ -27,6 +31,7 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 |---|---|---|
 | 6 个 SQLite 库 | `/app/data/*.db` | `qq_bridge_official/data/` |
 | 斗破存档 | `/app/data/doupo/doupo.json` | 同左（卷） |
+| 爬塔会话 | `/app/data/doupo/tower_session.json` | 同左（卷） |
 | 修仙存档 | `/app/data/xiuxian/xiuxian.json` | 同左（卷） |
 | warframe 缓存 | `/app/data/wm_cache` | 同左（卷） |
 | 表情包库 | `/app/data/stickers` | 同左（卷） |

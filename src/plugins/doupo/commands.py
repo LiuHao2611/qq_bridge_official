@@ -1462,6 +1462,24 @@ async def cmd_give(store, qq, target, amount) -> str:
 # ---------------------------------------------------------------------------
 # 爬塔副本（2026-11-17）—— 无限层冲榜 / 武器宝箱掉落 / 三选一
 # ---------------------------------------------------------------------------
+def _expired_settle_line(p, qq) -> str:
+    """把「闲置超时」的上一轮补结算，返回提示行（没有则空串）。
+
+    超时不是丢弃：设计口径是「死亡/收手/超时都结算一次」，早期实现只在 get 里
+    把过期会话删掉了，等于玩家挂机久一点就白爬 —— 2026-11-17 一并修掉。
+    """
+    stale = ts.STORE.take_expired(str(qq))
+    if not stale:
+        return ""
+    res = core.tower_settle(p, stale)
+    if not res.get("ok"):
+        return ""
+    return ("⏰ 上一轮闲置超时（%d 小时），已自动结算："
+            "+%d 金币、+%d 修为，止步第 %d 层%s"
+            % (ts.DEFAULT_TTL // 3600, res["gold"], res["exp"], res["floors"],
+               "　🏆 新纪录！" if res["new_record"] else ""))
+
+
 async def cmd_tower(store, qq, arg="") -> str:
     """爬塔：无参开新塔/继续下一层；带 1/2/3 选三选一战利品。
 
@@ -1498,9 +1516,14 @@ async def cmd_tower(store, qq, arg="") -> str:
     if st is None:
         if arg and arg not in ("新", "重开"):
             return "用法：爬塔（开始/继续）；战利品直接回 1/2/3；塔层；塔结算。"
+        # 上一轮若只是「久没动」超时，必须先补结算：层数与奖励都不能白丢
+        # （2026-11-17 用户：爬塔层数被你重置掉了）。
+        header = _expired_settle_line(p, qq)
+        if header:
+            header += "\n"
         st = ts.STORE.begin(qq)
         next_floor = 1
-        header = f"🗼 【试炼之塔】开启！历史最高 {int(p.get('tower_best', 0))} 层\n"
+        header += f"🗼 【试炼之塔】开启！历史最高 {int(p.get('tower_best', 0))} 层\n"
     else:
         if st.get("pending_loot"):
             return ("请先选战利品：直接回复 1 / 2 / 3（还剩 %d 秒，超时作废）。"
@@ -1616,9 +1639,17 @@ async def cmd_tower_status(store, qq) -> str:
     st = ts.STORE.get(str(qq))
     best = int(p.get("tower_best", 0))
     if st is None:
+        line = _expired_settle_line(p, qq)
+        if line:
+            await store.put_player(p)
+            return (line + "\n"
+                    f"🗼 试炼之塔 · 历史最高 {int(p.get('tower_best', 0))} 层\n"
+                    "　发「爬塔」开始新一轮。")
         return (f"🗼 试炼之塔 · 历史最高 {best} 层\n"
                 "　发「爬塔」开始攀登；无限层、每10层一位守塔强者。\n"
-                "　武器从宝箱极低概率掉落，可「装备 <名>」替换玄重尺。")
+                "　武器从宝箱极低概率掉落，可「装备 <名>」替换玄重尺。\n"
+                "　进度已存档（重启不丢）；闲置 %d 小时才自动结算。"
+                % (ts.DEFAULT_TTL // 3600))
     expired = ts.expire_loot(st)
     floor = int(st.get("floor", 0))
     nxt = floor + 1
@@ -1649,7 +1680,12 @@ async def cmd_tower_settle(store, qq) -> str:
         return NOT_ENTERED
     st = ts.STORE.get(str(qq))
     if st is None or int(st.get("floor", 0)) <= 0:
-        return "当前没有可结算的爬塔进度。"
+        # 超时的上一轮同样要结算，不能因为「摸了一会儿鱼」就白爬。
+        line = _expired_settle_line(p, qq)
+        if not line:
+            return "当前没有可结算的爬塔进度。"
+        await store.put_player(p)
+        return line + "\n　发「爬塔」开新一轮。"
     res = core.tower_settle(p, st)
     ts.STORE.clear(qq)
     await store.put_player(p)
