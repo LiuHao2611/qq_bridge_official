@@ -309,24 +309,35 @@ def register_builtin_tools(registry: ToolRegistry, deps: Deps | None = None) -> 
     if callable(deps.get("doupo_code_explain")):
         async def doupo_code_explain(args: dict, ctx) -> str:
             return await deps["doupo_code_explain"](
-                str(args.get("topic", "")), str(args.get("file", "")), ctx)
+                str(args.get("topic", "")), str(args.get("file", "")),
+                str(args.get("symbol", "")), ctx)
 
         registry.register(_tool(
             "doupo_code_explain",
             "查斗破小游戏的源码设计。用户想了解斗破某个功能/口令/机制"
-            "「是怎么设计的」「为什么这么做」「具体怎么实现」时使用（宗门、斗技、"
-            "爬塔电梯、周副本、异火、战斗属性、战斗评价…）。**两步用**："
-            "① 先传 topic（用户问的话题）拿到候选模块清单（模块名 | 职责）；"
-            "② 从清单里挑最相关的 1~2 个，传 file（模块名，如 factions / skills / "
-            "doupo_faction）读该模块的设计说明、关键定义与代码节选。"
-            "然后用自己的话把设计逻辑讲清楚，带上关键规则与数值口径。",
+            "「是怎么设计的」「为什么这么做」「具体怎么实现」「某个数值怎么算」"
+            "时使用（宗门、斗技、爬塔电梯、周副本、异火、战斗属性、战斗评价…）。"
+            "**三步用，问到多细就能答到多细**："
+            "① topic（用户问的话题）→ 候选模块清单（模块名 | 职责）；"
+            "② file（模块名，如 factions / skills / core）→ 该模块的符号概览："
+            "每个函数/类的真实签名 + 行号 + 一句话说明；传了 topic 还会自动附上"
+            "话题命中的函数的**完整实现**；"
+            "③ symbol（概览里的函数名，或「文件名:行号」）→ 该函数的**完整代码**。"
+            "要讲清某个规则到底怎么算，一定要走到第③步拿到实现，不要只看签名就下结论。"
+            "topic 里带上你知道的函数名/英文标识符会更准。"
+            "数据类常量（宗门权重表、丹药表、塔层参数等）也能用 symbol 直接点名。"
+            "**查到够用就停（通常 2 次）**：file 的返回里已附带话题命中函数的完整实现时，"
+            "直接据此回答，不要反复换模块名或换行号重试。"
+            "拿到源码后用自己的话把设计逻辑讲清楚，带上关键规则与数值口径。",
             {
                 "topic": {"type": "string",
-                          "description": "用户问的话题，如「宗门系统」「斗技怎么学」「爬塔电梯」"},
+                          "description": "用户问的话题，如「宗门系统」「斗技怎么学」「宗门权重怎么算」"},
                 "file": {"type": "string",
-                         "description": "要读的模块名（候选清单里的名字，如 factions / skills / core）；指定后直接返回该模块设计说明"},
+                         "description": "要读的模块名（候选清单里的名字，如 factions / skills / core）；指定后返回该模块的符号概览"},
+                "symbol": {"type": "string",
+                           "description": "要读完整实现的函数/类名（如 random_faction），或「文件名:行号」（如 factions.py:1340）"},
             },
-            [],   # 两个参数都可选：只传 topic=候选清单；只传 file=直接读；都不传=全部模块
+            [],   # 三个参数都可选：只 topic=候选清单；file=模块概览；symbol=完整实现
             doupo_code_explain,
         ))
         registered.append("doupo_code_explain")
