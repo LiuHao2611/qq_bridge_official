@@ -284,15 +284,28 @@ def _api_base() -> str:
     return b
 
 
+def _model_id() -> str:
+    """agent 用哪个模型。
+
+    `AGENT_MODEL` 优先，没配就跟随主 bot 的 `AI_MODEL`。
+    **为什么允许分开**：火山 Ark 的免费额度是**按模型独立计**的，"安全体验模式"
+    用完一个模型就暂停那一个。翻源码一次要几万 token，跟日常闲聊抢同一个池子时，
+    一深查就把闲聊额度吃光。分成两个模型池互不影响（2026-11-18 用户提问
+    「消耗额度这么快吗，那我后面聊两句不就没额度了」之后加的）。
+    """
+    return ((os.environ.get("AGENT_MODEL") or "").strip()
+            or (os.environ.get("AI_MODEL") or "").strip())
+
+
 def _build() -> Agent:
     global _model, _agent
     if _agent is not None:
         return _agent
     api_base = _api_base()
-    model_id = (os.environ.get("AI_MODEL") or "").strip()
+    model_id = _model_id()
     api_key = (os.environ.get("AI_API_KEY") or "").strip()
     if not (api_base and model_id and api_key):
-        raise RuntimeError("缺少 AI_API_BASE / AI_MODEL / AI_API_KEY")
+        raise RuntimeError("缺少 AI_API_BASE / AI_MODEL(或 AGENT_MODEL) / AI_API_KEY")
     client = AsyncOpenAI(
         base_url=api_base, api_key=api_key,
         # 关键：默认 openai SDK 会对 429 静默重试退避，表现成「请求挂死 300 秒」。
@@ -316,23 +329,49 @@ def _trace() -> list[str]:
         return ["%s:%s" % (n, a) for n, a in _calls]
 
 
+def _usage(res) -> dict:
+    """取本轮真实 token 用量。
+
+    **为什么要报这个**：用户问「消耗额度这么快吗，我聊两句不就没额度了」——
+    没有用量数据就只能靠猜。每轮把 input/output/total 打出来，谁吃额度一目了然。
+    拿不到就返回空 dict：统计失败不该拖垮问答本身。
+    """
+    try:
+        u = res.context_wrapper.usage
+    except Exception:                            # noqa: BLE001  SDK 版本差异
+        return {}
+    out: dict = {}
+    for k in ("requests", "input_tokens", "output_tokens", "total_tokens"):
+        v = getattr(u, k, None)
+        if isinstance(v, int):
+            out[k] = v
+    return out
+
+
 async def _run(question: str, max_turns: int) -> dict:
     agent = _build()
     t0 = time.time()
     res = await Runner.run(agent, _TASK.format(question=question), max_turns=max_turns)
     trace = _trace()
+    usage = _usage(res)
+    print("[agent] done tools=%d tokens=%s (in=%s out=%s)"
+          % (len(trace), usage.get("total_tokens"), usage.get("input_tokens"),
+             usage.get("output_tokens")), flush=True)
     return {"answer": str(getattr(res, "final_output", "") or "").strip(),
             "steps": len(getattr(res, "new_items", []) or []),
             "tool_calls": len(trace),
             "tools": [x.split(":", 1)[0] for x in trace][:20],
+            "usage": usage,
+            "model": _model_id(),
             "elapsed": round(time.time() - t0, 1)}
 
 
 def ask(question: str, max_turns: int | None = None) -> dict:
-    """跑一次问答。串行执行，返回 {answer, steps, tool_calls, elapsed}。"""
+    """跑一次问答。串行执行，返回 {answer, steps, tool_calls, usage, elapsed}。"""
     question = (question or "").strip()
     if not question:
-        return {"answer": "（空问题）", "steps": 0, "tool_calls": 0, "elapsed": 0.0}
+        return {"answer": "（空问题）", "steps": 0, "tool_calls": 0,
+                "usage": {}, "elapsed": 0.0}
     n = max(2, min(int(max_turns or MAX_TURNS), 20))
     t0 = time.time()
     with _lock:                                  # 串行：并发问不该同时烧几份 token
@@ -370,7 +409,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):                            # noqa: N802
         if self.path.rstrip("/") in ("/health", ""):
-            self._send(200, {"ok": True, "model": os.environ.get("AI_MODEL", ""),
+            self._send(200, {"ok": True, "model": _model_id(),
                              "repo": REPO, "max_turns": MAX_TURNS,
                              "max_tools": _MAX_TOOLS, "timeout": TIMEOUT,
                              "sdk": "openai-agents %s"
@@ -399,8 +438,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("[agent] repo=%s port=%d model=%s max_turns=%d timeout=%.0fs sdk=%s"
-          % (REPO, PORT, os.environ.get("AI_MODEL", ""), MAX_TURNS, TIMEOUT,
+    print("[agent] repo=%s port=%d model=%s max_turns=%d max_tools=%d "
+          "timeout=%.0fs sdk=%s"
+          % (REPO, PORT, _model_id(), MAX_TURNS, _MAX_TOOLS, TIMEOUT,
              getattr(_agents, "__version__", "?")), flush=True)
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), _Handler)
     print("[agent] listening on %d" % PORT, flush=True)
