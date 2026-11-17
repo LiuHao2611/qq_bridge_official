@@ -55,6 +55,10 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 位置：`/app/data/doupo/doupo.sqlite`、`/app/data/xiuxian/xiuxian.sqlite`；
   旧 `*.json` 降级为**一次性导入源 + 回滚备份**，代码绝不改写它。
 * 结构：一人一行（`players`，`data` 列存完整 JSON，`lv/exp/gold/realm` 提成列便于查/排行）。
+* **库路径只由 `DATA_PATH` 推导，绝不开第二个环境变量**（曾加 `DOUPO_DB_PATH`，
+  compose 注入生产路径而测试只改 `DOUPO_DATA_PATH` → 跑测试往生产库塞了 4 个假玩家）。
+  同一个东西只许有一个来源。门禁 `test_db_path_follows_data_path_single_source`。
+* 建表在 `_tx()` 前自动 `_ensure_ready()`，不能只放 `load()`（e2e 会先 put_player）。
 * 写法约定：`get_player()` 返回的仍是**活字典**（36 个调用点就地把改），
   `put_player()` 单行 UPSERT；`save()` 是兜底 diff（防"改了没 put"的未来写法）。
 * **不许加自动回退到 JSON**：出错抛 `StoreError`。迁移门禁 `tests/test_game_save_sqlite.py` 11 条。
