@@ -281,6 +281,59 @@ def test_effect_label_aggregation():
     assert commands._labels([]) == ""
 
 
+# ---------------------------------------------------------------------------
+# 电梯 + 增量奖励（2026-11-17 用户「不重复获得之前挑战过层数的奖励」）
+# ---------------------------------------------------------------------------
+def test_elevator_cost_scales_with_floor():
+    """电梯费随层数单调递增、占累计奖励固定比例、有下限。"""
+    c10, c20, c40 = td.elevator_cost(10), td.elevator_cost(20), td.elevator_cost(40)
+    assert c10 == max(td.ELEVATOR_MIN_GOLD,
+                      int(td.clear_reward(10)["gold"] * td.ELEVATOR_GOLD_RATIO))
+    assert c10 < c20 < c40
+    assert td.elevator_cost(1) >= td.ELEVATOR_MIN_GOLD
+
+
+def test_incremental_reward_no_double_pay():
+    """分段（电梯重打）领奖总额 == 一口气领奖，绝不重复/缩水。"""
+    # 首轮到 10 层
+    p = _player(50)
+    st1 = ts.new_state("q", seed="a"); st1["floor"] = 10
+    r1 = core.tower_settle(p, st1)
+    assert r1["gold"] == td.clear_reward(10)["gold"]
+    assert p["tower_paid_floor"] == 10 and p["tower_checkpoint"] == 10
+    # 电梯到 10 层重打，到 15 层再结算：只发 11~15 的增量
+    st2 = ts.new_state("q", seed="b", floor=9); st2["floor"] = 15
+    r2 = core.tower_settle(p, st2)
+    expect = td.clear_reward(15)["gold"] - td.clear_reward(10)["gold"]
+    assert r2["gold"] == expect, (r2["gold"], expect)
+    assert r1["gold"] + r2["gold"] == td.clear_reward(15)["gold"]
+    # 重打不超过水位线：0 奖励（坐电梯到 10 又死在第 10 层）
+    st3 = ts.new_state("q", seed="c", floor=9); st3["floor"] = 10
+    r3 = core.tower_settle(p, st3)
+    assert r3["gold"] == 0 and r3["exp"] == 0
+
+
+def test_chest_skips_already_paid_floor():
+    """电梯重打已领奖层不再开宝箱（材料不重复刷）。"""
+    p = _player(50)
+    p["tower_paid_floor"] = 10
+    # Boss 层必开宝箱，但 10 <= paid=10 → 跳过
+    assert core.tower_open_chest(p, {"floor": 9}, rng=lambda: 0.0, floor=10) == []
+    # 11 > paid → 正常判定（rng=0 必中）
+    assert core.tower_open_chest(p, {"floor": 10}, rng=lambda: 0.0, floor=11) != []
+
+
+def test_elevator_starts_full_state_at_checkpoint():
+    """电梯 begin(floor=cp-1)：起点层数正确、临时增益全清（满状态）。"""
+    tmpdir = tempfile.mkdtemp(prefix="elev_store_")
+    s = ts.TowerStore(ttl=60, path=os.path.join(tmpdir, "tower_session.json"))
+    st = s.begin("q", floor=9)
+    assert st["floor"] == 9
+    assert st["temp_hp"] is None and st["temp_mp"] is None
+    assert st["temp_bonus"] == {} and st["temp_effect_items"] == []
+    assert st["pending_loot"] is None and not st["settled"]
+
+
 def _main():
     fns = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

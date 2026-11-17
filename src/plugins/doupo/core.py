@@ -1081,6 +1081,10 @@ def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None) -
     导致第 10 层 Boss 宝箱按第 11 层算、武器解锁层提前）。
     """
     floor = int(floor if floor is not None else st.get("floor", 0))
+    # 电梯重打旧层不再出宝箱（2026-11-17 用户「不重复获得之前挑战过层数的奖励」）：
+    # 已结算水位线 <= floor 的层，其宝箱（材料/武器）在首轮已经领过。
+    if floor <= max(0, int(p.get("tower_paid_floor", 0))):
+        return []
     if rng() >= td.chest_rate(floor):
         return []
     out = []
@@ -1099,19 +1103,195 @@ def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None) -
 
 
 def tower_settle(p, st: dict) -> dict:
-    """结算本轮：按已通过层数给金币/经验、更新 tower_best。仅调用一次。"""
+    """结算本轮：只发**未领过**的增量层数奖励、更新水位线/止步层/tower_best。仅调用一次。
+
+    2026-11-17 电梯改造：新增 ``tower_paid_floor``（已结算水位线）与
+    ``tower_checkpoint``（上次止步层，电梯目标）。奖励按
+    ``clear_reward(floors) - clear_reward(paid)`` 增量发——电梯重打旧层不再重复领奖。
+    老存档缺字段按 0 处理，首个到达层全额领，自然迁移。
+    """
     if st.get("settled"):
         return {"ok": False, "msg": "本轮已结算", "gold": 0, "exp": 0}
     floors = int(st.get("floor", 0))
-    rew = td.clear_reward(floors)
+    paid = max(0, int(p.get("tower_paid_floor", 0)))
+    rew = td.incremental_reward(floors, paid)
     p["gold"] = int(p.get("gold", 0)) + rew["gold"]
     p["exp"] = int(p.get("exp", 0)) + rew["exp"]
+    new_paid = max(paid, floors)
+    p["tower_paid_floor"] = new_paid
+    p["tower_checkpoint"] = max(int(p.get("tower_checkpoint", 0)), floors)
     best = int(p.get("tower_best", 0))
     new_best = max(best, floors)
     p["tower_best"] = new_best
     st["settled"] = True
     return {"ok": True, "floors": floors, "gold": rew["gold"], "exp": rew["exp"],
-            "best": new_best, "new_record": new_best > best}
+            "best": new_best, "new_record": new_best > best,
+            "paid": new_paid}
+
+
+# ---------------------------------------------------------------------------
+# 周副本（2026-11-17）—— 7 层一命通关 / 周一快照难度 / 奖励暂存锁定
+#
+# 纪律：
+#   * 怪物数值用**周一快照画像**反解（monster_scaled(snapshot, species)），玩家用
+#     当前真实 p 战斗——一周内升级/换武器后怪不变 → 越来越轻松（用户要的"提升机会"）。
+#   * 每层奖励只进会话 staged，通关第 7 层才 commit 到永久存档；失败/超时整段丢弃。
+#   * 宝箱武器在 staging 阶段只记名字，通关才 grant_weapon（失败不含武器）。
+# ---------------------------------------------------------------------------
+def weekly_snapshot(p: dict, week: str) -> dict:
+    """取玩家本周难度画像：存档有本周快照就用它，否则写入并返回。
+
+    新入道（存档从无 weekly_snapshot）用固定新手档 weekly_data.ROOKIE_PROFILE，
+    并把"新手快照"落进存档本周 key —— 一周内恒定，下周再刷新。
+    """
+    from . import weekly_data as wd_weekly
+
+    snap = dict(p.get("weekly_snapshot") or {})
+    if snap.get("week") == week and isinstance(snap.get("profile"), dict) \
+            and snap["profile"]:
+        return snap["profile"]
+    if not p.get("weekly_snapshot"):
+        profile = dict(wd_weekly.ROOKIE_PROFILE)   # 新入道固定档
+    else:
+        profile = wd_weekly.snapshot_profile(p)    # 老玩家刷新为本周画像
+    p["weekly_snapshot"] = {"week": week, "profile": dict(profile)}
+    return profile
+
+
+def weekly_floor(p, snapshot: dict, st: dict, rng=random.random) -> dict:
+    """打周副本的一层（第 st['floor']+1 层），不改玩家永久存档。
+
+    怪物由**快照画像**反解（难度锁定），战斗用**当前玩家**深副本（当周变强生效）。
+    返回 {win, floor, kind, name, affixes, rounds, hp, mp, log, reward}。
+    """
+    from . import weekly_data as wd_weekly
+
+    floor = int(st.get("floor", 0)) + 1
+    kind = wd_weekly.floor_kind(floor)
+    name = wd_weekly.monster_name(floor)
+    eq = equipped_weapon(p)
+    species = {
+        "name": name,
+        "lv": wd_weekly.monster_lv(floor, int(snapshot.get("lv", p.get("lv", 1)))),
+        "hard": wd_weekly.floor_hard(floor),
+        "exp_mul": 1.0, "gold_mul": 1.0,
+        "kind": "周本·" + kind,
+    }
+    # 难度源头：快照画像反解怪血/攻；玩家侧用当前真实 p 的深副本。
+    mon = monster_scaled(snapshot, species)
+    fp = copy.deepcopy(p)
+    fp["hp"] = int(st.get("temp_hp") if st.get("temp_hp") is not None
+                   else stats(fp)["体力"])
+    fp["mp"] = int(st.get("temp_mp") if st.get("temp_mp") is not None
+                   else mp_max(fp))
+    hp_before = int(fp["hp"])
+
+    mod = {"hp_mult": 1.0, "atk_mult": float(wd_weekly.WEEKLY_ATK_SCALE),
+           "def_mult": 1.0, "evade_add": 0.0, "crit_add": 0.0,
+           "heal_mult": 1.0, "reflect": 0.0, "self_effects": []}
+    # Boss / 精英：攻击基数上调 + 两/一个词缀（复用 tower_mod_from_affixes 口径）
+    mod["atk_mult"] *= wd_weekly.ATK_TIER[kind]
+    affixes = []
+    if kind == "boss":
+        affixes = ["狂暴", "反伤"]
+    elif kind == "elite":
+        affixes = ["破甲"]
+    aff_mod = tower_mod_from_affixes(affixes, [])
+    for k in ("hp_mult", "atk_mult", "def_mult", "reflect"):
+        mod[k] *= aff_mod.get(k, 1.0) if k != "reflect" else 1.0
+    mod["reflect"] += aff_mod.get("reflect", 0.0)
+    # 武器专属效果（与无限塔同口径）
+    sp = (wd_mod_weapon(eq) or {})
+    wdim, wv = sp.get("dim"), float(sp.get("v", 0))
+    if wdim == "damage":
+        mod["self_effects"].append({"t": "empower", "v": wv, "d": 99, "kind": eq})
+    elif wdim == "hits":
+        mod["self_effects"].append({"t": "chain", "v": wv, "d": 99, "kind": eq})
+    elif wdim == "evade":
+        mod["evade_add"] += wv * 100
+    elif wdim == "defense":
+        mod["heal_mult"] *= (1.0 + wv)
+    elif wdim == "speed":
+        mod["crit_add"] += wv * 50
+
+    r = fight(fp, mon, rng=rng, tower_mod=mod)
+    hp_after = int(fp.get("hp", 0))
+    rest = 0
+    if r["win"]:
+        cap = int(stats(fp)["体力"])
+        want = min(int(cap * 0.10), int(max(0, hp_before - hp_after) * 0.5))
+        rest = max(0, min(cap, hp_after + want) - hp_after)
+        hp_after += rest
+    return {
+        "win": bool(r["win"]), "floor": floor, "kind": kind, "name": name,
+        "affixes": affixes, "rounds": int(r["rounds"]), "taken": int(r["taken"]),
+        "hp": hp_after, "mp": int(fp.get("mp", 0)), "rest_heal": rest,
+        "log": r["log"], "mon": mon, "hero_aid": r.get("hero_aid"),
+        "reward": wd_weekly.floor_reward(floor),
+    }
+
+
+def wd_mod_weapon(name: str) -> dict:
+    """取武器 special（与无限塔同源，抽成小函数便于单测）。"""
+    return (wd.WEAPONS.get(name) or {}).get("special") or {}
+
+
+def weekly_stage(st: dict, floor_result: dict) -> dict:
+    """把一层的战斗奖励入**暂存区**（不写永久存档）；宝箱武器只记名字。"""
+    staged = st.setdefault("staged", {"gold": 0, "exp": 0, "items": {}, "weapons": []})
+    rew = floor_result.get("reward") or {}
+    staged["gold"] = int(staged.get("gold", 0)) + int(rew.get("gold", 0))
+    staged["exp"] = int(staged.get("exp", 0)) + int(rew.get("exp", 0))
+    return staged
+
+
+def weekly_open_chest(p, snapshot: dict, st: dict, floor: int,
+                      rng=random.random) -> list[dict]:
+    """周本开宝箱：判定掉落 → 只入会话暂存区，绝不直接写玩家（失败要能全清）。"""
+    from . import tower_data as td_weekly
+
+    if rng() >= td_weekly.chest_rate(floor):
+        return []
+    out = []
+    owned = set(owned_weapons(p)) | set((st.get("staged") or {}).get("weapons") or [])
+    pool = td_weekly.weapon_pool_for(floor, owned)
+    if pool and rng() < td_weekly.WEAPON_DROP_IN_CHEST:
+        w = rng_choice(pool, rng)
+        out.append({"type": "weapon", "name": w})
+    else:
+        out.append({"type": "material", "name": "炎星石", "n": 1 + int(rng() * 3)})
+    weekly_stage_loot(st, out)
+    return out
+
+
+def weekly_stage_loot(st: dict, loot: list[dict]) -> None:
+    """宝箱掉落入暂存区：武器只记名字，材料记数量；通关才真正入包/持枪。"""
+    staged = st.setdefault("staged", {"gold": 0, "exp": 0, "items": {}, "weapons": []})
+    items = staged.setdefault("items", {})
+    weapons = staged.setdefault("weapons", [])
+    for c in loot or []:
+        if c.get("type") == "weapon" and c.get("name") not in weapons:
+            weapons.append(c["name"])
+        elif c.get("type") == "material":
+            items[c["name"]] = int(items.get(c["name"], 0)) + int(c.get("n", 1))
+
+
+def weekly_commit(p, st: dict) -> dict:
+    """通关第 7 层：把暂存区一次性结算进永久存档。失败路径**绝不调用**。"""
+    staged = st.get("staged") or {}
+    gold = int(staged.get("gold", 0))
+    exp = int(staged.get("exp", 0))
+    p["gold"] = int(p.get("gold", 0)) + gold
+    p["exp"] = int(p.get("exp", 0)) + exp
+    for name, n in (staged.get("items") or {}).items():
+        add_item(p, name, int(n))
+    granted = []
+    for name in (staged.get("weapons") or []):
+        if grant_weapon(p, name):
+            granted.append(name)
+    st["cleared"] = True
+    return {"ok": True, "gold": gold, "exp": exp,
+            "items": dict(staged.get("items") or {}), "weapons": granted}
 
 
 def duel(p, vic, rng=random.random) -> dict:

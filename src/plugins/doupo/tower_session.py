@@ -34,15 +34,19 @@ DEFAULT_TTL = 21600         # 6 小时
 DEFAULT_LOOT_TTL = 60.0
 
 
-def new_state(qq, seed=None) -> dict:
-    """开一轮新塔的初始会话状态。"""
+def new_state(qq, seed=None, floor: int = 0) -> dict:
+    """开一轮新塔的初始会话状态。
+
+    :param floor: 起始**已通过层数**（电梯直达时 = checkpoint-1，满状态从该层打）。
+                  默认 0 = 从第 1 层重开。只影响层数起点，临时增益一律清空。
+    """
     s = seed
     if s is None:
         s = str(qq) + ":" + str(int(time.time() * 1000))
     return {
         "qq": str(qq),
         "seed": str(s),
-        "floor": 0,              # 已通过的层数（当前在第 floor+1 层）
+        "floor": max(0, int(floor)),  # 已通过的层数（当前在第 floor+1 层）
         "temp_hp": None,         #  None = 用玩家满血；进入时初始化
         "temp_mp": None,
         "temp_bonus": {},        # {属性: 增量绝对值}，三选一累加
@@ -131,11 +135,14 @@ class TowerStore:
     def _alive(self, st: dict) -> bool:
         return (time.time() - float(st.get("ts", 0))) <= self._ttl
 
-    def begin(self, qq, seed=None) -> dict:
-        """开新塔；若已有未结算会话则先作废旧会话（不结算，防刷）。"""
+    def begin(self, qq, seed=None, floor: int = 0) -> dict:
+        """开新塔；若已有未结算会话则先作废旧会话（不结算，防刷）。
+
+        ``floor`` > 0 用于电梯直达：从该已通过层数起、满状态挑战下一层。
+        """
         with self._lock:
             qq = str(qq)
-            self._data[qq] = new_state(qq, seed)
+            self._data[qq] = new_state(qq, seed, floor=floor)
             self._flush()
             return dict(self._data[qq])
 

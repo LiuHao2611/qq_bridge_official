@@ -437,6 +437,13 @@ CASES = [
     # prep 先挂一组待选；这条不是菜单口令，用 pick=True 豁免「口令必须在菜单里」。
     dict(id="39_pick", text="1", pick=True, prep="loot", img=None,
          must=["获得"], ban=["超时作废", "没有待选", "用法"]),
+    # 40~42：2026-11-17 电梯 + 周副本（一命通关 / 快照难度 / 失败全清）
+    dict(id="40_elevator", text="电梯", img=None,
+         must=["还没有可直达", "未结算", "金币"], ban=["用法", "尚未入道"]),
+    dict(id="41_weekly", text="周副本", img=None,
+         must=["周副本", "第 1/7 层"], ban=["用法", "尚未入道"]),
+    dict(id="42_weekly_status", text="周本状态", img=None,
+         must=["周副本", "本周状态"], ban=["用法", "尚未入道"]),
 ]
 
 

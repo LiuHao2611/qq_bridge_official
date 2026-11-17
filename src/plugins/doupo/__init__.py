@@ -325,6 +325,45 @@ async def _(event: Event):
                       await commands.cmd_tower_settle(store, str(event.user_id)))
 
 
+# 电梯（2026-11-17）：花金币直达上次止步层，满状态重打，旧层奖励不重复。
+tower_elevator = on_regex(_pat(r"(?:爬塔电梯|电梯|坐电梯)"), priority=PRI,
+                          block=True, rule=_mode_is("doupo"))
+
+
+@tower_elevator.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_elevator)
+    await finish_text(tower_elevator, event,
+                      await commands.cmd_tower_elevator(store, str(event.user_id)))
+
+
+# 周副本（2026-11-17）：7 层一命通关 / 周一快照难度 / 失败全清
+weekly = on_regex(_pat(r"(?:周副本|周本|周塔)"), priority=PRI, block=True,
+                  rule=_mode_is("doupo"))
+
+
+@weekly.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, weekly)
+    await finish_text(weekly, event,
+                      await commands.cmd_weekly(store, str(event.user_id)))
+
+
+# PRI-1 抢在「周副本」之前命中：否则「周本状态」会被短口令「周本」先吃掉。
+weekly_status = on_regex(_pat(r"(?:周本状态|周副本状态|周塔状态)"),
+                         priority=PRI - 1, block=True, rule=_mode_is("doupo"))
+
+
+@weekly_status.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, weekly_status)
+    await finish_text(weekly_status, event,
+                      await commands.cmd_weekly_status(store, str(event.user_id)))
+
+
 equip = on_regex(_pat(r"装备") + r"\s*(.*)", priority=PRI, block=True,
                  rule=_mode_is("doupo"))
 
@@ -810,6 +849,14 @@ register_keywords("doupo", [
     "塔状态",
     "塔结算",
     "收手",
+    "电梯",
+    "爬塔电梯",
+    "坐电梯",
+    "周副本",
+    "周本",
+    "周塔",
+    "周本状态",
+    "周副本状态",
     "装备",
     "强化",
     "斗技",
