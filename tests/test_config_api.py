@@ -203,6 +203,36 @@ def test_menu_config_group_and_hot_apply(tmp_path, monkeypatch):
     assert "PIC_MENU_SHOW_OWNER=false" in text
 
 
+def test_config_accepts_negative_owner_openid(tmp_path, monkeypatch):
+    """官方通道 openid → pseudo_id() 是稳定负整数，主人白名单必须能保存它。
+
+    2026-11-17 事故：配置页 intlist 校验用 str.isdigit()，-268041124 被判非法，
+    在配置页一保存就把官方主人 ID 抹掉，导致 /ai on 再次 ai_cmd_denied。
+    """
+    config_api = _load()
+    env = tmp_path / ".env"
+    env.write_text("BOT_OWNER_QQ=1743124119\n", encoding="utf-8")
+    monkeypatch.setattr(config_api, "ENV_PATH", env)
+
+    res = config_api.apply_config({"BOT_OWNER_QQ": "1743124119,-268041124"})
+    assert res["errors"] == {}
+    assert "BOT_OWNER_QQ=1743124119,-268041124" in env.read_text(encoding="utf-8")
+
+    # 中文逗号也接；非法（含字母）仍须拒绝
+    res2 = config_api.apply_config({"BOT_OWNER_QQ": "1743124119，-268041124"})
+    assert res2["errors"] == {}
+    res3 = config_api.apply_config({"BOT_OWNER_QQ": "1743124119,-268a"})
+    assert "BOT_OWNER_QQ" in res3["errors"]
+
+
+def test_as_int_set_parses_negative_openid():
+    """Config._as_int_set 是主人白名单的唯一解析器，必须吃下负数伪 ID。"""
+    sys.path.insert(0, str(_REPO / "src"))
+    from src.plugins.qq_bridge.config import _as_int_set
+    assert _as_int_set("1743124119,-268041124") == {1743124119, -268041124}
+    assert _as_int_set("1743124119，-268041124,,x") == {1743124119, -268041124}
+
+
 def test_proxy_templates_drops_placeholder(monkeypatch):
     """/api/qq/templates 代理：主项目不可达时 _fetch_template_options 会塞占位项
     （value=""），代理应过滤掉占位、items 返回空 list。

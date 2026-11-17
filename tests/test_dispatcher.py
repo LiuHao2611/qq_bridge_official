@@ -228,6 +228,14 @@ def test_official_channel_still_respects_blacklist():
     assert reason == "silent"
 
 
+def test_is_owner_accepts_official_negative_openid(monkeypatch):
+    """官方通道伪 ID 列入主人白名单后，is_owner 必须放行（AI 模式等主人命令）。"""
+    monkeypatch.setattr(Config, "BOT_OWNER_QQ", {1743124119, -268041124})
+    assert is_owner(-268041124) is True
+    assert is_owner(1743124119) is True
+    assert is_owner(99999) is False
+
+
 def test_napcat_group_still_filters_by_whitelist():
     """对照：NapCat 群通道（无 channel 属性）仍严格按数字白名单过滤，零回归。"""
     Config.GROUP_WHITELIST = {1075851417}

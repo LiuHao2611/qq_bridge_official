@@ -128,7 +128,9 @@ SCHEMA: list[tuple] = [
     # 2026-09-07：以下权限类参数由 core=true 改为 core=false——dispatcher.allow / safety
     # 都是运行时直接读 Config.X（类属性），setattr(Config, key, val) 立即生效，无需重启。
     ("核心·身份与权限", "BOT_OWNER_QQ", "主人 QQ（白名单）", "intlist", None, False,
-     "仅这些 QQ 可触发生图/管理；逗号分隔（热生效）", "", "900000002", False),
+     "仅这些 ID 可触发生图/管理；逗号分隔（热生效）。官方通道身份是 openid 映射的负整数"
+     "（如 -268041124），需一并列入才能在官方机器人上用主人命令；member_openid 可能按群不同，"
+     "换群需重新登记该群伪 ID", "", "900000002", False),
     ("核心·身份与权限", "STRICT_WHITELIST", "严格白名单模式", "bool", None, False,
      "开启后未列入白名单的私聊/群一律静默（热生效）", "false", "", False),
     ("核心·身份与权限", "GROUP_WHITELIST", "监听群（白名单）", "intlist", None, False,
@@ -929,10 +931,18 @@ def _validate_and_format(typ: str, value: object) -> str:
             raise ValueError("须为数字")
         return s
     if typ == "intlist":
+        # 官方通道身份是 openid → pseudo_id() 映射的**稳定负整数**（见 channel/official.py），
+        # 与 NapCat 真 QQ 号不同命名空间。主人白名单需要同时容纳两者，
+        # 所以这里必须放行负整数；旧版 isdigit() 会把 -268041124 判非法，
+        # 导致配置页一保存就把官方主人 ID 抹掉（2026-11-17 事故）。
         for part in s.replace("，", ",").split(","):
             part = part.strip()
-            if part and not part.isdigit():
-                raise ValueError("须为逗号分隔的 QQ 号（纯数字）")
+            if not part:
+                continue
+            try:
+                int(part)
+            except ValueError:
+                raise ValueError("须为逗号分隔的整数（官方通道 openid 伪 ID 为负数）") from None
         return s.replace("，", ",")
     if typ == "select":
         return s  # 前端已约束在 options 内
