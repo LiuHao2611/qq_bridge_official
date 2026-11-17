@@ -112,6 +112,7 @@ class Store:
         #: 与磁盘一致的快照（qq/group -> 序列化串），save() 用它算 diff
         self._snap: Dict[str, Dict[str, str]] = {"players": {}, "groups": {}}
         self._loaded = False
+        self._db_ready = False
 
     # ---- 底层连接 ----
     def _conn(self) -> sqlite3.Connection:
@@ -124,6 +125,17 @@ class Store:
         con.execute("PRAGMA synchronous=FULL")    # 断电也不丢已提交事务
         return con
 
+    def _ensure_ready(self) -> None:
+        """确保表已建好。
+
+        必须在**第一次 DB 访问**时自动执行，不能只依赖 `load()`：e2e / menu_full
+        这类用例会先 `put_player()` 再造档，没建表就 `no such table: players`
+        （2026-11-17 迁移当天就是这么红了 33 条）。
+        """
+        if not self._db_ready:
+            self._init_db()
+            self._db_ready = True
+
     @contextmanager
     def _tx(self):
         """一次事务：成功 commit、异常 rollback，**并且一定 close**。
@@ -131,6 +143,7 @@ class Store:
         `with sqlite3.Connection` 只提交/回滚，不关连接。Windows 下没关的句柄会
         让临时库文件删不掉（WinError 32），所以这里显式收口。
         """
+        self._ensure_ready()
         con = self._conn()
         try:
             with con:
@@ -139,8 +152,13 @@ class Store:
             con.close()
 
     def _init_db(self) -> None:
+        # 注意：这里不能用 _tx()（会递归回 _ensure_ready），直接开连接；
+        # 连开连接都要包在 try 里 —— makedirs 失败（父路径是文件）也要变成
+        # StoreError，否则上层收到裸 FileExistsError 就不算"如实报错"了。
+        con = None
         try:
-            with self._tx() as con:
+            con = self._conn()
+            with con:
                 con.executescript(_SCHEMA)
                 ver = con.execute("PRAGMA user_version").fetchone()[0]
                 if ver < DB_VER:
@@ -148,13 +166,16 @@ class Store:
         except Exception as e:  # noqa: BLE001
             raise StoreError("存档库初始化失败（%s）：%s"
                              % (type(e).__name__, str(e)[:200])) from e
+        finally:
+            if con is not None:
+                con.close()
 
     # ---- 生命周期 ----
     async def load(self) -> None:
         async with self._lock:
             if self._loaded:
                 return
-            self._init_db()
+            self._ensure_ready()
             self._read_all()
             if not self._data["players"] and not self._data["groups"]:
                 self._import_legacy_json()
