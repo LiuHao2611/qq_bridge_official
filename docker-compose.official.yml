@@ -116,6 +116,10 @@ services:
       # QQ 官方凭据、TTS key、管理口令一并塞进一个能被模型驱动 shell 的容器。
       AI_API_BASE: "${AI_API_BASE}"
       AI_MODEL: "${AI_MODEL}"
+      # 可选：把 agent 放到**另一个模型**上，跟日常闲聊分开额度池
+      # （Ark 免费额度按模型独立计；翻源码一次几万 token，会挤爆闲聊那个池）。
+      # 不设则跟随 AI_MODEL。
+      AGENT_MODEL: "${AGENT_MODEL:-}"
       AI_API_KEY: "${AI_API_KEY}"
       # 步数上限：实测一次问答 5~11 次工具调用；工具预算（AGENT_MAX_TOOLS）在
       # 第 10 次之后由工具自己喊停，max_turns 留出余量给"刹车后写答案"那几轮。

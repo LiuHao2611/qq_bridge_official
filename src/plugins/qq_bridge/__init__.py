@@ -4453,6 +4453,11 @@ def _register_m2_tools() -> list[str]:
         log.info(jlog("doupo_agent_answered", scope=getattr(tctx, "scope", ""),
                       tool_calls=data.get("tool_calls"),
                       agent_elapsed=data.get("elapsed"),
+                      # 真实 token 用量（agent 侧回传）：用户要能看到"问一次花多少"
+                      tokens=(data.get("usage") or {}).get("total_tokens"),
+                      tokens_in=(data.get("usage") or {}).get("input_tokens"),
+                      tokens_out=(data.get("usage") or {}).get("output_tokens"),
+                      model=data.get("model"),
                       answer_len=len(ans),
                       elapsed_ms=int((time.perf_counter() - t0) * 1000),
                       trace_id=tid))

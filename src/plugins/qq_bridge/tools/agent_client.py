@@ -61,6 +61,9 @@ async def ask(base_url: str, question: str, timeout: float = 160.0,
     answer = str(data.get("answer") or "").strip()
     if not answer:
         raise AgentError("源码分析服务返回空答案")
+    usage = data.get("usage") or {}
     return {"answer": answer,
             "tool_calls": data.get("tool_calls"),
+            "usage": usage if isinstance(usage, dict) else {},
+            "model": data.get("model"),
             "elapsed": data.get("elapsed")}

@@ -126,6 +126,20 @@ def test_client_returns_answer():
     assert out["tool_calls"] == 3
 
 
+def test_client_passes_token_usage_through():
+    """用量必须一路透到主进程 —— 用户问「聊两句就没额度了吗」，得拿数据回答。"""
+    ac = _client_mod()
+    def handler(req):
+        return httpx.Response(200, json={
+            "answer": "x", "tool_calls": 7, "model": "glm-5-3-flash",
+            "usage": {"requests": 7, "input_tokens": 41000,
+                      "output_tokens": 900, "total_tokens": 41900},
+        })
+    out = _run(ac.ask("http://x:1", "q", transport=httpx.MockTransport(handler)))
+    assert out["usage"]["total_tokens"] == 41900
+    assert out["model"] == "glm-5-3-flash"
+
+
 def test_client_500_surfaces_detail():
     ac = _client_mod()
     def handler(req):
@@ -228,9 +242,22 @@ def test_agent_service_only_gets_ai_env():
     env_lines = [ln.strip() for ln in blk.splitlines()
                  if ln.strip().startswith(("AI_", "AGENT_", "TZ"))]
     keys = {ln.split(":")[0] for ln in env_lines}
-    assert keys <= {"AI_API_BASE", "AI_MODEL", "AI_API_KEY",
-                    "AGENT_MAX_TURNS", "AGENT_TIMEOUT", "TZ"}, keys
     assert "AI_API_KEY" in keys
+    # 只允许三个 AI_* + TZ + 任意 AGENT_* 调参；出现 QQ_/TTS_/TOKEN 类一律红
+    allowed_ai = {"AI_API_BASE", "AI_MODEL", "AI_API_KEY"}
+    stray = {k for k in keys
+             if not (k in allowed_ai or k == "TZ" or k.startswith("AGENT_"))}
+    assert not stray, stray
+
+
+def test_agent_can_use_separate_model_pool():
+    """额度按模型独立计 → agent 必须能换一个模型，别跟闲聊抢同一个池子。"""
+    blk = _agent_service_block()
+    assert "AGENT_MODEL" in blk
+    src = (REPO / "agent" / "agent_server.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("AGENT_MODEL")' in src
+    # 没配 AGENT_MODEL 时必须回落到 AI_MODEL（不能变空）
+    assert 'os.environ.get("AI_MODEL")' in src
 
 
 def test_dockerfile_precreates_mount_points():

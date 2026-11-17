@@ -8,7 +8,7 @@
 * 链路：主 bot 工具 `doupo_code_ask(question)` → `POST http://qq-doupo-agent:8765/ask`
   → 沙盒容器里的 openai-agents agent（自己 grep/读文件/写 Python 算数）→ 带
   `文件名:行号` 的中文答案。**整句传用户原话，别压成关键词。**
-* **工具表里只有一个源码工具**。旧的 `doupo_code_explain` 已下线（模块+24 条测试保留），
+* **工具表里只有一个源码工具**。旧的 `doupo_code_explain` 已下线（模块+23 条测试保留），
   并存会让模型在「快但浅 / 慢但深」之间横跳，最后又退化成只给签名。
   `tests/test_doupo_code_explain.py::test_module_is_off_the_chat_path` 守这条。
 * **底座必须是 openai-agents，不能是 smolagents**（实测证据见下方铁律）。
@@ -59,7 +59,7 @@ tool_calls 是通的。换 `openai-agents`（官方 SDK）后同题一次通过�
      `AI_FC_MAX_ROUNDS=8` 后一句都没答。
 * **预算自己算账**：`_MAX_TOTAL_CHARS=5300`（registry 硬截 6000）+ `_clamp()` 按行边界切。
   概览两级（签名段→紧凑名单），保证 `core.py` 100 个符号**名字一个不漏**。
-* 守门：`tests/test_doupo_code_explain.py` 24 条 + `tmp/prove_code_explain.py` 11 条反例。
+* 守门：`tests/test_doupo_code_explain.py` 23 条 + `tmp/prove_code_explain.py` 11 条反例。
 
 
 ## 🚨 铁律：容器运行态数据只许落挂载卷（2026-11-16 事故后确立）
