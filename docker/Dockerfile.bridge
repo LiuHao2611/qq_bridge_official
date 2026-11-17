@@ -38,6 +38,10 @@ WORKDIR /app
 COPY bot.py pyproject.toml requirements.txt ./
 COPY src ./src
 COPY tools ./tools
+# 斗破设计文档（只读，供 AI 源码讲解工具引用；只拷这几个 md，不含 docs/ 其余
+# 7MB 图片/迁移手册等敏感内容）。code_explain.py 白名单含 docs/斗破*.md，
+# 镜像不带则容器内定位不到设计文档，讲设计逻辑会退化成只看源码注释。
+COPY docs/斗破*.md ./docs/
 # 静态 aria2c（下载中心 sidecar 用；容器内 apt/apk 出网被墙，故直接放静态二进制）
 COPY docker/bin/aria2c /usr/local/bin/aria2c
 RUN chmod +x /usr/local/bin/aria2c
