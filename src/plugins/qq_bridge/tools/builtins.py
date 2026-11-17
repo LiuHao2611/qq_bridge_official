@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable
 
-from ..config import get_logger, jlog
+from ..config import Config, get_logger, jlog
 from .registry import RISK_OWNER, RISK_SAFE, Tool, ToolRegistry
 from .scheduler import make_fc_handlers
 
@@ -39,7 +39,8 @@ Deps = dict
 
 
 def _tool(name: str, desc: str, props: dict, required: list,
-          handler: Callable, risk: str = RISK_SAFE) -> Tool:
+          handler: Callable, risk: str = RISK_SAFE,
+          timeout: float | None = None) -> Tool:
     return Tool(
         name=name,
         description=desc,
@@ -47,6 +48,7 @@ def _tool(name: str, desc: str, props: dict, required: list,
                     "required": required},
         handler=handler,
         risk=risk,
+        timeout=timeout,
     )
 
 
@@ -301,46 +303,39 @@ def register_builtin_tools(registry: ToolRegistry, deps: Deps | None = None) -> 
         ))
         registered.append("ha_set")
 
-    # ---- 斗破源码讲解（2026-11-17，safe：群聊可用）----
-    # 群里玩斗破时，群友问「某功能/口令是怎么设计的」，模型调本工具读源码片段，
-    # 再用自己的话把设计逻辑讲清楚。只读检索（白名单 + 路径校验在 deps 回调内），
-    # 不提供任何写操作。工具描述只讲「能查什么、何时用」，绝不写「只读/不能改」——
+    # ---- 斗破源码深度问答（2026-11-17，safe：群聊可用）----
+    # 用户原话：「无论我怎么问他都能找到我想要的东西」——上一版自己写的白名单检索
+    # 答不了细节（不能 grep、不会算数），现在交给独立沙盒容器里的 agent：
+    # 它自己决定读哪个文件、自己写 Python 代公式算数。主进程只发一个 HTTP 请求。
+    # 工具描述只讲「能查什么、何时用、多慢」，绝不写「只读/不能改」——
     # 讲解时不主动声明权限口径（用户明确要求）。
-    if callable(deps.get("doupo_code_explain")):
-        async def doupo_code_explain(args: dict, ctx) -> str:
-            return await deps["doupo_code_explain"](
-                str(args.get("topic", "")), str(args.get("file", "")),
-                str(args.get("symbol", "")), ctx)
+    if callable(deps.get("doupo_agent_ask")):
+        async def doupo_code_ask(args: dict, ctx) -> str:
+            return await deps["doupo_agent_ask"](str(args.get("question", "")), ctx)
 
         registry.register(_tool(
-            "doupo_code_explain",
-            "查斗破小游戏的源码设计。用户想了解斗破某个功能/口令/机制"
-            "「是怎么设计的」「为什么这么做」「具体怎么实现」「某个数值怎么算」"
-            "时使用（宗门、斗技、爬塔电梯、周副本、异火、战斗属性、战斗评价…）。"
-            "**三步用，问到多细就能答到多细**："
-            "① topic（用户问的话题）→ 候选模块清单（模块名 | 职责）；"
-            "② file（模块名，如 factions / skills / core）→ 该模块的符号概览："
-            "每个函数/类的真实签名 + 行号 + 一句话说明；传了 topic 还会自动附上"
-            "话题命中的函数的**完整实现**；"
-            "③ symbol（概览里的函数名，或「文件名:行号」）→ 该函数的**完整代码**。"
-            "要讲清某个规则到底怎么算，一定要走到第③步拿到实现，不要只看签名就下结论。"
-            "topic 里带上你知道的函数名/英文标识符会更准。"
-            "数据类常量（宗门权重表、丹药表、塔层参数等）也能用 symbol 直接点名。"
-            "**查到够用就停（通常 2 次）**：file 的返回里已附带话题命中函数的完整实现时，"
-            "直接据此回答，不要反复换模块名或换行号重试。"
-            "拿到源码后用自己的话把设计逻辑讲清楚，带上关键规则与数值口径。",
+            "doupo_code_ask",
+            "查斗破小游戏的**源码**，回答「这个功能/数值/规则到底怎么实现的」。"
+            "适用：某个机制是怎么设计的（宗门/斗技/爬塔/异火/周副本/战斗评价）、"
+            "某个概率·倍率·阈值·等级门槛具体是多少、某个判定有哪些分支、"
+            "某个口令内部流程是什么。"
+            "它跑在沙盒里，会自己 grep 源码、读实现、再用 Python 代入公式算出"
+            "**具体百分数**，所以问到多细都能答，答案还带「文件名:行号」出处。"
+            "**把用户的原问题整句传进去**（不要压成几个关键词）。"
+            "**一个问题只调一次**：单次要跑 30~90 秒，重复调只会更慢；"
+            "拿到答案直接用它回答，不要自己改写里面的数字。"
+            "报错/超时说明沙盒服务不可用，此时如实告诉用户，不要凭印象编。",
             {
-                "topic": {"type": "string",
-                          "description": "用户问的话题，如「宗门系统」「斗技怎么学」「宗门权重怎么算」"},
-                "file": {"type": "string",
-                         "description": "要读的模块名（候选清单里的名字，如 factions / skills / core）；指定后返回该模块的符号概览"},
-                "symbol": {"type": "string",
-                           "description": "要读完整实现的函数/类名（如 random_faction），或「文件名:行号」（如 factions.py:1340）"},
+                "question": {"type": "string",
+                             "description": "用户的原问题，如「爬塔第 37 层爆装备概率是多少」"
+                                            "「宗门系统为什么不让我自己选」"},
             },
-            [],   # 三个参数都可选：只 topic=候选清单；file=模块概览；symbol=完整实现
-            doupo_code_explain,
+            ["question"],
+            doupo_code_ask,
+            # 单次 30~90 秒，必须给足；其余工具仍走全局 AI_TOOL_TIMEOUT=30s
+            timeout=float(getattr(Config, "DOUPO_AGENT_TIMEOUT", 160.0) or 160.0),
         ))
-        registered.append("doupo_code_explain")
+        registered.append("doupo_code_ask")
 
     log.info(jlog("builtin_tools_registered", tools=registered,
                   count=len(registered)))

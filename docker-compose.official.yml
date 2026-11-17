@@ -66,6 +66,8 @@ services:
       # warframe 头像缓存 + cf_cookies.json 默认落 game_tools/.wm_cache（镜像层）。
       # 虽是可再生缓存，但同样会被重建清空且污染镜像，一并放进卷。
       QQ_BRIDGE_CACHE_DIR: "/app/data/wm_cache"
+      # 斗破源码问答沙盒地址（2026-11-17）：同 compose 网络里的服务名
+      DOUPO_AGENT_URL: "http://qq-doupo-agent:8765"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -82,3 +84,55 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+  # ── 斗破源码问答沙盒（2026-11-17）──────────────────────────────────────────
+  # 用户原话：「你直接搬一个完整的agent项目吧，运行在沙盒里，docker应该可以满足，
+  # 这样无论我怎么问他都能找到我想要的东西，而且不会影响我的电脑文件风险」。
+  #
+  # 沙盒边界（每一条都是硬要求，别改）：
+  #   1. 只挂**只读**的源码三处 + 文档；`.env` 根本不在挂载列表里（宿主凭据进不来）；
+  #   2. 根文件系统 read_only + /tmp 独立 tmpfs —— 连临时写盘都不落在镜像层；
+  #   3. cap_drop ALL + no-new-privileges + 非 root(uid 10001)；
+  #   4. **不映射端口到宿主**：只有同网络里的 bridge-official 能访问它；
+  #   5. 不挂 docker socket，容器里没有宿主管家能力。
+  #
+  # 注意：`read_only: true` 时 docker 无法在只读层里自动创建挂载目标目录，
+  # 所以这几个 `/repo/...` 空目录是 **Dockerfile.agent 里 mkdir 出来的**。
+  # 少一个 → 挂载静默不生效，容器里 /repo 是空壳（2026-11-17 真机踩过）。
+  qq-doupo-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    image: qq-doupo-agent:latest
+    container_name: qq-doupo-agent
+    restart: unless-stopped
+    volumes:
+      - ./src/plugins/doupo:/repo/src/plugins/doupo:ro
+      - ./src/plugins/qq_bridge/tools:/repo/src/plugins/qq_bridge/tools:ro
+      - ./src/plugins/qq_bridge/pic/templates:/repo/src/plugins/qq_bridge/pic/templates:ro
+      - ./docs:/repo/docs:ro
+    environment:
+      # 只传这三个 + 两个行为参数。**绝不用 env_file** —— 那会把 .env 里的
+      # QQ 官方凭据、TTS key、管理口令一并塞进一个能被模型驱动 shell 的容器。
+      AI_API_BASE: "${AI_API_BASE}"
+      AI_MODEL: "${AI_MODEL}"
+      AI_API_KEY: "${AI_API_KEY}"
+      # 步数上限：实测一次问答 5~11 次工具调用；工具预算（AGENT_MAX_TOOLS）在
+      # 第 10 次之后由工具自己喊停，max_turns 留出余量给"刹车后写答案"那几轮。
+      AGENT_MAX_TURNS: "14"
+      AGENT_MAX_TOOLS: "10"
+      AGENT_TIMEOUT: "150"
+      TZ: "Asia/Shanghai"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

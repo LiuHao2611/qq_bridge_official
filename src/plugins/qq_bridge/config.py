@@ -493,6 +493,16 @@ class Config:
     AI_TOOL_RESULT_MAX_CHARS: int = _as_int(os.environ.get("AI_TOOL_RESULT_MAX_CHARS"), 6000)
     # 每 scope（群/私聊）每日工具调用上限；0 = 不限（安全总则 #2：限流显式告知）
     AI_TOOL_DAILY_BUDGET: int = _as_int(os.environ.get("AI_TOOL_DAILY_BUDGET"), 0)
+    # ---- 斗破源码问答沙盒（2026-11-17）----
+    # 独立容器里的代码分析 agent（agent/agent_server.py）。主进程只发一个 HTTP 请求，
+    # 由它自己 grep 源码、读实现、用 Python 算数。容器只能读挂载的源码，
+    # 写不进宿主（`:ro` 由内核保证）。
+    # 容器名由 docker-compose.official.yml 固定为 qq-doupo-agent。
+    DOUPO_AGENT_URL: str = (os.environ.get("DOUPO_AGENT_URL")
+                            or "http://qq-doupo-agent:8765")
+    # 单次问答总预算（秒）。agent 侧自己 30~90 秒，这里留足余量做兜底；
+    # 调小会在它算到一半时把连接掐掉（表现为「工具超时」，不是答案错误）。
+    DOUPO_AGENT_TIMEOUT: float = _as_float(os.environ.get("DOUPO_AGENT_TIMEOUT"), 160.0)
     # ---- 提醒/定时任务（2026-10-20 M2：/提醒 命令族 + FC remind_* 工具）----
     # 调度 tick 间隔（秒）。1s 兼顾精度与空转开销（纯 asyncio，无 APScheduler）
     REMIND_TICK: float = _as_float(os.environ.get("REMIND_TICK"), 1.0)

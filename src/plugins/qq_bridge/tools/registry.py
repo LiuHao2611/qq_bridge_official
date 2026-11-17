@@ -77,6 +77,11 @@ class Tool:
     handler: Callable[[dict, ToolContext], Awaitable[str]]
     risk: str = RISK_SAFE            # safe | owner | confirm
     enabled: bool = True
+    #: 本工具专属超时（秒）；None = 用全局 AI_TOOL_TIMEOUT。
+    #: 2026-11-17 加：斗破源码问答要走沙盒 agent，一次 30~90 秒，
+    #: 用全局 30s 会被当场掐断；但也不能为了它把全局超时调大（提醒/下载类工具
+    #: 卡住时应当尽快失败）。
+    timeout: float | None = None
     #: 运行统计（内存态，重启清零可接受）
     calls: int = 0
     fails: int = 0
@@ -229,7 +234,9 @@ class ToolRegistry:
                           detail=arg_err[:120], trace_id=ctx.trace_id))
             return "工具 %s 入参不对：%s" % (name, arg_err)
         # 执行（CLOSE-05 显式超时；串行——有副作用工具不并行，ai-groupmate 纪律）
-        timeout = float(getattr(Config, "AI_TOOL_TIMEOUT", 30.0) or 30.0)
+        # 工具自带 timeout 优先（长任务如源码问答要 160s），否则用全局默认。
+        timeout = float(tool.timeout
+                        or getattr(Config, "AI_TOOL_TIMEOUT", 30.0) or 30.0)
         try:
             result = await asyncio.wait_for(tool.handler(args or {}, ctx), timeout=timeout)
         except asyncio.TimeoutError:

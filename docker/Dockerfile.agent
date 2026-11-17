@@ -1,0 +1,48 @@
+# 斗破代码问答 agent —— 独立沙盒镜像（2026-11-17）
+#
+# 设计要点（别改坏）：
+#   1. **只挂只读**：compose 里把仓库以 `:ro` 挂到 /repo，宿主仓库写不进是内核保证。
+#      只挂 doupo 源码 / 卡片模板 / 斗破文档三处，`.env` 根本不进容器。
+#   2. 无 docker socket、无宿主管家能力、非 root 运行；compose 里再加
+#      read_only 根文件系统 + cap_drop ALL（纵深防御，见 docker-compose.official.yml）。
+#   3. 构建期 pip 可用（实测 python:3.13-slim + 默认网络即可，旧注释里"pip 会卡死"
+#      那套说法对官方 PyPI 不成立）。
+#   4. 底座是 **openai-agents**（OpenAI 官方 Agents SDK），不是 smolagents：
+#      smolagents 1.26 的 get_clean_message_list 会丢掉 assistant.tool_calls 并把
+#      role=tool 降级成 user 文本，多轮必退化（证据见 agent/agent_server.py docstring）。
+#   5. pip 必须在 `USER agent` 之**前**跑：切了用户再 pip 会装到 ~/.local，
+#      虽然能跑，但镜像里多一份不在系统路径上的副本，排障时容易看错版本。
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    OPENAI_AGENTS_DISABLE_TRACING=1 \
+    AGENT_REPO=/repo \
+    AGENT_PORT=8765
+
+RUN pip install --no-cache-dir "openai-agents>=0.24" \
+    && find /usr/local -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+WORKDIR /srv
+COPY agent/agent_server.py /srv/agent_server.py
+
+# 挂载点必须**先建好**：compose 里根文件系统是 read_only，docker 无法在只读层里
+# 自动创建 bind mount 目标目录 —— 缺了这几个空目录，挂载会静默不生效，
+# 容器里 /repo 根本不存在（2026-11-17 实测：agent 跑 10 次工具全报
+# `[Errno 2] No such file or directory: '/repo'`，最后诚实回了「源码仓库不存在」）。
+RUN mkdir -p /repo/src/plugins/doupo \
+             /repo/src/plugins/qq_bridge/tools \
+             /repo/src/plugins/qq_bridge/pic/templates \
+             /repo/docs
+
+# 非 root：即使哪天挂载写权限配错，也少一层风险
+RUN useradd -m -u 10001 agent 2>/dev/null || true
+USER agent
+
+EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request,sys; \
+sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=4).status==200 else 1)"
+
+CMD ["python", "/srv/agent_server.py"]

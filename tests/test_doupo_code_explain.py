@@ -41,37 +41,6 @@ def _load_ce(name: str = "ce_under_test"):
     return m
 
 
-def _load_tool_stack(prefix: str = "_tstack_ce"):
-    """按文件加载 tools 栈（config/registry/scheduler/builtins），绕开包 __init__。
-
-    直接 ``import plugins.qq_bridge.tools.builtins`` 会先执行 ``qq_bridge/__init__``，
-    连带 import psutil / httpx / rapidocr 等一堆重依赖 —— 只是验「工具怎么注册的」
-    不该为此付出装全套运行环境的代价。这里用影子包（只有 ``__path__``、不执行
-    ``__init__``）把相对导入 ``..config`` / ``.registry`` 接上即可。
-    """
-    import sys as _sys
-    import types as _types
-
-    base = _REPO / "src" / "plugins" / "qq_bridge"
-    for nm, path in ((prefix, base), (prefix + ".tools", base / "tools")):
-        pkg = _types.ModuleType(nm)
-        pkg.__path__ = [str(path)]
-        _sys.modules[nm] = pkg
-
-    def _load(rel: str, modname: str):
-        spec = importlib.util.spec_from_file_location(modname, base / rel)
-        m = importlib.util.module_from_spec(spec)
-        _sys.modules[modname] = m
-        spec.loader.exec_module(m)
-        return m
-
-    _load("config.py", prefix + ".config")
-    registry = _load("tools/registry.py", prefix + ".tools.registry")
-    _load("tools/scheduler.py", prefix + ".tools.scheduler")
-    builtins = _load("tools/builtins.py", prefix + ".tools.builtins")
-    return registry, builtins
-
-
 def _make_tree(tmp_path: Path) -> Path:
     """造一个最小白名单树：含业务源码/模板/文档 + 白名单外的敏感文件。"""
     (tmp_path / "src/plugins/doupo").mkdir(parents=True)
@@ -408,44 +377,16 @@ def test_all_outputs_bounded():
 
 
 # ---------------- 工具注册口径 ----------------
-def test_tool_registered_safe_with_three_params_and_no_readonly_wording():
-    registry_mod, builtins_mod = _load_tool_stack("_tstack_reg")
-    reg = registry_mod.ToolRegistry()
+def test_module_is_off_the_chat_path():
+    """2026-11-17：聊天链路换成沙盒 agent（doupo_code_ask），本模块不再注册工具。
 
-    async def cb(topic, file, symbol, ctx):
-        return "stub"
-
-    names = builtins_mod.register_builtin_tools(reg, {"doupo_code_explain": cb})
-    assert "doupo_code_explain" in names
-    t = reg.get("doupo_code_explain")
-    assert t.risk == registry_mod.RISK_SAFE          # 群聊可用
-    assert {"topic", "file", "symbol"} <= set(t.parameters["properties"])
-    assert t.parameters["required"] == []   # 都可选，按组合决定返回什么
-    for w in ("只读", "不能改", "readonly", "不可编辑"):
-        assert w not in t.description
-    # 描述里必须把「用 symbol 拿完整实现」教给模型，否则它只会看签名就下结论
-    assert "symbol" in t.description
-    assert "完整实现" in t.description
-
-
-def test_builtin_callback_passes_symbol_through():
-    """builtins 的 args→callback 转发必须带上 symbol（漏了就等于没这功能）。"""
-    import asyncio
-
-    registry_mod, builtins_mod = _load_tool_stack("_tstack_fwd")
-    reg = registry_mod.ToolRegistry()
-    got = {}
-
-    async def cb(topic, file, symbol, ctx):
-        got.update(topic=topic, file=file, symbol=symbol)
-        return "stub"
-
-    builtins_mod.register_builtin_tools(reg, {"doupo_code_explain": cb})
-    tool = reg.get("doupo_code_explain")
-    asyncio.new_event_loop().run_until_complete(
-        tool.handler({"topic": "宗门", "file": "factions",
-                      "symbol": "random_faction"}, object()))
-    assert got == {"topic": "宗门", "file": "factions", "symbol": "random_faction"}
+    保留本模块是因为它仍是 24 条回归基线 + 离线排障时能当 CLI 用。
+    但**绝不能把它再注册回工具总线**：两个同类工具并存时，模型会在「快但浅」和
+    「慢但深」之间反复横跳，最后又退化成只给签名。这条守门就是拦这个回退。
+    """
+    src = (_REPO / "src/plugins/qq_bridge/tools/builtins.py").read_text(encoding="utf-8")
+    assert "doupo_code_explain" not in src, "别把旧的片段检索工具注册回去"
+    assert "doupo_code_ask" in src, "聊天链路应走沙盒 agent 的工具"
 
 
 def test_no_write_operations_in_module_source():
