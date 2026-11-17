@@ -12,6 +12,7 @@ import importlib.util
 import os
 import random
 import sys
+import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -231,7 +232,10 @@ def test_loot_and_chest_rules():
 
 
 def test_session_isolated_and_ttl():
-    s1 = ts.TowerStore(ttl=1)
+    # 🔴 必须给临时路径：裸 TowerStore() 会落到生产 tower_session.json，
+    # 这条用例 save/clear 一次就把玩家真实爬塔进度抹掉（2026-11-17 R7 抓到）。
+    tmpdir = tempfile.mkdtemp(prefix="tower_store_")
+    s1 = ts.TowerStore(ttl=1, path=os.path.join(tmpdir, "tower_session.json"))
     a = s1.begin("qa"); a["floor"] = 5; s1.save("qa", a)
     b = s1.begin("qb"); b["floor"] = 9; s1.save("qb", b)
     assert s1.get("qa")["floor"] == 5 and s1.get("qb")["floor"] == 9

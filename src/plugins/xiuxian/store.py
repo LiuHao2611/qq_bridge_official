@@ -18,6 +18,17 @@ from typing import Any, Dict, List, Optional
 from . import config as cfg
 
 
+def _log_error(msg: str) -> None:
+    """写 ERROR：线上走 nonebot.log，裸跑单测退回 stdlib（不硬依赖 nonebot）。"""
+    try:
+        from nonebot.log import logger as _lg
+    except Exception:  # noqa: BLE001
+        import logging
+
+        _lg = logging.getLogger("xiuxian.store")
+    _lg.error(msg)
+
+
 class Store:
     def __init__(self, path: str = cfg.DATA_PATH):
         self.path = path
@@ -44,9 +55,17 @@ class Store:
                     self._data.setdefault(k, {} if k != "enabled" else [])
             except FileNotFoundError:
                 pass
-            except Exception:
-                # 损坏文件不致命：保留内存空库，下次保存覆盖
-                pass
+            except Exception as e:  # noqa: BLE001
+                # 2026-11-17 用户最高声明「用户数据不许丢」：坏档绝不能被空库覆盖，
+                # 先备份原文件；备份失败就抛错（宁可起不来，也不销毁玩家存档）。
+                bak = "%s.corrupt-%s" % (self.path, time.strftime("%Y%m%d-%H%M%S"))
+                try:
+                    os.replace(self.path, bak)
+                except Exception as e2:  # noqa: BLE001
+                    _log_error("修仙存档损坏且无法备份 %s：%r / %r" % (self.path, e, e2))
+                    raise
+                _log_error("修仙存档损坏，已备份为 %s（读取失败：%r），本次以空库启动"
+                           "——请用备份恢复，勿直接继续玩" % (bak, e))
             self._loaded = True
 
     async def save(self) -> None:

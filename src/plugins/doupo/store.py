@@ -59,9 +59,19 @@ class Store:
                     self._data.setdefault(k, dflt)
             except FileNotFoundError:
                 pass
-            except Exception:
-                # 存档损坏不致命：保留内存空库，下次写盘覆盖
-                pass
+            except Exception as e:  # noqa: BLE001
+                # 2026-11-17 用户最高声明「用户数据不许丢」：
+                # 原实现是「保留内存空库，下次写盘覆盖」——坏档（截断/半截 JSON）
+                # 会被下一次 save 用空库**永久覆盖**，等于把玩家存档销毁。
+                # 现在必须先备份原文件再继续；备份失败就抛错，宁可起不来也不覆盖。
+                bak = "%s.corrupt-%s" % (self.path, time.strftime("%Y%m%d-%H%M%S"))
+                try:
+                    os.replace(self.path, bak)
+                except Exception as e2:  # noqa: BLE001
+                    _log("error", "斗破存档损坏且无法备份 %s：%r / %r" % (self.path, e, e2))
+                    raise
+                _log("error", "斗破存档损坏，已备份为 %s（读取失败：%r），本次以空库启动"
+                              "——请用备份恢复，勿直接继续玩" % (bak, e))
             self._migrate_if_needed()
             self._loaded = True
 

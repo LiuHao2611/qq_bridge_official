@@ -193,8 +193,12 @@ class PersonaStore:
 
     def _save_active(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
-        with open(ACTIVE_FILE, "w", encoding="utf-8") as f:
+        # 原子写（2026-11-17 用户最高声明）：直接 open("w") 中途崩溃会留半截 JSON，
+        # 下次启动整份人设映射就废了。
+        tmp = str(ACTIVE_FILE) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._active, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, str(ACTIVE_FILE))
 
     def reload(self) -> None:
         """热重载（导入新人设后调用）。"""
@@ -282,8 +286,10 @@ class PersonaStore:
         per.updated_at = time.time()
         self.dir.mkdir(parents=True, exist_ok=True)
         target = self.dir / ("%s.json" % per.id)
-        with open(target, "w", encoding="utf-8") as f:
+        tmp = str(target) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(per.to_dict(), f, ensure_ascii=False, indent=1)
+        os.replace(tmp, str(target))
         with _lock:
             self._files[per.id] = per
 

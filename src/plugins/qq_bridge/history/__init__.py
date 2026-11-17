@@ -504,8 +504,9 @@ def _trim(c: sqlite3.Connection, scene: str, peer_id: int) -> None:
                     "DELETE FROM messages WHERE scene=? AND peer_id=? AND id<?",
                     (scene, peer_id, min_id),
                 )
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        # 裁剪失败不影响本次写入；但绝不能静默——否则库会无限膨胀且没人知道。
+        log.warning(jlog("history_trim_failed", error=str(e)[:120]))
 
 
 def add_message(*, ts: float, self_id: str, scene: str, peer_id: int, user_id: int,

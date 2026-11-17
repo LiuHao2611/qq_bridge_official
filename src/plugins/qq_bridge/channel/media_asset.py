@@ -40,7 +40,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from collections import OrderedDict
+from pathlib import Path
 
 try:  # 正常包内 import
     from ..config import get_logger, jlog
@@ -58,6 +61,28 @@ log = get_logger()
 #: 单机器人素材上限 100 张，留 8 张安全余量
 MAX_MATERIALS = 92
 
+#: 素材映射落盘（2026-11-17 用户最高声明「用户数据不许丢」的连带项）。
+#: 原先只在内存：容器一重启，92 张已上传素材的 image_id 全忘，于是把同一批图
+#: 重新上传——腾讯侧「90 天内被引用即续期」的配额很快被打满，直接表现为发图失败。
+#: 存到 data 卷里即可跨重启复用；写盘失败只影响"下次是否重传"，故只报错不阻断。
+def _cache_path() -> Path:
+    """素材映射的落盘位置。必须与 ``../queue`` 的 DATA_DIR 同一处（data 卷）。
+
+    延迟 import 是为了避免包初始化顺序问题；但离线单测会用
+    ``importlib`` 把本文件**当顶层模块直载**（如 ``test_qq_button_merge``），
+    此时没有父包，相对 import 必然 ImportError。故与文件顶部 ``..config``
+    同款兜底：按同样的 parents[4] 规则自行推导项目根，保证单文件直载时
+    也落在同一个 ``data/`` 目录，不会写进代码目录。
+    """
+    try:
+        from ..queue import DATA_DIR  # 包内正常路径
+    except (ImportError, ValueError):  # 单文件直载（离线单测）
+        # 本文件比 qq_bridge/ 下的模块深一层，parents[4] 才是项目根
+        # （与 queue/__init__.py::ROOT_DIR 口径一致），parents[3] 会算成 src/。
+        DATA_DIR = Path(os.environ.get("QQ_DATA_DIR")
+                        or (Path(__file__).resolve().parents[4] / "data"))
+    return Path(DATA_DIR) / "media_assets.json"
+
 
 class MaterialUploadError(RuntimeError):
     """素材上传任一步失败。上层据此降级回两条发送，不静默吞。"""
@@ -71,23 +96,73 @@ class MaterialStore:
     image_id}/delete`` 释放配额），删除失败只记日志不影响本次发送。
     """
 
-    def __init__(self, max_items: int = MAX_MATERIALS):
+    def __init__(self, max_items: int = MAX_MATERIALS, path: Path | None = None):
         self.max_items = max(1, int(max_items))
         # md5 -> {"url":..., "width":..., "height":..., "image_id":...}
         self._items: OrderedDict[str, dict] = OrderedDict()
+        # 路径延迟解析：避免 import 期就去 import ../queue（可能有初始化顺序问题）
+        self._path: Path | None = Path(path) if path else None
+        # 读盘也延迟到首次使用：模块级单例在 import 期就构造，若在此读盘等于
+        # 每次 import 都做一次磁盘 IO，且会与 ../queue 形成 import 期循环依赖。
+        self._loaded = False
+
+    @property
+    def path(self) -> Path:
+        if self._path is None:
+            self._path = _cache_path()
+        return self._path
+
+    def _ensure_loaded(self) -> None:
+        if not self._loaded:
+            self._loaded = True      # 先置位：_load 内部失败也不反复重试
+            self._load()
+
+    # ---- 落盘（缓存语义：失败只报错，不影响本次发送） ----
+    def _load(self) -> None:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as e:  # noqa: BLE001
+            log.error(jlog("media_assets_load_failed", path=str(self.path),
+                           error=str(e)[:120]))
+            return
+        if not isinstance(raw, dict):
+            log.error(jlog("media_assets_bad_format", path=str(self.path)))
+            return
+        for md5, item in raw.items():
+            if isinstance(item, dict):
+                self._items[str(md5)] = item
+
+    def _save(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = str(self.path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(dict(self._items), f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, self.path)
+        except Exception as e:  # noqa: BLE001
+            # 缓存不是用户资产：不影响本次发送，但必须留痕（禁止静默）
+            log.error(jlog("media_assets_save_failed", path=str(self.path),
+                           error=str(e)[:120]))
 
     def get(self, md5: str) -> dict | None:
+        self._ensure_loaded()
         if md5 not in self._items:
             return None
         self._items.move_to_end(md5)  # LRU：命中即最近使用
         return self._items[md5]
 
     def put(self, md5: str, item: dict) -> None:
+        # 必须先读回已落盘的条目，否则新写入会把旧缓存整表覆盖掉（等于丢缓存）
+        self._ensure_loaded()
         self._items[md5] = item
         self._items.move_to_end(md5)
+        self._save()
 
     def _evict_candidates(self) -> list[dict]:
         """超出容量时最久未用的条目（含 image_id 供删除）。"""
+        self._ensure_loaded()
         excess = len(self._items) - self.max_items
         if excess <= 0:
             return []
@@ -95,9 +170,12 @@ class MaterialStore:
         for _ in range(excess):
             md5, item = self._items.popitem(last=False)
             evicted.append(item)
+        if evicted:
+            self._save()
         return evicted
 
     def __len__(self) -> int:
+        self._ensure_loaded()
         return len(self._items)
 
 
@@ -286,5 +364,7 @@ def markdown_image(url: str, width: int, height: int, alt: str = "card") -> str:
 
 
 def reset_store() -> None:
-    """清空缓存（仅供测试隔离）。"""
+    """清空内存缓存（仅供测试隔离）。"""
     _store._items.clear()
+    # 标记已读：否则下一次 get/put 会再从磁盘把条目读回来，reset 等于没做
+    _store._loaded = True
