@@ -1012,6 +1012,7 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     st_max = stats(fp)
     fp["hp"] = int(st.get("temp_hp") if st.get("temp_hp") is not None else st_max["体力"])
     fp["mp"] = int(st.get("temp_mp") if st.get("temp_mp") is not None else mp_max(fp))
+    hp_before = int(fp["hp"])       # 进场血量（层间回血的「损失」基准）
 
     # 虚拟 species：只给 hard/lv/倍率，数值由 monster_scaled 反解
     species = {
@@ -1050,11 +1051,16 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
 
     # 层间回血：胜利后回一口，写进返回 hp（由调用方写回会话），避免连爬必死。
     # 战斗副本 fp 的 hp 已被 fight 写为剩余；这里只在胜利时加成。
+    # 2026-11-17 用户反馈「气血怎么没降低」：只按上限比例回血会把单层伤害全部盖掉
+    # （lv60 连爬 8 层满血）。改为双重约束——最多 FLOOR_REST_HEAL 比例、且最多补回
+    # 本层实际损失的一半，保证跨层气血单调不增；要续航请选三选一的回血战利品。
     hp_after = int(fp.get("hp", 0))
+    dmg_taken = max(0, hp_before - hp_after)
     rest = 0
     if r["win"]:
         cap = int(st_max["体力"])
         want = int(cap * float(td.FLOOR_REST_HEAL))
+        want = min(want, int(dmg_taken * float(td.FLOOR_REST_DMG_RATIO)))
         # 只报「实际回了多少」：满血时 rest=0，战报不该出现「歇息 +12040」的假数字。
         rest = max(0, min(cap, hp_after + want) - hp_after)
         hp_after += rest
