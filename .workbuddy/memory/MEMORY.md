@@ -151,6 +151,16 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * 数据源分层：`battle_review.py` 只把 log 变行/文本兜底/标签，不重算数值；
   `battle_comments.py` 40 条毒舌评语（24 短 + 16 长），原创改写并带 source，
   只嘲讽战斗表现、不攻击玩家；同场用 openid+ts+log_len 做种子保证稳定。
+* **大模型 429 先拉原始 body（2026-11-17 教训）**：llm.py 的 429 分支只报
+  「请求太频繁或额度不足」，不带服务端 body，**看日志分不清额度还是频率**。
+  直连 `POST {AI_API_BASE}/chat/completions` 看 `error.code`：
+  `SetLimitExceeded` = 账户「安全体验模式」该模型用量到顶（服务被暂停，换模型可绕）；
+  `ModelNotOpen` = 该模型未开通。`GET /api/v3/models` 可列全部可用模型 + `api_supported`。
+  **限额按模型独立计**，换模型只是换通道；根治要去方舟控制台关/调安全体验模式。
+  实测清单（2026-11-17，512 tokens）：`deepseek-v4-1-flash-261017` 2.6s 最快且 FC 正常（现用）；
+  `doubao-seed-2-0-lite-260428` 8.0s；`glm-5-3-flash-260828` 4.9s；
+  `doubao-seed-2-1-pro-260915` 默认思考 64.8s（群聊不可用，关思考仍 11s）；
+  `doubao-seed-2-1-lite/turbo` 均已 429；`kimi-k3-1-pro` 未开通。
 * **AI 群聊「斗破源码讲解」工具 `doupo_code_explain`（2026-11-17）**：群里玩斗破时问
   「某功能怎么设计的」，模型自动读源码+设计文档讲清楚。**safe 权限（群聊可用）**，
   纯只读（白名单 `src/plugins/doupo/*.py` 排 test/_gen/_verify/_throttle + `pic/templates/doupo_*.py`
