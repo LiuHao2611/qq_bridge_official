@@ -33,7 +33,10 @@ src/plugins/xiuxian/data/
 
 # 体积大、运行时不需要
 tools/ocr_fixtures/
-docs/
+# docs 整体不进镜像；仅放行斗破设计文档（AI 源码讲解工具白名单含 docs/斗破*.md，
+# 供容器内讲设计逻辑引用；这 5 个 md 约 74KB、已确认无密钥）。
+docs/*
+!docs/斗破*.md
 _preview/
 _preview-*.png
 *.log
