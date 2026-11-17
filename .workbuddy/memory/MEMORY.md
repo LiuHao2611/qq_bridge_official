@@ -34,6 +34,7 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 | 修仙存档（**SQLite**） | `/app/data/xiuxian/xiuxian.sqlite` | 同左（卷） |
 | 旧 JSON（**只读备份/导入源**） | `/app/data/doupo/doupo.json`、`xiuxian/xiuxian.json` | 同左（卷） |
 | 爬塔会话 | `/app/data/doupo/tower_session.json` | 同左（卷） |
+| 周副本会话 | `/app/data/doupo/weekly_session.json` | 同左（卷） |
 | warframe 缓存 | `/app/data/wm_cache` | 同左（卷） |
 | 表情包库 | `/app/data/stickers` | 同左（卷） |
 | 素材映射（image_id 缓存） | `/app/data/media_assets.json` | 同左（卷） |
@@ -113,6 +114,20 @@ checkin / budget / emotion / group_style **六个 SQLite 库全部写进容器�
 * **GitHub 全量 tree 推送会 422**：644 条一次 POST 偶发 "input too large"。
   用 `tmp/push_incremental.py <本地基线commit>` 走 `base_tree` 只提交 diff 文件，
   秒级完成；铁律不变——blob key 用内容 sha1，推送后拉 raw grep 特征。
+
+## 爬塔/周副本口径（2026-11-17 确立，别改回）
+* **电梯奖励去重只能用"水位线差值"**：`tower_settle` 发
+  `clear_reward(到达层) - clear_reward(tower_paid_floor)`，结算后抬水位线。
+  绝不逐段相加 `clear_reward`（会重复发低层）。宝箱也 skip `floor <= paid`。
+  玩家档字段 `tower_paid_floor`/`tower_checkpoint` 老档缺省 0 自然迁移。
+* **周副本难度源头是周一快照画像**：`monster_scaled(snapshot)` 反解怪，玩家用当前 p 打
+  → 一周内变强怪不变（用户要的"提升机会"）。新入道无快照走固定 `ROOKIE_PROFILE(lv5)`。
+  ISO 周 key（如 `2026-W47`）做时间锚。奖励先入会话 `staged`（武器只记名），
+  通关第 7 层才 `weekly_commit` 一次性入账；失败/超时整段丢弃，绝不调 commit。
+  ⚠ 失败含武器全清是用户硬要求，`cmd_weekly` 失败分支不许出现 `weekly_commit`。
+* 菜单 40 条（含电梯/周副本/周本状态），matcher 数必须 == 菜单数（e2e 等量守门）。
+  `周本状态` 用 PRI-1 抢在短口令 `周本` 之前命中。
+* 原著**没有七层塔**，只有天焚炼气塔/试炼之塔九层；7 层是游戏化设计，文案别写"原著七层塔"。
 
 ## 紫卡洗卡推荐卡口径（2026-11-16 确立，别重造）
 * **数据源唯一链**：WFCD `data/warframe_items/*.json`（面板，含 puncture/slash 互换 bug，
