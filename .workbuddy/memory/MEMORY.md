@@ -192,3 +192,21 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
 * 文案统一写「本宗异火」，禁写「传承」（迦南那朵原文明确「非门派私有」）。
 * 异火卡 `lv<=0` 必须显示「未收服」，且**不显示 0/N 级与下级药渣需求**（否则用户以为能直接养）。
 * 守门 `src/plugins/doupo/test_doupo_flame_grant.py` 17 条。
+
+## 9. 🚨 斗破插件两条结构雷（2026-11-18 都炸过）
+
+* **包属性被子模块同名实例遮蔽**：`doupo/__init__.py` 里 `store = store_mod.STORE`、
+  历史上还有 `puppet_store = puppet_store_mod.PUPPET_STORE`。一旦这么写，别处
+  `from . import store` / `from . import puppet_store` 拿到的是**实例**，再取 `.STORE`/`.PUPPET_STORE`
+  就 AttributeError。规矩：**要成员就 `from .<mod> import <name>`**，不要在包属性上二次取成员。
+  实例名一律带 `_inst`（现为 `store`（历史遗留，别再加新的）、`puppet_store_inst`）。
+  文字口令能跑、按钮点击必崩，就是因为前者显式传了实例、后者
+  （`button_dispatch` 的 `cmd_*(store, qq)`）没传 → 落到默认值那条路径。
+* **卡片渲染签名不统一**：绝大多数 `render_*(p)`，但 `render_puppet(roster, elig, p)`、
+  `render_ruin(state, day)`、`render_rank(top)`、`render_battle(last_battle)` 不是。
+  `button_dispatch` 的通用 `renderer(p)` 只对 `(p)` 形状安全；首参不叫 `p` 的卡必须特判，
+  并优先用 `card.render_<key>_for(qq, …)` 这类**按 QQ 取数**的入口。
+  守门：`test_doupo_puppet.py`（泛化到所有 `_PLAN` card_key）+
+  `tests/test_doupo_buttons.py::test_card_renderer_shapes_match_dispatch`（AST）。
+* **出图口令带结果时用 `finish_card(caption=…)`**：战报先发、卡后发，别让卡把结果吞掉
+  （傀儡遗迹曾只发进度卡，胜负与掉落全丢）。按钮路径同理，且要防底部兜底重复发送。
