@@ -226,7 +226,7 @@ def test_low_grade_bonus_monotonic():
 
 
 def test_low_grade_bonus_capped():
-    """低阶加成封顶 9成5，不超上限。"""
+    """低阶加成封顶九成五（展示取整为九成），不超上限。"""
     rate, diff = cfg.craft_rate_for(8, "一品")   # 九品炼一品 diff=-8
     assert diff < 0 and rate <= cfg.CRAFT_RATE_CAP + 1e-9
     assert abs(rate - 0.95) < 1e-9, rate
@@ -236,7 +236,7 @@ def test_four_grade_full_ladder():
     """四品炼药师完整梯度：低阶越稳、越高阶越难，成数表述符合原著口语。"""
     ladder = [(g, cfg.craft_rate_for(3, g)[0]) for g in
               ("一品", "二品", "三品", "四品", "五品", "六品")]
-    expect_cn = ["9成4", "8成6", "7成8", "7成", "2成4", "0成4"]
+    expect_cn = ["九成", "八成", "七成", "七成", "二成", "零成"]
     got_cn = [cfg.rate_cn(r) for _, r in ladder]
     assert got_cn == expect_cn, (got_cn, expect_cn)
     # 严格单调递减：品阶越高越难
@@ -249,15 +249,16 @@ def test_four_grade_full_ladder():
 # ---------------------------------------------------------------------------
 def test_rate_cn_mapping():
     cases = {
-        1.0: "十成", 0.94: "9成4", 0.70: "7成", 0.86: "8成6",
-        0.78: "7成8", 0.245: "2成4", 0.035: "0成4", 0.0: "0成",
+        1.0: "十成", 0.94: "九成", 0.70: "七成", 0.86: "八成",
+        0.78: "七成", 0.245: "二成", 0.035: "零成", 0.0: "零成",
     }
     for rate, want in cases.items():
         got = cfg.rate_cn(rate)
         assert got == want, (rate, got, want)
         assert "%" not in got and "." not in got, "成数不得含%%或小数点：%s" % ((rate, got),)
+        assert not any(ch.isdigit() for ch in got), "成数须纯中文：%s" % ((rate, got),)
     # 越界夹取
-    assert cfg.rate_cn(1.5) == "十成" and cfg.rate_cn(-0.2) == "0成"
+    assert cfg.rate_cn(1.5) == "十成" and cfg.rate_cn(-0.2) == "零成"
 
 
 def test_craft_reply_uses_cheng_no_percent():
@@ -275,7 +276,7 @@ def test_craft_reply_uses_cheng_no_percent():
         async def put_player(self, p):
             self.p = dict(p)
 
-    p = _p(lv=1, alch=3)          # 四品炼药师，炼一品聚气散 → 9成4
+    p = _p(lv=1, alch=3)          # 四品炼药师，炼一品聚气散 → 九成
     for k, v in cfg.RECIPE_BY_NAME["聚气散"]["need"].items():
         core.add_item(p, k, v)
     p["last_craft"] = 0
@@ -283,9 +284,11 @@ def test_craft_reply_uses_cheng_no_percent():
     r = asyncio.run(commands.cmd_craft(store, "10001", "聚气散"))
     assert "成" in r and "把握" in r, r
     assert "%" not in r, r
-    # 成功或失败都要带四品炼一品的真实成数 9成4（成功回包/失败回包同源 rate_cn）
+    # 成功或失败都要带四品炼一品的真实成数「九成」（成功/失败回包同源 rate_cn）
     assert ("丹成" in r or "失败" in r), r
-    assert "9成4" in r, r
+    assert "九成" in r, r
+    # 纯中文：不得出现阿拉伯数字成数
+    assert "9成" not in r and "7成" not in r, r
 
 
 def test_card_desc_uses_cheng_no_percent():
