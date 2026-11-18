@@ -229,7 +229,9 @@ def test_every_button_is_dispatchable():
             fn_name, shape, card_key = plan[c]
             assert fn_name in real_fns, \
                 "按钮 %r 指向不存在的 commands 函数：%s" % (c, fn_name)
-            assert shape in ("qq", "qq_str", "gid", "enter"), \
+            # "ruin"：带结构化战况的副本口令（cmd(store, qq, None, report=…)），
+            # 2026-11-18 起傀儡遗迹用它把战况并进卡，而不是另发一条文字。
+            assert shape in ("qq", "qq_str", "gid", "enter", "ruin"), \
                 "按钮 %r 参数形态非法：%s" % (c, shape)
             # card_key 非空时必须真的是本模块认知的卡片
             if card_key:

@@ -798,11 +798,17 @@ async def render_puppet(roster: list, elig: dict, p: dict | None = None) -> byte
 CARD_RUIN_NAME = "斗破傀儡遗迹"
 
 
-def build_ruin_data(state: dict, day: str = "") -> dict:
-    """遗迹当日状态 → doupo_ruin 模板参数；段落与掉落只读 cfg 唯一源。"""
+def build_ruin_data(state: dict, day: str = "", report: dict | None = None) -> dict:
+    """遗迹当日状态 → doupo_ruin 模板参数；段落与掉落只读 cfg 唯一源。
+
+    ``report``（2026-11-18）：本次挑战的战况（``cmd_puppet_ruin(report=...)`` 写入）。
+    有它就并成首段「本次挑战」——用户要求**点一次只出一条内容**，战报不许另发一条文字。
+    """
     stages = cfg.PUPPET_RUIN_STAGES
     done = int((state or {}).get("stage", 0))
     groups = []
+    if report:
+        groups.append({"name": "本次挑战", "rows": _ruin_report_rows(report)})
     for i, sg in enumerate(stages):
         status = "已通关" if i < done else ("可挑战" if i == done else "未解锁")
         drops = "、".join("%s×%d" % (k, int(v))
@@ -820,9 +826,44 @@ def build_ruin_data(state: dict, day: str = "") -> dict:
     }
 
 
-async def render_ruin(state: dict, day: str = "") -> bytes | None:
-    """「傀儡遗迹」出图：三段进度卡，与战报文字同源（同一 stage 水位线）。"""
-    return await _render_list("doupo_ruin", build_ruin_data(state, day), CARD_RUIN_NAME)
+def _ruin_report_rows(report: dict) -> list:
+    """本次挑战 → 卡片行（胜负/回合/承伤/掉落），与文本战报同一批字段。"""
+    rep = report or {}
+    idx = int(rep.get("stage_idx") or 0)
+    name = str(rep.get("stage_name") or "")
+    mon = str(rep.get("monster") or "")
+    if rep.get("cleared") and not rep.get("rounds"):
+        total = int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))
+        return ["今日三段已全通（%d/%d）· 明日再来" % (total, total),
+                "已通关的段落不再掉材料，明天刷新后继续"]
+    head = "第 %d 段 · %s ｜ %s" % (idx + 1, name or "傀儡遗迹", mon or "守关者")
+    if not rep.get("win"):
+        return [head + " ｜ ❌ 力竭",
+                "%d 回合 · 敌余血 %s · 今日仍在第 %d 段，调息后可再来"
+                % (int(rep.get("rounds") or 0), _fmt_hp(rep.get("mon_hp_left")), idx + 1)]
+    drops = rep.get("drops") or {}
+    drop_txt = "、".join("%s×%d" % (k, int(v)) for k, v in drops.items()) or "无"
+    rows = [head + " ｜ ✅ 胜",
+            "%d 回合 · 承伤 %s · 今日进度 %d/%d"
+            % (int(rep.get("rounds") or 0), _fmt_hp(rep.get("taken")), idx + 1,
+               int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))),
+            "实际掉落：" + drop_txt]
+    if rep.get("lore"):
+        rows.append("📜 得《天妖傀》竹简 · 遗迹残傀可发「傀儡 收服」降服")
+    return rows
+
+
+def _fmt_hp(v) -> str:
+    try:
+        return "{:,}".format(int(v or 0))
+    except (TypeError, ValueError):
+        return "0"
+
+
+async def render_ruin(state: dict, day: str = "", report: dict | None = None) -> bytes | None:
+    """「傀儡遗迹」出图：战况 + 三段进度卡，与战报文字同源（同一 stage 水位线）。"""
+    return await _render_list("doupo_ruin", build_ruin_data(state, day, report),
+                              CARD_RUIN_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -852,11 +893,15 @@ async def render_puppet_for(qq: str, p: dict | None = None, pstore=None) -> byte
     return await render_puppet(roster, elig, p)
 
 
-async def render_ruin_for(qq: str, day: str = "", pstore=None) -> bytes | None:
-    """按 QQ 渲染傀儡遗迹进度卡（today 缺省取本地当天，与 ``cmd_puppet_ruin`` 同源）。"""
+async def render_ruin_for(qq: str, day: str = "", pstore=None,
+                          report: dict | None = None) -> bytes | None:
+    """按 QQ 渲染傀儡遗迹卡（today 缺省取本地当天，与 ``cmd_puppet_ruin`` 同源）。
+
+    ``report`` 传 ``cmd_puppet_ruin(report=...)`` 收下的战况 → 并进同一张卡。
+    """
     store = _puppet_store(pstore)
     if not day:
         from datetime import date  # noqa: PLC0415
         day = date.today().isoformat()
     state = await store.ruin_state(str(qq), day)
-    return await render_ruin(state, day)
+    return await render_ruin(state, day, report)

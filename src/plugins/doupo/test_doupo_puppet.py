@@ -281,6 +281,37 @@ async def main() -> None:
     png2 = await card_mod.render_ruin_for(QQ, DAY, db)
     check("render_ruin_for 真出 PNG",
           bool(png2) and png2[:8] == b"\x89PNG\r\n\x1a\n", "bytes=%d" % len(png2 or b""))
+
+    # ---- 11b. 战况并进同一张卡（用户要求「点一次只出一条内容」） ----
+    # QQ 今天三段已全通（上面用例打的），要验真实战斗得换一个干净玩家。
+    QQ2 = "73002"
+    p4 = _qualified()
+    p4["qq"] = QQ2
+    await store.put_player(p4)
+    rep: dict = {}
+    txt_lose = await cmds.cmd_puppet_ruin(store, QQ2, db, report=rep)
+    check("副本命令回传结构化战况", bool(rep) and "win" in rep, str(rep)[:120])
+    check("战况与文字战报同一批字段",
+          rep.get("monster") and int(rep.get("rounds") or 0) >= 1, str(rep)[:120])
+    data_rep = card_mod.build_ruin_data(await db.ruin_state(QQ2, DAY), DAY, rep)
+    first = (data_rep.get("groups") or [{}])[0]
+    check("遗迹卡首段是「本次挑战」", first.get("name") == "本次挑战", str(first)[:120])
+    joined = " ".join(first.get("rows") or [])
+    check("卡内含胜负判定", ("胜" in joined) or ("力竭" in joined), joined[:120])
+    check("卡内含段位与回合", ("第 " in joined) and ("回合" in joined), joined[:120])
+    png_rep = await card_mod.render_ruin_for(QQ2, DAY, db, rep)
+    check("带战况的遗迹卡仍真出 PNG",
+          bool(png_rep) and png_rep[:8] == b"\x89PNG\r\n\x1a\n", "bytes=%d" % len(png_rep or b""))
+    check("不带 report 时卡片不多出「本次挑战」段（回归）",
+          (card_mod.build_ruin_data({"stage": 0}, DAY).get("groups") or [{}])[0].get("name") != "本次挑战",
+          "")
+
+    # 今日已全通：卡片首段也要能说清，而不是留一片空白
+    rep2: dict = {}
+    await cmds.cmd_puppet_ruin(store, QQ, db, report=rep2)
+    rows2 = (card_mod.build_ruin_data(await db.ruin_state(QQ, DAY), DAY, rep2)
+             .get("groups") or [{}])[0].get("rows") or []
+    check("全通时卡内说明已全通", bool(rows2) and "全通" in " ".join(rows2), str(rows2)[:120])
     st_now = await db.ruin_state(QQ, DAY)
     ruin_data = card_mod.build_ruin_data(st_now, DAY)
     check("遗迹卡进度与真实水位线同源",
