@@ -73,6 +73,19 @@ QUIZ_PREFIX = "doupo:quiz:"
 #: 炼药卡翻页按钮 data 前缀（与 channel/doupo_buttons.py 同源）。
 PAGE_PREFIX = "doupo:page:"
 
+#: 玩家自定义按钮 data 前缀（2026-11-18）。data = ``doupo:cbtn:<真实口令>``，
+#: 口令可带参（如 ``买 血灵草 2``），点击后解析首词查 _PLAN 走同一套 cmd_*。
+CUSTOM_PREFIX = "doupo:cbtn:"
+
+
+def parse_custom_cmd(cmd: str) -> str | None:
+    """解析 ``doupo:cbtn:<口令>`` → 真实口令；非本前缀/空返 None。"""
+    raw = (cmd or "").strip()
+    if not raw.startswith(CUSTOM_PREFIX):
+        return None
+    real = raw[len(CUSTOM_PREFIX):].strip()
+    return real or None
+
 
 def parse_page_cmd(cmd: str) -> int | None:
     """解析 ``doupo:page:<page>`` → 目标页码（1-based）；非本前缀/非法返 None。"""
@@ -220,12 +233,16 @@ async def dispatch_quiz(bot: Any, full_ctx: dict, cmd: str) -> bool:
     return True
 
 
-async def dispatch_button(bot: Any, full_ctx: dict, cmd: str) -> bool:
+async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
+                          arg_override: str | None = None) -> bool:
     """把一个斗破按钮口令分发出去。返回 True=已处理；False=非斗破口令（放行）。
 
     ``full_ctx`` 是 ``qq_interaction`` 构造的完整官方 ctx（含 user_key/group_key/
     reply_ref.event_id），由调用方 attach 到 ContextVar；本函数不 attach（避免
     与调用方重复），只复用已 attach 的 ctx 让 OfficialChannel.send 拿到凭据。
+
+    ``arg_override``（2026-11-18 玩家自定义按钮）：带参口令如 ``买 血灵草 2``
+    拆出首词 ``买`` 查表 + 参数 ``血灵草 2``，用于 ``qq_str`` 形态函数真传参。
     """
     from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
     from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
@@ -274,7 +291,7 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str) -> bool:
         elif shape == "gid":
             msg = await fn(store, gid)
         elif shape == "qq_str":
-            msg = await fn(store, openid, "")
+            msg = await fn(store, openid, (arg_override or "").strip())
         else:  # "qq"
             msg = await fn(store, openid)
     except Exception as e:  # noqa: BLE001 — CLOSE-02 记全不静默吞
@@ -314,3 +331,24 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str) -> bool:
 
         logger.warning("doupo_button_text_send_failed cmd=%s: %s: %s" % (cmd, type(e).__name__, e))
     return True
+
+
+async def dispatch_custom(bot: Any, full_ctx: dict, cmd: str) -> bool:
+    """玩家自定义按钮点击（2026-11-18）：``doupo:cbtn:<口令>`` → 真口令分发。
+
+    解析哨兵 → 拆「首词 + 参数」→ 首词查 :data:`_PLAN` 走同一套 ``commands.cmd_*``
+    （业务零分叉），带参口令（如 ``买 血灵草 2``）把参数传给 ``qq_str`` 形态函数。
+    首词不在 _PLAN（如自定义了不被按钮系统支持的口令）→ 返 False 放行，
+    由 qq_interaction 记日志，绝不静默吞。
+    """
+    real = parse_custom_cmd(cmd)
+    if not real:
+        return False
+    parts = real.split()
+    head, arg = parts[0], " ".join(parts[1:])
+    if head not in _PLAN:
+        from nonebot.log import logger  # noqa: PLC0415
+
+        logger.warning("doupo_custom_button_unsupported head=%s raw=%s" % (head, real))
+        return False
+    return await dispatch_button(bot, full_ctx, head, arg_override=arg)

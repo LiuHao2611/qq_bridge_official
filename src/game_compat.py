@@ -211,7 +211,41 @@ async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
 
     kcmd = DOUPO_CARD_PREFIX + str(card_key)
     ctx["keyboard_cmd"] = kcmd
-    return await get_channel(OFFICIAL).send(ctx, Outgoing(images=[data], keyboard_cmd=kcmd))
+
+    # 2026-11-18 玩家自定义每张卡底部按钮：读玩家存档该卡配置，arm 进
+    # 按钮派生层（命中则替换固定按钮）。菜单卡禁止自定义，由 custom_buttons
+    # 的 card_key_valid 守；读档失败只当无自定义（绝不阻断出图）。
+    from src.plugins.qq_bridge.channel import doupo_buttons as db  # noqa: PLC0415
+
+    custom_token = None
+    try:
+        from src.plugins.doupo.custom_buttons import (  # noqa: PLC0415
+            card_key_valid, get_buttons,
+        )
+        from src.plugins.doupo.store import STORE as _DOUPO_STORE  # noqa: PLC0415
+
+        ck = str(card_key)
+        if card_key_valid(ck):
+            user_key = str(ctx.get("user_key") or "")
+            openid = user_key.split(":")[-1] if ":" in user_key else user_key
+            if openid:
+                await _DOUPO_STORE.load()
+                p = await _DOUPO_STORE.get_player(openid)
+                if p:
+                    my = get_buttons(p, ck)
+                    if my:
+                        custom_token = db.arm_custom(my, ck)
+    except Exception as e:  # noqa: BLE001 — 按钮是增强项，读档失败绝不阻断出图
+        import logging  # noqa: PLC0415
+
+        logging.getLogger("qq_bridge.doupo").warning(
+            "custom_buttons_arm_failed card=%s: %s: %s", card_key, type(e).__name__, e)
+
+    try:
+        return await get_channel(OFFICIAL).send(ctx, Outgoing(images=[data], keyboard_cmd=kcmd))
+    finally:
+        if custom_token is not None:
+            db.disarm_custom(custom_token)
 
 
 async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
