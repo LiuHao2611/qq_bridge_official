@@ -2561,3 +2561,49 @@ E 容量与文案自洽。
 * 重建后容器内重跑真实链路：base 468p/100 条，正面 9 条 T0×1/T1×1/T2×7，负面 rec×2/ord×2。
 * 口令：#洗卡推荐 / #词条推荐 / #紫卡推荐 / #wf 推荐 <武器>（同一入口）。
 * 待用户 QQ 实测出图。
+
+## 变更记录 · 2026-11-18 09:2x → 09:5x　「我问了，他不理我」= 33 秒静默（体验修复）
+
+### 现象与真相（先纠正前提）
+用户："`我问了，他不理我`"。日志同一 trace `21394e90b78d4d6e`：
+`09:26:08 official_message_in` → `09:26:35 doupo_agent_answered tool_calls=8 tokens=31910`
+→ `09:26:41 ai_chat_done reply_len=295`。**它回了，只是 33 秒后才回**。
+技术正确 ≠ 体验正确：33 秒一条消息都没有，用户只会认为机器人死了。
+
+### 修复一：慢工具开跑前先回一句（工具总线层，不是某个工具的私货）
+* `tools/registry.py`：`Tool.progress_text`（工具自带文案，空=不说）+
+  `ToolContext.notify`（调用方注入的发送出口）+ `ToolContext.notified`（每回合去重）。
+  新增 `ToolRegistry._progress()`，在 handler **之前**发，三条纪律：
+  ① 每回合只发一次；② 先记账再发（失败不重试，不刷屏）；③ **发不出去也照跑**，
+  只记 `tool_progress_failed` —— 一句提示发不出去，不该把答案也搭进去。
+* `tools/builtins.py`：只有 `doupo_code_ask` 带文案（`稍等，我去源码里翻一翻，
+  大概二十来秒。`），其余 14 个工具 `notice=False`；`_tool()` 加 `progress_text` 透传。
+* `__init__.py`：`_handle_ai_chat` 注入 `_tool_notify` = `send_text(ctx, notice)`
+  （纯文本一声，不走连发/表情包，不落对话历史）。
+* `tool_registered` 日志新增 `notice=True/False`，启动即可肉眼确认接线。
+
+### 修复二：连发模块不再「拿内容换防刷屏」（同源真机隐患）
+`ai_mode.process_llm_response` 原版（MaiMBot）两处守卫会**丢答案**：
+回复 >300 字返回 `['懒得说']`、拆条数超限返回 `['本喵不知道哦']`。
+源码问答答案天然 1000+ 字、命中率 50%（`AI_BURST_CHANCE`）→ 用户可能收到「懒得说」。
+改成**整段单条发出**：长度只决定拆不拆条，不决定说不说。
+
+### 验证（机器判定，非"应该能行"）
+* `docker exec -i qq-bridge-official python - < tests/evidence/prove_agent_notice.py` → `PROVE_OK`
+  （探路话比答案早 39.3s 发出；同回合第二次调用不再发；发送出口抛 502 仍拿到 1155 字答案）。
+* 新增/改动守门：`tests/test_burst_content_guard.py`（6 条）+
+  `tests/test_tools_registry.py` 增 3 条（探路话一次性/失败不拖垮/没接出口不报错）+
+  `tests/test_doupo_agent_bridge.py` 增 2 条（只有它会抢话；入口真的接上 notify）。
+* 顺带修 `tests/test_ai_mode_game_passthrough.py` 里过时样本：`在吗` 已是女仆口令，
+  会先被 `ai_mode_maid_passthrough` 截走 → 换 `你是谁呀`（该用例在 HEAD 上就是红的）。
+* 相关 7 个测试文件隔离跑全绿（49 + 8 条）；全量 39F/17E 与基线同类
+  （`sys.modules["nonebot"]` 互相 stub 的既有污染），非本次回归。
+
+### 部署
+`docker build -f docker/Dockerfile.bridge -t qq-bridge-official:latest .` +
+`docker compose -f docker-compose.official.yml up -d --force-recreate`，容器 healthy。
+
+### 未验证 / 范围外（如实交代）
+* **群里真实收发未验**（要用户发一条才会真的走 QQ 服务器），只证到 dispatch 层。
+* 一条被动回复最多 5 次：探路话占 1 个 `msg_seq`，答案连发最多 4 条 + 表情包 1 条
+  理论上到 6 → 第 6 条会退到主动推送。实际常见是「探路话 + 1 条答案 + 表情包=3」。

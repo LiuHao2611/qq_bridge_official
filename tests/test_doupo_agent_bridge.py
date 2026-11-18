@@ -63,6 +63,44 @@ def test_callback_receives_original_question():
     assert got["q"] == q
 
 
+# ---------------- 1b. 等待期不沉默（2026-11-18 真机事故「他不理我」） ----------------
+def test_code_ask_declares_progress_notice_but_others_do_not():
+    """慢工具必须自带一句「稍等」，其余工具**不许**跟着抢话。"""
+    registry_mod, builtins_mod = load_tool_stack("_ags_prog")
+    reg = registry_mod.ToolRegistry()
+
+    async def cb(question, ctx):
+        return "stub"
+
+    async def qs(ctx):
+        return "队列空"
+
+    builtins_mod.register_builtin_tools(
+        reg, {"doupo_agent_ask": cb, "queue_status": qs})
+    notice = reg.get("doupo_code_ask").progress_text
+    assert notice.strip(), "源码问答 20~90 秒，必须开跑前先回一句"
+    assert 6 <= len(notice) <= 40, "探路话要短（长句反而像在解答）"
+    assert "稍等" in notice
+    for name, tool in reg._tools.items():
+        if name != "doupo_code_ask":
+            assert not tool.progress_text, "%s 不该抢话" % name
+
+
+def test_ai_chat_wires_notify_into_tool_context():
+    """光在工具上写文案不够——入口得把「怎么发」注入 ToolContext。
+
+    这条盯的是接线，不是行为：`_handle_ai_chat` 构造 ToolContext 时必须带
+    notify=…（否则 registry 那边 `notify is None` 静默跳过，等于没做）。
+    """
+    src = (REPO / "src/plugins/qq_bridge/__init__.py").read_text(encoding="utf-8")
+    assert "notify=_tool_notify" in src, "AI 聊天入口忘了把发送出口接进 ToolContext"
+    assert "async def _tool_notify(" in src
+    # 探路话是纯文本回声：不能走连发/表情包（那是正餐待遇）
+    body = src.split("async def _tool_notify(", 1)[1].split("\n        _tctx", 1)[0]
+    assert "send_text(" in body
+    assert "_send_burst" not in body and "maybe_send_sticker" not in body
+
+
 # ---------------- 2. 超时口径 ----------------
 def test_per_tool_timeout_overrides_global_default():
     """工具自带 timeout 必须覆盖全局 AI_TOOL_TIMEOUT，否则 30s 就被掐断。"""
