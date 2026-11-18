@@ -315,18 +315,22 @@ def rng_choice(seq, rng=random.random):
     return seq[min(len(seq) - 1, int(rng() * len(seq)))]
 
 
-def damage_schedule(p, rounds: int = 15) -> list:
+def damage_schedule(p, rounds: int = 15, puppet_bonus: float = 0.0) -> list:
     """逐回合的期望输出（四槽模型 · 已算暴击期望，未乘减伤）。
 
     与 `fight` 同口径：每回合在已上阵四槽里**随机释放**，期望≈四槽平均；
     斗气按阶扣除，不足以释放任一技时转武器普攻。用于反解同阶怪血量，
     使「几回合打完」保持为设计值（TTK_PLAYER）。
+
+    ``puppet_bonus``（2026-11-18 傀儡）：傀儡每回合期望肉身输出（未乘减伤），
+    由唯一函数 ``puppet_core.puppet_expected_damage`` 算出后从命令层传入。
+    **默认 0 → 无傀儡时既有调用逐字节不变。** 与 fight 的傀儡击必须同涨同落（红线）。
     """
     st = stats(p)
     normal_raw = st["力量"] * float(cfg.WEAPON_BASE_MULT)
     entries = _loadout_entries(p)
     if not entries:
-        return [normal_raw] * max(1, rounds)
+        return [(normal_raw + puppet_bonus)] * max(1, rounds)
 
     mpmax = mp_max(p)
     lv_map = p.get("skills") or {}
@@ -347,12 +351,13 @@ def damage_schedule(p, rounds: int = 15) -> list:
         else:
             out.append(normal_raw)
     mult = 1.0 + crit_rate(p) / 100.0 * 0.5
-    return [d * mult for d in out]
+    # 傀儡肉身输出不吃暴击加成（原著「稳」的打手），故在 mult 之外单独加。
+    return [d * mult + puppet_bonus for d in out]
 
 
-def cum_damage(p, rounds: int) -> float:
+def cum_damage(p, rounds: int, puppet_bonus: float = 0.0) -> float:
     """前 rounds 个回合的累计期望输出（未乘减伤）。"""
-    sch = damage_schedule(p, int(rounds) + 1)
+    sch = damage_schedule(p, int(rounds) + 1, puppet_bonus=puppet_bonus)
     whole = int(rounds)
     frac = rounds - whole
     total = sum(sch[:whole])
@@ -361,7 +366,7 @@ def cum_damage(p, rounds: int) -> float:
     return total
 
 
-def monster_scaled(p, mon) -> dict:
+def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     """把"物种"实例化成一只同阶怪。
 
     为什么不写死数值：玩家每 9 级 c_stat 有一次 阶² 的平方级跃升，
@@ -381,7 +386,8 @@ def monster_scaled(p, mon) -> dict:
 
     # 玩家打完需要几回合（等级差只影响时长，不影响难度）
     k_rounds = cfg.TTK_PLAYER * (1.0 + delta)
-    m_hp = int(cum_damage(p, k_rounds) * mitigation(m_def))
+    # 傀儡期望输出计入反解：玩家多一个打手，怪血同步变厚（红线，与 fight 同源）
+    m_hp = int(cum_damage(p, k_rounds, puppet_bonus=puppet_bonus) * mitigation(m_def))
     # 怪打死玩家需要几回合 —— 物种难度直接就是这个比值，hard 越小越可怕
     m_rounds = k_rounds * cfg.MON_ROUND_RATIO * float(mon["hard"])
     m_atk = int(st["体力"] / m_rounds / mitigation(st["防御"]))
@@ -685,8 +691,15 @@ def roll_hero_aid(p, rng=random.random) -> dict | None:
     return {"name": name, "rate": rate, "luck": max(0, int(p.get("luck", 0)))}
 
 
-def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) -> dict:
+def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
+          puppet=None, formation_n=0) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
+
+    ``puppet`` / ``formation_n``（2026-11-18 傀儡）：出战傀儡真实列 dict 与同场
+    傀儡数。默认 None/0 → 既有调用逐字节不变。傀儡每回合追加一次「傀儡击」，
+    伤害口径走 ``puppet_core.puppet_attack``（不吃 mp/斗技，忠于原著），
+    log 进 dmg_log 供战斗回看。它的期望输出已在 ``monster_scaled(p, mon,
+    puppet_bonus=...)`` 反解里计入怪血，两处同源（红线）。
 
     ``tower_mod``（2026-11-17 爬塔扩展点，默认 None 时逐字节不影响任何既有调用）：
       塔词缀/三选一增益通过它注入，**不改内核战斗逻辑、不新增 effect 类型**：
@@ -774,6 +787,17 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
             "foe_hp_before": max(0, int(foe_hp_before)),
         })
         dmg_log.append(_mark(hit, m_hp))
+        # 傀儡击：玩家出手后常驻追击一次（E32/E33/E35，非概率外援）。
+        # 肉身伤害不吃 mp/斗技、不吃暴击加成；用同一 mitigation 减伤；
+        # log 字段齐 .get() 消费（2026-11-16 回包事故）。
+        if puppet and m_hp > 0:
+            from . import puppet_core as pc  # 延迟导入避免与 core 环
+            p_atk = pc.puppet_attack(puppet)
+            p_dmg = max(1, int(p_atk * mitigation(m_def)))
+            p_dmg = min(p_dmg, m_hp)
+            m_hp -= p_dmg
+            p_entry = pc.puppet_log_entry(puppet, p_dmg, formation_n)
+            dmg_log.append(_mark(p_entry, m_hp))
         # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）× 塔禁疗倍率
         heal_frac = (lifesteal + float(hit.get("heal_ratio", 0))) * heal_mult
         if heal_frac > 0:
@@ -838,6 +862,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
         "win": win, "rounds": shown_rounds, "log": dmg_log,
         "taken": taken, "mon": mon, "mon_hp_left": max(0, m_hp),
         "hero_aid": aid,  # None 或 {name,rate,luck}，文案层据此标注机缘因果
+        "puppet": (str(puppet.get("name") or "傀儡") if puppet else None),
+        "formation": int(formation_n or 0),
     }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1

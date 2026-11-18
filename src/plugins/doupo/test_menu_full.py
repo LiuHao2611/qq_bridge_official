@@ -450,6 +450,13 @@ CASES = [
          must=[], ban=["还没有可回看", "尚未踏入", "用法"]),
     dict(id="44_battle_comment", text="战斗评价", img=None,
          must=["战斗评价"], ban=["还没有可评价", "尚未踏入", "用法"]),
+    # 45~47：2026-11-18 傀儡系统。46 是出图口令，必须真出 png（禁止降级纯文字）。
+    dict(id="45_craft_puppet", text="炼制傀儡", img=None,
+         must=["炼制傀儡", "未能开炉", "炼制成功"], ban=["尚未踏入", "用法"]),
+    dict(id="46_puppet", text="傀儡", img="png",
+         must=[], ban=["尚未踏入", "用法", "渲染失败"]),
+    dict(id="47_puppet_ruin", text="傀儡遗迹", img="png",
+         must=[], ban=["尚未踏入", "用法", "渲染失败"]),
 ]
 
 

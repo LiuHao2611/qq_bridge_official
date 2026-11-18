@@ -59,6 +59,10 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "炼药": ("cmd_recipes", "qq", "recipes"),
     "服丹": ("cmd_use", "qq_str", ""),
     "背包": ("cmd_bag", "qq", "bag"),
+    # 2026-11-18 傀儡：按钮点击走同一套 cmd_*，不另写业务逻辑
+    "炼制傀儡": ("cmd_craft_puppet", "qq", ""),
+    "傀儡遗迹": ("cmd_puppet_ruin", "qq", ""),
+    "傀儡": ("cmd_puppet", "qq", "puppet"),
 }
 
 

@@ -240,7 +240,7 @@ def test_panel_and_menu_expose_duel():
     check("菜单列出切磋", "切磋 @某人" in commands.menu_text())
     check("菜单列出应战", "应战" in commands.menu_text())
     check("菜单列出拒战", "拒战" in commands.menu_text())
-    check("菜单条数 42", commands.menu_total() == 42, str(commands.menu_total()))
+    check("菜单条数 45", commands.menu_total() == 45, str(commands.menu_total()))
 
 
 def _run():

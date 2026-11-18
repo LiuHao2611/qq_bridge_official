@@ -140,7 +140,7 @@ def test_baseline_sane():
     数量断言跟随 MENU_GROUPS 独立 AST，避免功能新增后基准漏同步导致假红。
     """
     real = _baseline_real_commands()
-    assert len(real) == 42, "MENU_GROUPS 基准应为 42 条 canonical 口令，实际 %d" % len(real)
+    assert len(real) == 45, "MENU_GROUPS 基准应为 45 条 canonical 口令，实际 %d" % len(real)
     for must in ("斗破菜单", "入道", "人物", "修炼", "突破", "战斗", "强化",
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "养火", "宝库", "买", "炼药", "炼制", "服丹",
@@ -203,6 +203,8 @@ def test_each_card_buttons_are_relevant_family():
         "recipes": {"服丹", "养火", "宝库"},
         "help": {"人物", "炼药", "斗技"},
         "battle": {"战斗评价"},
+        "puppet": {"炼制傀儡", "傀儡遗迹", "战斗"},
+        "ruin": {"炼制傀儡", "傀儡", "战斗"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (

@@ -90,7 +90,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     blocks, blocks_h = _layout(data, content_w)
     boxes = kw.pop("boxes", None)
 
-    h = PAD + FS_TITLE + 8 + 1 + 18 + blocks_h + 12 + FS_BODY + PAD
+    # 副标题是可选增量（doupo_ruin 复用本骨架时显示「今日进度」）；
+    # 不传 subtitle 时 sub_h=0，战斗回看卡的尺寸与像素位置逐字节不变。
+    sub_h = FS_BODY + 8 if str(data.get("subtitle") or "") else 0
+    h = PAD + FS_TITLE + 8 + 1 + 18 + sub_h + blocks_h + 12 + FS_BODY + PAD
     h = max(360, h)
 
     c = Canvas(width, h, p["page_color"], theme=t)
@@ -126,6 +129,14 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     y += FS_TITLE + 8
     c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
     y += 18
+
+    # ---- 可选副标题（不改既有战斗卡：无 subtitle 时整段跳过）----
+    if sub_h:
+        s = _fit(str(data.get("subtitle") or ""), content_w, FS_BODY, "regular")
+        c.text((x0, y + FS_BODY // 2), s, size=FS_BODY, color=p["dim_color"],
+               role="regular", anchor="lm")
+        rec("subtitle", s, x0, y + FS_BODY // 2, FS_BODY)
+        y += sub_h
 
     # ---- 分组 + 逐行 ----
     for bi, (kind, payload, bh) in enumerate(blocks):

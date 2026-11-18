@@ -2,6 +2,17 @@
 
 > 只留「踩过坑、别改回去」的口径。细节读 `docs/` 与 AGENTS.md 的变更记录。
 
+## 🚨 最高声明（2026-11-18 用户原话，凌驾一切设计）
+
+> 「所有玩家数据必须保存到数据库，禁止存 JSON，这是最高声明」
+
+* **玩家数据一律进 SQLite**，禁止再往 `players.data` 的 JSON blob 里塞新字段。
+  傀儡系统等新玩法的持久化必须**建独立表 + 真实字段**（不是 `data TEXT` 里的 JSON）。
+* 新建表同时：① 走 `DATA_PATH` 单源推导的库路径；② 原子写；③ 纳入
+  `test_user_data_persistence.py` / `test_game_save_sqlite.py` 门禁；④ 老档可迁移但代码不回退 JSON。
+* 提交走 **GitHub MCP**（`mcp__github__push_files` 等），**不用 git CLI push**（分叉/超时问题）；
+  仓库是 `LiuHao2611/qq_bridge_official`，**别搞错成 `qq_bridge` 原件**。
+
 ## 1. 斗破源码问答 = 沙盒 agent 容器（2026-11-18 定稿）
 
 用户原话：「直接搬一个完整的 agent 项目，运行在沙盒里……无论我怎么问他都能找到我想

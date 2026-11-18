@@ -109,7 +109,7 @@ async def main():
     # 2026-11-16 新增「学斗技」→ 29 + 1 = 30（必须仍等于 __init__.py 的 matcher 数）
     # 2026-11-17 新增爬塔副本 4 条（爬塔/塔层/塔结算/装备）→ 33 + 4 = 37
     # 2026-11-17 新增电梯/周副本/周本状态 3 条 → 37 + 3 = 40
-    check("菜单条数 = menu_total()", commands.menu_total() == 42,
+    check("菜单条数 = menu_total()", commands.menu_total() == 45,
           f"menu_total={commands.menu_total()}")
     # 新设计：菜单是唯一切换口（斗破菜单），其余口令全部纯中文、不再带前缀
     lines = [l.split(" —— ")[0].strip() for l in menu.splitlines() if " —— " in l]

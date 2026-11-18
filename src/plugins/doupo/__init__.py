@@ -10,7 +10,8 @@
 ⚠️ 优先级：主插件聊天处理器是 on_message(priority=10, block=False)。
 本插件全部 matcher 用 block=True —— 先于聊天处理器运行，命中即阻断，
 避免"口令被 LLM 抢答/双重回复"。优先级绝大多数为 5；仅精确口令
-「斗技详情」用 4（PRI-1）抢在「斗技」列表口令之前，避免被列表吃掉。
+「斗技详情」和「炼制傀儡 / 傀儡遗迹 / 傀儡」用 4（PRI-1）抢在
+「斗技」列表 / 「炼制」丹方口令之前，避免被短口令吃掉。
 
 ⚠️ 模式隔离：斗破 / 修仙 现在都用纯中文口令，靠「按用户记录的当前模式」分流。
    谁发「斗破菜单」→ 他后续口令走斗破；发「修仙菜单」→ 走修仙（菜单是唯一切换口）。
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 
 from nonebot import on_regex, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
@@ -34,12 +36,15 @@ from . import card
 from . import avatar
 from . import core
 from . import store as store_mod
+from . import puppet_store as puppet_store_mod
 
 logger = logging.getLogger("qq_bridge.doupo")
 
 # 进程级单例（store.STORE）：按钮点击回调与本插件必须共享同一实例，
 # 否则官方按钮点「人物」读不到当前存档。见 store.py 末尾说明。
 store = store_mod.STORE
+# 傀儡独立 SQLite（真实列，绝不进 players.data 的 JSON blob）
+puppet_store = puppet_store_mod.PUPPET_STORE
 
 
 # priority=5（高于聊天处理器的 10） + block=True（命中即阻断 LLM 闲聊）
@@ -878,6 +883,71 @@ async def _(event: Event):
         str(event.user_id), gid))
 
 
+# ---------------------------------------------------------------------------
+# 傀儡（2026-11-18）：一个 matcher 同时吃「炼制傀儡」和「傀儡[子命令]」。
+# 故意不拆成两条同优先级 matcher——否则「炼制傀儡」会被「傀儡」抢答。
+# 「傀儡」是出图口令：必须真出图，渲染失败只显式报错，绝不静默降级为纯文字。
+# ---------------------------------------------------------------------------
+puppet_cmd = on_regex(
+    _pat(r"(?:炼制傀儡|傀儡)") + r"\s*(.*)", priority=PRI - 1, block=True,
+    rule=_mode_is("doupo"))
+
+
+@puppet_cmd.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, puppet_cmd)
+    qq = str(event.user_id)
+    raw = _plain(event)
+    if "傀儡遗迹" in raw:
+        txt = await commands.cmd_puppet_ruin(store, qq, puppet_store)
+        # 出图与战报同源：战报跑完后重读水位线，卡面显示最新进度。
+        png = None
+        try:
+            if not await store.get_player(qq):
+                await puppet_cmd.finish(txt)  # 未入道者无卡可出，不是降级
+                return
+            day = date.today().isoformat()
+            st = await puppet_store.ruin_state(qq, day)
+            png = await card.render_ruin(st, day)
+        except Exception as e:  # noqa: BLE001
+            logger.error("傀儡遗迹卡渲染失败（拒绝静默降级）：%s: %s",
+                         type(e).__name__, e)
+        if png:
+            await finish_card(puppet_cmd, event, png, "ruin", "doupo_ruin.png")
+            return
+        await puppet_cmd.finish("⚠️ 傀儡遗迹卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
+        return
+    if "炼制傀儡" in raw:
+        await puppet_cmd.finish(
+            await commands.cmd_craft_puppet(store, qq, puppet_store))
+        return
+    m = re.search(r"傀儡\s*(.*)", raw)
+    arg = (m.group(1) if m else "").strip()
+    txt = await commands.cmd_puppet(store, qq, arg, puppet_store)
+    try:
+        p = await store.get_player(qq)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("傀儡卡取玩家失败：%s: %s", type(e).__name__, e)
+        p = None
+    if not p:
+        # 未入道者本来就没有卡可出，按文本引导（不是出图口令降级）
+        await puppet_cmd.finish(txt)
+        return
+    png = None
+    try:
+        roster = await puppet_store.list_puppets(qq)
+        elig = await puppet_store.eligibility(qq)
+        png = await card.render_puppet(roster, elig, p)
+    except Exception as e:  # noqa: BLE001
+        logger.error("斗破傀儡卡渲染失败（拒绝静默降级为纯文字）：%s: %s",
+                     type(e).__name__, e)
+    if png:
+        await finish_card(puppet_cmd, event, png, "puppet", "doupo_puppet.png")
+        return
+    await puppet_cmd.finish("⚠️ 傀儡卡渲染失败，请稍后重试（未用纯文字代替图片）。")
+
+
 give = on_regex(_pat(r"(?:送|赠送)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
@@ -991,4 +1061,7 @@ register_keywords("doupo", [
     "拒绝切磋",
     "送",
     "赠送",
+    "炼制傀儡",
+    "傀儡",
+    "傀儡遗迹",
 ])
