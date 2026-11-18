@@ -94,11 +94,29 @@ NOVEL_RECIPES = [
     {"name": "破厄丹", "grade": "五品", "effect": "exp", "value": 1200, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "破解封印、恢复封印所致的力量衰退", "src": "原著第230章"},
     {"name": "斗灵丹", "grade": "六品", "effect": "exp", "value": 2600, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"血蟒枝": 1}, "desc": "斗王服下提升一星实力，一生只能服一枚", "src": "原著第211章"},
     {"name": "复灵紫丹", "grade": "五品", "effect": "hp", "value": 1500, "buy": 3500, "min_lv": GRADE_MIN_LV["五品"], "need": {}, "desc": "将因封印或体内残伤而衰退的实力完全修复", "src": "原著第251章"},
-    {"name": "三纹青灵丹", "grade": "四品", "effect": "exp", "value": 1000, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {"青焰草": 1, "黑天麻": 1}, "desc": "助斗师突破成大斗师；大斗师服下有几率升一星，无药效反噬", "src": "原著第315章"},
+    # 2026-11-18 修正（玩家报障「吃了那么多没见突破大斗师，每次只加 1000 修为」）：
+    # 原著第 315 章原话「普通三纹青灵丹能够助斗师强者突破晋入大斗师的界限，若是
+    # 大斗师强者服用，则能有少许几率提升服用者一星的等级，并无药效反噬」。
+    # 旧实现是 effect="exp" value=1000 —— desc 承诺破境、代码只给修为，纯属假药。
+    # 现改为 effect="breakthrough"：to_realm=3（大斗师，见 config.REALM_NAMES）、
+    # star_chance=0.30（原著「少许几率」）、value 保留作保底修为（不适用时不白吃）。
+    {"name": "三纹青灵丹", "grade": "四品", "effect": "breakthrough", "value": 1000,
+     "to_realm": 3, "star_chance": 0.30, "break_boundary": True, "max_per_realm": 1,
+     "buy": 1500, "min_lv": GRADE_MIN_LV["四品"],
+     "need": {"青焰草": 1, "黑天麻": 1},
+     "desc": "斗师九星服下直破大斗师界限；大斗师服下三成几率升一星，无药效反噬，一阶限一枚",
+     "src": "原著第315章"},
     {"name": "二纹青灵丹", "grade": "四品", "effect": "exp", "value": 700, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "三纹青灵丹的较低阶形态（二道丹纹）", "src": "原著第315章"},
     {"name": "青灵丹", "grade": "四品", "effect": "exp", "value": 500, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "提升实力的基础丹药（三纹青灵丹系）", "src": "原著第315章"},
     {"name": "地灵丹", "grade": "六品", "effect": "hp", "value": 2800, "buy": 8000, "min_lv": GRADE_MIN_LV["六品"], "need": {"地心火芝": 1, "龙须冰火果": 1, "青木仙藤": 1, "水属性魔核": 1}, "desc": "吞噬异火时护体的必备丹药", "src": "原著第317章"},
-    {"name": "紫心破障丹", "grade": "四品", "effect": "exp", "value": 1200, "buy": 1500, "min_lv": GRADE_MIN_LV["四品"], "need": {}, "desc": "大斗师服下提升一星；同级可连服两枚而不产生太大抗性", "src": "原著第321章"},
+    # 同一类假药（2026-11-18 一并修）：原著第 321 章「只能作用于大斗师级别……
+    # 便能够提升一星的实力……同一级别能够接连的服用两枚而不至于产生太大的抗性
+    # ……稳步的提升两星实力」。与三纹青灵丹的差别是**必成**（无几率）且**两枚**。
+    {"name": "紫心破障丹", "grade": "四品", "effect": "breakthrough", "value": 1200,
+     "to_realm": 3, "star_chance": 1.0, "max_per_realm": 2, "buy": 1500,
+     "min_lv": GRADE_MIN_LV["四品"], "need": {},
+     "desc": "只作用于大斗师：服之必升一星，同阶可连服两枚，稳步提升两星",
+     "src": "原著第321章"},
     {"name": "复容丹", "grade": "三品", "effect": "hp", "value": 600, "buy": 700, "min_lv": GRADE_MIN_LV["三品"], "need": {}, "desc": "令人返回少年时的面容（仅表面）", "src": "原著第312章"},
     {"name": "阴阳玄龙丹", "grade": "七品", "effect": "stat", "value": 25, "buy": 18000, "min_lv": GRADE_MIN_LV["七品"], "need": {"六阶龙类魔核": 2}, "desc": "破后而立：重伤濒死时获蜕变机会，身体/灵魂/斗气更上一层楼", "src": "原著第396章"},
     {"name": "洗髓寒灵液", "grade": "二品", "effect": "hp", "value": 500, "buy": 300, "min_lv": GRADE_MIN_LV["二品"], "need": {}, "desc": "浸泡修炼，清除体内残留火毒", "src": "原著第414章"},

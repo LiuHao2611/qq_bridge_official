@@ -1308,11 +1308,21 @@ async def cmd_use(store, qq, name) -> str:
         (n for n in pool if name in n or n in name), None)
     if not hit:
         return "无此丹药。"
-    res = core.use_item(p, hit)
+    # 「一阶限 N 枚」只对破境类丹药生效（原著抗性），普通丹药读库没意义。
+    rec = cfg.RECIPE_BY_NAME.get(hit) or {}
+    used = None
+    if rec.get("effect") == "breakthrough":
+        used = await store.pill_used_counts(str(qq), hit)
+    res = core.use_item(p, hit, used_counts=used)
+    if res.get("mark_used") is not None:
+        await store.mark_pill_used(str(qq), hit, int(res["mark_used"]))
     await store.put_player(p)
     if not res.get("ok"):
         if res.get("reason") == "none":
             return f"你没有【{hit}】。去「炼制 {hit}」或「宝库」看看。"
+        if res.get("reason") == "resisted":
+            # 丹药已被扣掉（原著就是「白白浪费」），必须让玩家看见这件事。
+            return f"💊 服下【{hit}】，{res.get('msg')}"
         return res.get("msg") or "无法服用。"
     if hit in cfg.MATERIAL_BY_NAME:
         return f"✨ {res['msg']}"

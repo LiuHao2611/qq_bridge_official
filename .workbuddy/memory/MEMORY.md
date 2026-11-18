@@ -218,3 +218,15 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
 * `finish_card` 不允许再加 caption/分条发送类参数——2026-11-18 加过一次，被用户当场否掉。
 * `tests/test_menu_full.py` 的用例默认 `parts=1`；只有真的业务需要多条时才写 `parts=N`。
 * 验收战斗类命令**必须用库副本**（`tmp/` 下复制，含 `-wal`），不许直接连生产库——当晚踩了两次。
+
+## 11. 🚨 丹药 effect 必须真实现（2026-11-18 假药事故）
+
+* 事故：三纹青灵丹 `desc` 写「助斗师突破成大斗师、大斗师服下升一星」，代码却是
+  `effect="exp" value=1000` → 玩家吃 8 枚只涨修为，永远破不了境。
+  **desc 承诺 = 必须有一行代码兑现**，否则就是卖假药。
+* 破境丹统一走 `effect="breakthrough"` + `to_realm/star_chance/break_boundary/
+  max_per_realm`，结算只在 `core.use_item` 一处。已接：三纹青灵丹（破界+30%升星+
+  一阶1枚）、紫心破障丹（大斗师必升+一阶2枚，依据第321章）。
+* 「一阶限 N 枚」→ 表 `pill_use(id,qq,name,realm_idx,used_at)`，**不用复合主键**
+  （同阶要吃两枚），也不塞 players.data。旧形状走 rename→建表→搬迁→drop 无损迁移。
+* 新增效果类型必须同时加 `EFFECT_TAG`，否则炼药卡把破境丹标成「增修为」。
