@@ -16,7 +16,9 @@
   （只读挂载 / read_only 根 / uid 10001 / 无 .env / 无 docker.sock / 命令黑名单）。
   注意 `docker cp` 进 `read_only` 容器会失败（rootfs is marked read-only），只走 stdin。
 * 详解文档：`docs/斗破源码问答沙盒_2026-11-17.md`（含 7 条真机踩坑）。
-* 已知限制：**单次 40~90 秒**（深度换来的）；额度按模型独立计，容易一烧就光。
+* 已知限制：**单次 20~35 秒 / 1.7万~2.8万 token**（2026-11-18 实测，4~8 次工具调用）；
+  额度按模型独立计且免费额度极小（deepseek-v4-pro-ga 只够 4 次工具调用）。
+  **计费主因是调用次数**（每轮重发整段历史，input:output ≈ 11:1），所以 `AGENT_MAX_TOOLS` 也是省钱阀。
 
 ## 🚨 铁律：agent 底座不许换回 smolagents（2026-11-18 实证）
 
