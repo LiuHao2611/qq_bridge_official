@@ -387,10 +387,16 @@ def monster_scaled(p, mon) -> dict:
     m_atk = int(st["体力"] / m_rounds / mitigation(st["防御"]))
     exp = int(cfg.exp_need(lv) / cfg.EXP_FIGHTS_PER_LV * float(mon.get("exp_mul", 1.0)))
     gold = int(exp * 0.25 * float(mon.get("gold_mul", 1.0)))
+    # kind/is_boss 纯增量透传（2026-11-18 天材地宝分级掉落）：默认空/False 时
+    # 既有调用与测试逐字节不变；遭遇战反派(魂殿/黑盟/魔炎谷)与塔/周本 boss 层据此
+    # 解锁 tier4 专属掉落。掉落层只认这两个字段，不反推战斗数值。
+    _kind = str(mon.get("kind") or "")
+    _is_boss = any(tok in _kind for tok in cfg.BOSS_KIND_TOKENS)
     return {
         "name": mon["name"], "lv": int(mon["lv"]),
         "hp": max(1, m_hp), "atk": max(1, m_atk), "def": m_def,
         "exp": max(1, exp), "gold": max(1, gold),
+        "kind": _kind, "is_boss": _is_boss,
     }
 
 
@@ -831,7 +837,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
         p["exp"] = int(p.get("exp", 0)) + exp
         gold = int(mon["gold"] * (cfg.DROP_GOLD_MULT[0] + rng()))
         p["gold"] = int(p.get("gold", 0)) + gold
-        res.update(exp=exp, gold=gold, drops=_roll_drops(p, rng))
+        res.update(exp=exp, gold=gold, drops=_roll_drops(p, rng, mon))
     else:
         p["losses"] = int(p.get("losses", 0)) + 1
         p["hp"] = int(st["体力"] * (1 - cfg.LOSE_HP_ON_DEFEAT))
@@ -1484,8 +1490,16 @@ def duel(p, vic, rng=random.random) -> dict:
             "hp_p": max(0, hp_p), "hp_v": max(0, hp_v)}
 
 
-def _roll_drops(p, rng) -> list:
-    """[源码 h.java:57-78] 千分率判定 + 基础值到 2 倍随机。"""
+def _roll_drops(p, rng, mon=None) -> list:
+    """[源码 h.java:57-78] 千分率判定 + 基础值到 2 倍随机。
+
+    2026-11-18 天材地宝分级掉落（用户「天才地宝也按怪物等级分配，还有 boos」）：
+      * 原有的炎星石/普通药材判定放在**最前**，rng 调用顺序与数量对老路径零改变；
+        ``mon=None`` 时函数在普通药材后立刻 return，行为与改动前逐字节一致。
+      * 传入 mon 后，按 ``mon['lv']`` 选可掉 tier（lv 越高池越深），逐档独立千分率判定；
+        ``mon['is_boss']`` 为真时**额外必掉一件 tier4 专属天材地宝**。
+      * 每件天材地宝自带 effect/value，服下即生效（见 use_item），不是背包摆设。
+    """
     out = []
     if int(rng() * 1000) < cfg.DROP_RATE_STONE:
         n = 1 + int(rng() * 2)
@@ -1496,6 +1510,25 @@ def _roll_drops(p, rng) -> list:
         n = 1 + int(rng() * 2)
         add_item(p, h["name"], n)
         out.append((h["name"], n))
+    if mon is None:
+        return out
+
+    lv = int(mon.get("lv") or 0)
+    is_boss = bool(mon.get("is_boss"))
+    max_tier = 4 if is_boss else max(
+        [t for t, minlv in cfg.MATERIAL_TIER_LV.items()
+         if t < 4 and lv >= minlv], default=1)
+    for tier in range(1, max_tier + 1):
+        # tier4 专属：非 Boss 永不进入循环；Boss 也走独立千分率，不是 100% 但明显偏高。
+        if int(rng() * 1000) >= cfg.MATERIAL_DROP_RATE[tier]:
+            continue
+        pool = [m for m in cfg.NOVEL_MATERIALS if m["tier"] == tier]
+        if not pool:
+            continue
+        m = rng_choice(pool, rng)
+        n = 1 + int(rng() * 2) if tier <= 2 else 1   # 高阶天材地宝只掉 1 件
+        add_item(p, m["name"], n)
+        out.append((m["name"], n))
     return out
 
 
@@ -1661,8 +1694,17 @@ def _alch_level_up(p) -> str:
 
 
 def use_item(p, name) -> dict:
-    """服用丹药。"""
+    """服用丹药 / 炼化天材地宝（2026-11-18 材料不再是背包摆设）。
+
+    解析优先级：先按丹药配方，未命中再按天材地宝表。两者的 effect/value 走同一
+    结算分支（hp/mp/exp/luck/dodge/crit/stat/skill），只对 ``msg`` 前缀做区分——
+    既有丹药的 reason/msg 文案逐字不变，既有测试与安全网关不受影响。
+    """
     rec = cfg.RECIPE_BY_NAME.get(name)
+    is_material = False
+    if not rec:
+        rec = cfg.MATERIAL_BY_NAME.get(name)
+        is_material = bool(rec)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
     if not take_item(p, name, 1):
@@ -1670,35 +1712,36 @@ def use_item(p, name) -> dict:
 
     st = stats(p)
     eff, val = rec["effect"], int(rec["value"])
+    lead = "炼化【%s】，" % name if is_material else ""
     if eff == "hp":
         before = int(p.get("hp", 0))
         p["hp"] = min(st["体力"], before + val)
-        return {"ok": True, "msg": f"气血 +{p['hp'] - before}（{p['hp']}/{st['体力']}）"}
+        return {"ok": True, "msg": lead + f"气血 +{p['hp'] - before}（{p['hp']}/{st['体力']}）"}
     if eff == "mp":
         mx = mp_max(p)
         before = int(p.get("mp", 0))
         p["mp"] = min(mx, before + val)
-        return {"ok": True, "msg": f"斗气 +{p['mp'] - before}（{p['mp']}/{mx}）"}
+        return {"ok": True, "msg": lead + f"斗气 +{p['mp'] - before}（{p['mp']}/{mx}）"}
     if eff == "exp":
         p["exp"] = int(p.get("exp", 0)) + val
-        return {"ok": True, "msg": f"修为 +{val}"}
+        return {"ok": True, "msg": lead + f"修为 +{val}"}
     if eff == "luck":
         p["luck"] = min(9999, int(p.get("luck", 0)) + val)
-        return {"ok": True, "msg": f"机缘 +{val}（现 {p['luck']}）"}
+        return {"ok": True, "msg": lead + f"机缘 +{val}（现 {p['luck']}）"}
     if eff == "dodge":
         b = p.setdefault("bonus", {})
         b["闪避"] = int(b.get("闪避", 0)) + val
-        return {"ok": True, "msg": f"永久闪避 +{val}%"}
+        return {"ok": True, "msg": lead + f"永久闪避 +{val}%"}
     if eff == "crit":
         b = p.setdefault("bonus", {})
         b["暴击"] = int(b.get("暴击", 0)) + val
-        return {"ok": True, "msg": f"永久暴击 +{val}%"}
+        return {"ok": True, "msg": lead + f"永久暴击 +{val}%"}
     if eff == "stat":
         b = p.setdefault("bonus", {})
         for k in ("力量", "敏捷", "斗气", "防御", "体力"):
             b[k] = int(b.get(k, 0)) + val
         _refill(p)
-        return {"ok": True, "msg": f"全属性 +{val}"}
+        return {"ok": True, "msg": lead + f"全属性 +{val}"}
     if eff == "skill":
         return {"ok": False, "reason": "notuse",
                 "msg": "焚血散不是口服之物，请在「升级 技能名」时使用"}

@@ -1236,7 +1236,11 @@ async def cmd_use(store, qq, name) -> str:
     name = (name or "").strip()
     if not name:
         return "用法：服丹 回灵丹"
-    hit = next((n for n in cfg.RECIPE_NAMES if name in n or n in name), None)
+    # 2026-11-18：丹药 + 天材地宝统一走「服丹/炼化」入口，材料也有实际作用。
+    # 先精确匹配（防「复灵紫丹」被「复紫灵丹」的子串抢先命中），再宽松匹配。
+    pool = list(cfg.RECIPE_NAMES) + list(cfg.MATERIAL_NAMES)
+    hit = name if name in pool else next(
+        (n for n in pool if name in n or n in name), None)
     if not hit:
         return "无此丹药。"
     res = core.use_item(p, hit)
@@ -1245,6 +1249,8 @@ async def cmd_use(store, qq, name) -> str:
         if res.get("reason") == "none":
             return f"你没有【{hit}】。去「炼制 {hit}」或「宝库」看看。"
         return res.get("msg") or "无法服用。"
+    if hit in cfg.MATERIAL_BY_NAME:
+        return f"✨ {res['msg']}"
     return f"💊 服下【{hit}】，{res['msg']}"
 
 
