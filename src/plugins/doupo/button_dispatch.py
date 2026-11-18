@@ -61,7 +61,7 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "背包": ("cmd_bag", "qq", "bag"),
     # 2026-11-18 傀儡：按钮点击走同一套 cmd_*，不另写业务逻辑
     "炼制傀儡": ("cmd_craft_puppet", "qq", ""),
-    "傀儡遗迹": ("cmd_puppet_ruin", "qq", ""),
+    "傀儡遗迹": ("cmd_puppet_ruin", "qq", "ruin"),
     "傀儡": ("cmd_puppet", "qq", "puppet"),
 }
 
@@ -305,21 +305,44 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
         msg = "（按钮处理出错，请重试或手打口令）"
 
     # 出卡口令：card.render_* + 带按钮再下发；渲染失败降级为纯文本
+    text_sent = False
     if card_key:
         png = None
         try:
             p = await store.get_player(openid)
-            renderer = getattr(card_mod, "render_" + card_key, None)
-            if p and renderer is not None:
-                if card_key == "rank":
-                    # render_rank(top: list) 与其它 render_*(p) 签名不同
-                    top = (await store.all_players(gid))[:10]
-                    png = await renderer(top)
-                else:
-                    png = await renderer(p)
+            # ⚠️ 每张卡的入参形状不同，**不许**统一 `renderer(p)` 糊过去。
+            #    2026-11-18 事故：傀儡卡签名是 render_puppet(roster, elig, p)、
+            #    遗迹卡是 render_ruin(state, day)，被 `renderer(p)` 调用后把玩家 dict
+            #    当成名录/当日状态，渲出「持有 0 具 / 今日进度 0/3」的假卡（还不报错）。
+            #    所以非 (p) 形状的卡必须在 card 里提供「按 qq 取数」的唯一入口。
+            if card_key == "puppet":
+                if p:
+                    png = await card_mod.render_puppet_for(openid, p)
+            elif card_key == "ruin":
+                if p:
+                    png = await card_mod.render_ruin_for(openid)
+            else:
+                renderer = getattr(card_mod, "render_" + card_key, None)
+                if p and renderer is not None:
+                    if card_key == "rank":
+                        # render_rank(top: list) 与其它 render_*(p) 签名不同
+                        top = (await store.all_players(gid))[:10]
+                        png = await renderer(top)
+                    else:
+                        png = await renderer(p)
         except Exception:  # noqa: BLE001 — 出图失败降级文本，绝不静默吞消息
             png = None
         if png:
+            # 傀儡遗迹：msg 是**战报**（赢了没/掉了什么），不能被进度卡吞掉。
+            # 先发战报文字，再发卡；文字失败也照常出卡（出图不降级是红线）。
+            if card_key == "ruin" and msg:
+                try:
+                    from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
+
+                    await get_channel(OFFICIAL).send(full_ctx, Outgoing(text=msg))
+                    text_sent = True
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 ret = await send_card_via_channel(full_ctx, png, card_key)
                 if isinstance(ret, dict) and ret.get("ok"):
@@ -327,7 +350,9 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
             except Exception:  # noqa: BLE001 — 降级文本
                 pass
 
-    # 文本回复（无图 / 出图失败 / 纯操作口令）
+    # 文本回复（无图 / 出图失败 / 纯操作口令）；已随卡发过的战报不重复发
+    if text_sent:
+        return True
     try:
         await get_channel(OFFICIAL).send(full_ctx, Outgoing(text=msg))
     except Exception as e:  # noqa: BLE001
