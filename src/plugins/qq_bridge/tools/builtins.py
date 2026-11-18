@@ -339,7 +339,10 @@ def register_builtin_tools(registry: ToolRegistry, deps: Deps | None = None) -> 
             # 2026-11-18 真机事故「我问了，他不理我」：其实回了，只是 33 秒后才回。
             # 这 33 秒里群里一条消息都没有 = 体验上就是机器人死了。开跑前先吱一声，
             # 只说这一句（dispatch 保证每回合只发一次），答案照旧由模型组织。
-            progress_text="稍等，我去源码里翻一翻，大概二十来秒。",
+            # ⚠ 这只是**兜底**：正常路径用当前人设的 notice
+            #   （`persona.resolve_notice`，见 __init__ 的 _tool_notify）。
+            #   文案要与 persona.NOTICE_FALLBACK 保持一致，别在这里写死某个角色的口癖。
+            progress_text="翻源码去了，二十来秒，别催。",
         ))
         registered.append("doupo_code_ask")
 

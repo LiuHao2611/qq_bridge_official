@@ -80,7 +80,11 @@ def test_code_ask_declares_progress_notice_but_others_do_not():
     notice = reg.get("doupo_code_ask").progress_text
     assert notice.strip(), "源码问答 20~90 秒，必须开跑前先回一句"
     assert 6 <= len(notice) <= 40, "探路话要短（长句反而像在解答）"
-    assert "稍等" in notice
+    # 兜底文案必须与 persona.NOTICE_FALLBACK 逐字一致（真正发出的是人设那条，
+    # 这里只保证「人设库故障时退回的也是人话」；两边一致由 test_persona 交叉守）
+    assert notice == "翻源码去了，二十来秒，别催。"
+    for bad in ("稍等", "正在", "为您"):
+        assert bad not in notice, "别用客服腔：%r" % notice
     for name, tool in reg._tools.items():
         if name != "doupo_code_ask":
             assert not tool.progress_text, "%s 不该抢话" % name
@@ -326,3 +330,54 @@ def test_agent_server_uses_openai_agents_not_smolagents():
     # 每请求 asyncio.run() 会让第二个请求直接炸 "Event loop is closed"
     assert "run_coroutine_threadsafe" in src
     assert "asyncio.run(" not in src
+
+
+# ---------------- 5. 逐步日志（2026-11-18「日志不够详细，必须每一步都打印」） ----------------
+def _agent_src() -> str:
+    return (REPO / "agent/agent_server.py").read_text(encoding="utf-8")
+
+
+def test_agent_logs_every_step_via_hooks():
+    """每一步都要有日志：请求轮次、模型返回、工具入参、工具结果、总账。
+
+    为什么用 SDK hooks 而不是事后读 RunResult：撞 `MaxTurnsExceeded` 时
+    RunResult 根本拿不到，而那恰恰是最需要复盘的一次。
+    """
+    src = _agent_src()
+    assert "RunHooks" in src and "class _StepLog(RunHooks)" in src
+    # hooks 必须真的挂进 Runner.run（光定义不挂 = 一行都不打）
+    assert "hooks=hooks" in src
+    for hook in ("on_agent_start", "on_llm_start", "on_llm_end", "on_agent_end"):
+        assert "def %s" % hook.replace("def ", "") in src or ("async def %s" % hook) in src, hook
+    # 一行一步的关键字样（改文案可以，别把「第几轮/耗时/token」丢掉）
+    for kw in ("第%d轮 ▸ 请求模型", "第%d轮 ◂ 模型返回", "决定调用",
+               "════ 完成", "──── 收到问题 ────"):
+        assert kw in src, kw
+
+
+def test_agent_logs_tool_input_and_output():
+    """工具要打「入参 + 耗时 + 输出字数 + 首行」，否则看不出它查了啥。"""
+    src = _agent_src()
+    assert "def _note(" in src and "工具 %d/%d" in src      # 入参与预算计数
+    assert "def _tool_done(" in src and "工具 %s → %.2fs" in src
+    # shell / read_file 都要走这两条
+    assert src.count("_tool_done(") >= 3                    # 定义 + 两个调用点
+    # 拒绝/超时/截断也算一步，不能静默返回
+    for kw in ("✗ shell 被拒绝", "✗ shell 超时", "⛔ 工具预算已用完",
+               "✗ read_file 越界", "（已截断）"):
+        assert kw in src, kw
+
+
+def test_agent_logs_request_id_and_failure_trace():
+    """每次 /ask 有自己的请求号，失败时把「查过什么」打出来。"""
+    src = _agent_src()
+    assert "global _REQ" in src and '"[%s] %s" % (_REQ' in src
+    assert "_REQ = \"#%d\"" in src
+    assert "✗✗ 失败" in src and "已查过" in src
+    assert "✗✗ 空答案" in src
+
+
+def test_agent_startup_prints_mounts():
+    """启动横幅要报挂载文件数——「源码仓库不存在」时一眼看出挂载没生效。"""
+    src = _agent_src()
+    assert "挂载 %-42s OK" in src and "缺失（bind mount 没生效？）" in src

@@ -2607,3 +2607,64 @@ E 容量与文案自洽。
 * **群里真实收发未验**（要用户发一条才会真的走 QQ 服务器），只证到 dispatch 层。
 * 一条被动回复最多 5 次：探路话占 1 个 `msg_seq`，答案连发最多 4 条 + 表情包 1 条
   理论上到 6 → 第 6 条会退到主动推送。实际常见是「探路话 + 1 条答案 + 表情包=3」。
+
+## 变更记录 · 2026-11-18 10:08 → 10:4x　逐步日志 + 探路话符合人设
+
+### 触发
+用户（附 agent 容器日志截图，只有 4 行）："`日志打印不够详细，必须每一步都打印出来，
+然后人设也要符合`"。
+
+### 一、agent 容器：一行一步（`agent/agent_server.py`）
+* 新增 `_StepLog(RunHooks)`，挂进 `Runner.run(..., hooks=hooks)`。
+  **用 hooks 而不是事后读 `RunResult`**：撞 `MaxTurnsExceeded` 时 `RunResult` 拿不到，
+  而那恰恰最需要复盘。
+  打点：`收到问题 → 参数 → 开跑 → 第N轮请求模型（历史条数/上下文规模）→
+  第N轮模型返回（耗时/in/out/cached/决定调哪个工具+参数）→ 工具入参 →
+  工具结果（耗时/字数/首行）→ ════ 完成（总耗时/轮数/工具数/答案字数/token）→
+  答案开头 → 轨迹 → 失败时 ✗✗ 失败 + 已查过`
+* 工具入参只能在自己函数里打（hooks 的 `context.tool_input` 是 None）→
+  `_note()` 打入参+预算计数，`_tool_done()` 打耗时/字数/首行/截断标记。
+* 启动横幅打印每个挂载目录的文件数（113/16/129/43）——「源码仓库不存在」一眼可查。
+
+### 二、主 bot：FC 循环也一步一步（`tools/fc.py`、`tools/registry.py`）
+`fc_round_start`（带多少历史）→ `fc_llm_done`（耗时/tool_calls 数）→
+`tool_call_start`（工具名 + 入参 JSON）→ `tool_dispatched`（结果长度/耗时）→
+`fc_tool_returned`。
+
+### 三、探路话按人设说（`persona.py`、`__init__.py`、`tools/builtins.py`）
+* `Persona.notice`（新字段，可选）+ `PersonaStore.notice_for()` + `resolve_notice()`。
+* 内置「本喵」：`催什么，本喵去翻源码了，二十来秒，等着。`
+  兜底 `NOTICE_FALLBACK`：`翻源码去了，二十来秒，别催。`（中性、不客服腔）
+* `_handle_ai_chat._tool_notify` 先取人设台词，失败/为空才退回工具上的兜底文案。
+* 实测：`g:-595244844`→本喵那句；`u:1743124119`（露娜无 notice）→兜底。
+  单个角色想有自己的说法：`data/personas/<id>.json` 加 `"notice": "..."`。
+
+### 四、日志顺手抓出的三个真 bug（都有原话）
+1. `✗ shell 被拒绝：不允许输出重定向写文件` 连拒 3 轮 → `_FORBID_RE` 把 Python
+   `x >= 12`/`a->b` 当重定向。改为排除前导 `0-9<>=!-` 与后随 `=`；
+   反例进 `tests/evidence/prove_agent_sandbox.py`（现 21 条，ALL PASS）。
+2. 两行日志粘成一行 → 同轮并发工具同时 print；`_log()` 加锁。
+3. `✗✗ 失败 139.9s：APITimeoutError`（上下文 2.7 万字符）→ `AsyncOpenAI(timeout=90)`
+   太紧，答案全丢；改 `AGENT_HTTP_TIMEOUT=120`（compose 显式声明），总闸
+   `AGENT_TIMEOUT=150` 仍兜底。
+
+### 五、答案不许带 Markdown（人设第二条）
+INSTRUCT 原来「第一段结论 + 分点」，模型就回 `## 权重分级` + 表格；群里发不出这些格式，
+也违反人设「禁止 markdown/列表」。改成：禁止 `#`/`**`/表格/代码块/列表符号，
+口语分段，出处「文件名:行号」嵌在句中。桥接侧 hint 补「工具答案是素材，不是转发原文」。
+
+### 六、验证
+* `prove_agent_sandbox.py` 21 条 ALL PASS（含 4 条「不许误杀比较符」）。
+* `tests/evidence/prove_agent_notice.py` → `PROVE_OK`；
+  第一题 30.3s/工具 6 次/答案 922 字（纯口语，无 `##`）；
+  第二题 97.3s/10 次/71.9k token（模型自己查得深，未撞 max_turns）。
+* 新增守门：`test_doupo_agent_bridge.py` +4（hooks 已挂、工具入参/结果/失败都有日志、
+  请求号与失败轨迹、启动横幅报挂载）、`test_tools_fc.py` +1（行为级：真跑 converse
+  并抓日志行；不能用 caplog，项目 logger `propagate=False`）、`test_persona.py` +3
+  （notice 随人设/兜底不串味/JSON 往返/与工具默认一致）。
+* 相关 8 个测试文件 `103 passed`。
+
+### 七、未验证 / 已知限制
+* 群里真实收发仍需用户实测（探路话是否为「催什么，本喵去翻源码了…」）。
+* 第二题 97.3s、71.9k token：模型在 1421 行的 `factions.py` 里反复 sed 定位。
+  想更省可在 INSTRUCT 里加「大文件先 grep 结构再定点读」，但这轮没改（未验证效果）。

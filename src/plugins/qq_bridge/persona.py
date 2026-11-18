@@ -61,6 +61,11 @@ class Persona:
     prompt: str = ""
     #: 表情包 marker 协议的「人设一致性」句（见 _sticker_system_hint）
     sticker_hint: str = ""
+    #: 慢任务开跑前的**探路话**（源码问答要跑二三十秒，先回一句免得用户以为死机）。
+    #: 空 = 用 NOTICE_FALLBACK（中性但不客服腔）；填了就用你的说法。
+    #: 2026-11-18 用户要求「人设也要符合」：这句话是机器人自己开口说的，
+    #: 不能是「稍等，我正在处理」那种客服腔。
+    notice: str = ""
     #: 内置人设（不落盘、不可删）
     builtin: bool = False
     #: 来源（抓取脚本写入，如 GitHub 仓库 URL）
@@ -73,8 +78,8 @@ class Persona:
         d = {
             "id": self.id, "name": self.name, "emoji": self.emoji,
             "tagline": self.tagline, "prompt": self.prompt,
-            "sticker_hint": self.sticker_hint, "builtin": self.builtin,
-            "source": self.source, "license": self.license,
+            "sticker_hint": self.sticker_hint, "notice": self.notice,
+            "builtin": self.builtin, "source": self.source, "license": self.license,
             "tags": list(self.tags), "updated_at": self.updated_at,
         }
         return d
@@ -93,6 +98,7 @@ class Persona:
             tagline=str(d.get("tagline") or ""),
             prompt=str(d.get("prompt") or ""),
             sticker_hint=str(d.get("sticker_hint") or ""),
+            notice=str(d.get("notice") or ""),
             builtin=bool(d.get("builtin")),
             source=str(d.get("source") or ""),
             license=str(d.get("license") or ""),
@@ -120,12 +126,19 @@ _BENMIAO_HINT = (
     "人设一致性：你是腹黑阴阳怪气的猫管家，生气时发「阴阳怪气」或「无语」，"
     "绝不会发怒图；开心才发「开心/搞笑」。"
 )
+#: 本喵版探路话（慢任务开跑前先说一句）。要短、要有脾气、别报流水账。
+_BENMIAO_NOTICE = "催什么，本喵去翻源码了，二十来秒，等着。"
+
+#: 没配 notice 的人设用的兜底。刻意保持「中性但不客服腔」，
+#: 因为它会被任意人设复用：不能说「本喵」，也不能说「正在为您处理」。
+NOTICE_FALLBACK = "翻源码去了，二十来秒，别催。"
 
 BUILTINS: dict[str, Persona] = {
     DEFAULT_ID: Persona(
         id=DEFAULT_ID, name="本喵", emoji="🐱",
         tagline="腹黑阴阳怪气猫管家（默认）",
         prompt=_BENMIAO_PROMPT, sticker_hint=_BENMIAO_HINT, builtin=True,
+        notice=_BENMIAO_NOTICE,
         source="内置", license="", tags=["腹黑", "阴阳怪气", "管家"],
     ),
     CUSTOM_ID: Persona(
@@ -256,6 +269,11 @@ class PersonaStore:
         per = self.current(scope)
         return per.sticker_hint or _BENMIAO_HINT
 
+    def notice_for(self, scope: str = "") -> str:
+        """慢任务探路话（人设自己的说法；没配 → 中性兜底 NOTICE_FALLBACK）。"""
+        per = self.current(scope)
+        return (per.notice or "").strip() or NOTICE_FALLBACK
+
     # ---------------- 切换 / 写入 ----------------
     def set_scope(self, scope: str, pid: str) -> bool:
         """给某会话切换人设；人设不存在返回 False（调用方显式告知）。"""
@@ -335,3 +353,11 @@ def resolve_prompt(scope: str = "") -> str:
 def resolve_hint(scope: str = "") -> str:
     """便捷入口：某会话的表情人设一致性句。"""
     return get_store().hint_for(scope)
+
+
+def resolve_notice(scope: str = "") -> str:
+    """便捷入口：某会话「慢任务开跑前」那句话（符合当前人设）。"""
+    try:
+        return get_store().notice_for(scope)
+    except Exception:  # noqa: BLE001 — 人设库炸了也不该挡住回话
+        return NOTICE_FALLBACK

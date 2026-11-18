@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -101,6 +102,16 @@ class Tool:
 
 def _today() -> str:
     return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _brief(args: object, limit: int = 240) -> str:
+    """工具入参压成一行日志（多行/超长会撑爆日志，但也别只打类型）。"""
+    try:
+        s = json.dumps(args, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        s = str(args)
+    s = " ".join(s.split())
+    return s if len(s) <= limit else s[:limit] + "…"
 
 
 class ToolRegistry:
@@ -277,11 +288,15 @@ class ToolRegistry:
                           detail=arg_err[:120], trace_id=ctx.trace_id))
             return "工具 %s 入参不对：%s" % (name, arg_err)
         # 执行（CLOSE-05 显式超时；串行——有副作用工具不并行，ai-groupmate 纪律）
-        # 慢工具先给个回音（只发一次；发不出去不影响执行）
-        await self._progress(tool, ctx)
         # 工具自带 timeout 优先（长任务如源码问答要 160s），否则用全局默认。
         timeout = float(tool.timeout
                         or getattr(Config, "AI_TOOL_TIMEOUT", 30.0) or 30.0)
+        # 逐步日志：入参先落一行，出问题能看清「模型到底让它干什么」
+        log.info(jlog("tool_call_start", tool=name, scope=ctx.scope,
+                      risk=tool.risk, timeout=timeout,
+                      args=_brief(args), trace_id=ctx.trace_id))
+        # 慢工具先给个回音（只发一次；发不出去不影响执行）
+        await self._progress(tool, ctx)
         try:
             result = await asyncio.wait_for(tool.handler(args or {}, ctx), timeout=timeout)
         except asyncio.TimeoutError:

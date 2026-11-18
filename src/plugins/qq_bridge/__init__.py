@@ -3007,14 +3007,26 @@ async def _handle_ai_chat(ev, trace_id: str) -> None:
 
             `doupo_code_ask` 一次要跑二三十秒，这期间用户收不到任何消息——
             2026-11-18 真机事故：「我问了，他不理我」（其实回了，只是 33 秒后）。
-            这里只发**一句纯文本**：不走连发/表情包（那是正餐的待遇），
-            也不落对话历史（不是模型的发言，是系统的回声）。
+
+            **这句话是机器人自己开口，必须像它本人**（用户要求「人设也要符合」）：
+            文案取当前人设的 `notice`（`persona.resolve_notice`），工具上写的那句
+            只是兜底 —— 换成人设「露娜」时不会突然冒出猫管家的口癖。
+            只发**一句纯文本**：不走连发/表情包（那是正餐的待遇），也不落对话历史
+            （不是模型的发言，是系统的回声）。
             发送失败不抛错——由 tools.registry 的 `_progress` 记日志兜住，
             工具照常执行（一句提示发不出去，不该把答案也搭进去）。
             """
-            await send_text(ctx, notice)
+            text = notice
+            try:
+                from .persona import resolve_notice
+                text = resolve_notice(scope) or notice
+            except Exception as e:  # noqa: BLE001 — 人设库异常退回工具文案
+                log.warning(jlog("persona_notice_fallback", scope=scope,
+                                 error=type(e).__name__, trace_id=trace_id))
+            await send_text(ctx, text)
             log.info(jlog("ai_tool_notice_sent", scope=scope, user_id=ev.user_id,
-                          text_len=len(notice or ""), trace_id=trace_id))
+                          text_len=len(text or ""), text=text,
+                          trace_id=trace_id))
 
         _tctx = _ToolCtx(scope=scope, user_id=ev.user_id, group_id=ev.group_id,
                          is_private=not ev.is_group,
@@ -4359,6 +4371,10 @@ def _doupo_code_hint() -> str:
             "**讲到能回答用户的疑问为止**——问「多少」就给具体数字和算法，"
             "问「为什么」就讲清取舍，问「什么情况」就列全分支；"
             "不要为了简短只回一句话，也不用整段贴源码。"
+            "**但说话方式必须是你自己**：按你当前人设的口吻讲，"
+            "工具答案是给你看的素材，不是让你转发的原文——"
+            "里面的 Markdown 标题、加粗、表格、代码块一律不许带出来，"
+            "群聊里也发不出这些格式，只会变成一堆星号和竖线。"
             "它给的 `文件名:行号` 出处可以保留，方便用户核对。"
             "工具报错/超时就如实说「源码分析服务暂时不可用」，"
             "不要退回凭印象回答、不要编数字。"

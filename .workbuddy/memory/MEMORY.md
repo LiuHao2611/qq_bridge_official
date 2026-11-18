@@ -17,8 +17,16 @@
   （17 条边界）。`docker cp` 进 `read_only` 容器必失败，只走 stdin。
 * **等待期不沉默**（2026-11-18 "他不理我" 事故）：`Tool.progress_text` +
   `ToolContext.notify` + `ToolContext.notified`，dispatch 在 handler 前发一句，
-  每回合一次、发送失败不影响工具。目前只有 `doupo_code_ask` 声明了文案。
+  每回合一次、发送失败不影响工具。真正发出的文案取当前人设的 `notice`
+  （`persona.resolve_notice`，字段 `Persona.notice`），工具上那句只是兜底。
   证明：`tests/evidence/prove_agent_notice.py`。
+* **每一步都要有日志**（2026-11-18 用户要求）：agent 侧 `_StepLog(RunHooks)` 挂进
+  `Runner.run(hooks=)`——收到问题/每轮请求/每轮返回（耗时·in·out·cached·决定调谁）/
+  工具入参/工具结果（耗时·字数·首行）/完成总账/失败轨迹。工具入参只能在工具函数里打
+  （hooks 的 `context.tool_input` 是 None）。`_log()` 必须加锁，否则并发工具 print 串行。
+  bot 侧：`fc_round_start / fc_llm_done / tool_call_start / fc_tool_returned`。
+* **答案禁 Markdown**（人设要求）：agent INSTRUCT 明确不许 `#`/`**`/表格/列表/代码块，
+  口语分段、出处嵌在句中；群聊发不出这些格式，只会变成星号和竖线。
 * 实测：**20~40 秒 / 1.7万~4万 token**（4~8 次工具调用）。成本主因是**调用次数**
   （每轮重发整段历史，input:output ≈ 11:1），所以 `AGENT_MAX_TOOLS` 也是省钱阀。
 * 详解：`docs/斗破源码问答沙盒_2026-11-17.md`（11 节，含 8 条踩坑）。
