@@ -230,3 +230,22 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
 * 「一阶限 N 枚」→ 表 `pill_use(id,qq,name,realm_idx,used_at)`，**不用复合主键**
   （同阶要吃两枚），也不塞 players.data。旧形状走 rename→建表→搬迁→drop 无损迁移。
 * 新增效果类型必须同时加 `EFFECT_TAG`，否则炼药卡把破境丹标成「增修为」。
+
+## 11. 丹药契约：desc=原著（考据），impl=本作（承诺）
+
+* 事故：三纹青灵丹 desc 写「助斗师突破成大斗师、大斗师服下升一星」，代码却是
+  `effect="exp" value=1000` → 玩家吃 8 枚只涨修为。**desc 承诺 = 必须有一行代码兑现**。
+* 2026-11-19 全表普查（75 枚）：只有 4 枚真按承诺兑现；50+ 枚在承诺本作没有的系统
+  （短时增益 / 升级成功率 / 封印 / 寿命 / 假死 / 火毒 / 化形 / 灵魂值 / 丹雷）。
+* 契约：**卡面 / 包裹 /「炼药」文本只印 `cfg.recipe_impl(rec)`**（本作真会发生什么）；
+  原著 desc 只在文本层标「原著：」对照，且仅当配方手写了 `impl`。
+* `impl` 三条来源：手写 `impl` 字段（`RECIPE_IMPL_OVERRIDE`）→ breakthrough 自动拼 →
+  `IMPL_BY_EFFECT` 模板。加新丹药若 desc 带承诺词（提升一星/突破/成功率/寿命/化形…）
+  而 effect 不是 `breakthrough`，**必须手写 impl**，否则 `test_doupo_recipe_honesty` 红。
+* 破境丹统一 `effect="breakthrough"` + `to_realm / star_chance / break_boundary /
+  max_per_realm`；「一阶限 N 枚」落 `pill_use(id,qq,name,realm_idx,used_at)` 真实表
+  （**不用复合主键**，紫心同阶要吃两枚），也不塞 players.data。
+* 已接：三纹青灵丹（破界+30%升星+限1）、紫心破障丹（必升+限2）、聚气散（斗之气→斗者）、
+  斗灵丹（斗王必升+限1）。
+* 🚨 测试里凡是「今天」相关的键一律 `date.today().isoformat()`，**禁止硬编码日期**
+  （`test_doupo_puppet` 的 DAY 硬编码导致跨零点必红）。
