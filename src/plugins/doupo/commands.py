@@ -1556,6 +1556,9 @@ async def cmd_tower(store, qq, arg="") -> str:
         _apply_loot(p, st, loot)
         st["loot_taken"].append(loot["key"])
         ts.STORE.save(qq, st)
+        # 2026-11-18：回春散/回气丹是「立刻」类，已把恢复写进永久存档 p；
+        # 必须在返回前落盘，否则人物卡读到的还是旧值（用户实测「斗气没回满」）。
+        await store.put_player(p)
         return warn + f"✅ 获得「{loot['label']}」：{loot['desc']}\n发送「爬塔」继续登塔。"
 
     # 新一轮 / 继续
@@ -1669,13 +1672,31 @@ def _labels(items) -> str:
 
 
 def _apply_loot(p, st, loot) -> None:
-    """应用三选一（只写会话临时态，不写永久存档）。"""
+    """应用爬塔三选一战利品。
+
+    2026-11-18 修复「增益虚加」：
+      * 「立刻」类（回春散 hp / 回气丹 mp）——文案承诺即时生效，必须写回
+        永久存档 p（人物卡/面板读的就是 p），并同步会话 temp_* 让下一层承接。
+        调用方 cmd_tower 选完必须 put_player 落盘。塔战斗本身仍只在深副本打，
+        不污染 p 的 hp/mp/wins——这里改的是玩家主动服下的战利品，不是战斗损耗。
+      * 「本轮」类（4 属性 + 4 效果）——只写会话临时态，由下一层 tower_floor
+        经 temp_bonus / tower_mod 真实注入战斗，本轮结束清空，不写永久存档。
+
+    任何新增 loot kind 都必须落进下面某个分支并写清「即时 or 本轮」，否则就是
+    一个新的虚加。tests/test_tower_loot_effective.py 用穷举注入守这条。
+    """
     kind, key, v = loot["kind"], loot["key"], float(loot.get("v", 0))
     if kind == "hp":
         mx = core.stats(p)["体力"]
-        st["temp_hp"] = min(mx, int(st.get("temp_hp") or mx) + int(mx * v))
+        # 基准取会话当前血（塔内已损耗的血量），不受 p['hp'] 陈旧值影响。
+        cur = int(st.get("temp_hp") if st.get("temp_hp") is not None else p.get("hp", mx))
+        new_hp = min(mx, cur + int(mx * v))
+        p["hp"] = new_hp
+        st["temp_hp"] = new_hp
     elif kind == "mp":
-        st["temp_mp"] = core.mp_max(p)
+        new_mp = core.mp_max(p)
+        p["mp"] = new_mp
+        st["temp_mp"] = new_mp
     elif kind == "attr":
         tb = dict(st.get("temp_bonus", {}))
         mx = core.stats(p).get(key, 100)
@@ -1685,6 +1706,8 @@ def _apply_loot(p, st, loot) -> None:
         items = list(st.get("temp_effect_items", []))
         items.append(loot)
         st["temp_effect_items"] = items
+    else:
+        raise ValueError("未知爬塔战利品类型 %r（%s）——拒绝静默虚加" % (kind, key))
 
 
 async def cmd_tower_status(store, qq) -> str:
