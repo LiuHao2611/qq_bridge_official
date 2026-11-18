@@ -251,7 +251,8 @@ async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
 async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
                       file_name: str = "doupo.png",
                       page: int | None = None,
-                      total_pages: int | None = None) -> None:
+                      total_pages: int | None = None,
+                      caption: str = "") -> None:
     """出一张斗破/修仙卡片；官方通道在卡片下方挂对应功能按钮，NapCat 行为不变。
 
     ## 为什么需要这一层（2026-11-16）
@@ -278,10 +279,24 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
 
     ``page`` / ``total_pages``（2026-11-16 炼药卡分页）：多页时 arm 分页状态并把
     按钮切到「上一页/下一页」哨兵；单页或不传则维持普通功能按钮，零行为变化。
+
+    ``caption``（2026-11-18）：**卡片之前**先发这段文字。专给「行为有结果 + 结果卡」
+    的口令用（傀儡遗迹：打了哪段、赢没赢、掉了什么，光看进度卡看不出来）。
+    不传 = 零行为变化；caption 发送失败只记日志，绝不影响出图。
     """
     raw = event.raw if isinstance(event, EvView) else event
+    cap = str(caption or "").strip()
     if not is_official(raw):
-        # NapCat：完全保持原行为（图片段直接 finish）
+        # NapCat：完全保持原行为（图片段直接 finish）；有 caption 时先补一条文字
+        if cap:
+            try:
+                await matcher.send(cap)
+            except Exception as e:  # noqa: BLE001 — 文字失败不影响出图
+                import logging  # noqa: PLC0415
+
+                logging.getLogger("qq_bridge.doupo").warning(
+                    "finish_card caption 发送失败（不影响出图）：%s: %s",
+                    type(e).__name__, e)
         await matcher.finish(image_seg(event, data, file_name))
         return
 
@@ -306,6 +321,19 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
 
             page_token = db.arm_page(int(page), int(total_pages))
             effective_key = "page:%d" % int(page)   # → keyboard_cmd "doupo:page:N"
+        if cap:
+            # 先发结果文字（同一 ctx/passive seq 计数），再发图+按钮；
+            # 文字发不出去也不能拖累图片。
+            try:
+                from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
+
+                await ch.send(ctx, Outgoing(text=cap))
+            except Exception as e:  # noqa: BLE001
+                import logging  # noqa: PLC0415
+
+                logging.getLogger("qq_bridge.doupo").warning(
+                    "finish_card caption 发送失败（不影响出图）：%s: %s",
+                    type(e).__name__, e)
         ret = await send_card_via_channel(ctx, data, effective_key)
         if not (isinstance(ret, dict) and ret.get("ok")):
             raise RuntimeError("official_send_not_ok: %s" % (ret.get("reason") if isinstance(ret, dict) else type(ret).__name__))

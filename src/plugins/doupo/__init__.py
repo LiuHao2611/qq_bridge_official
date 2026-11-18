@@ -43,8 +43,12 @@ logger = logging.getLogger("qq_bridge.doupo")
 # 进程级单例（store.STORE）：按钮点击回调与本插件必须共享同一实例，
 # 否则官方按钮点「人物」读不到当前存档。见 store.py 末尾说明。
 store = store_mod.STORE
-# 傀儡独立 SQLite（真实列，绝不进 players.data 的 JSON blob）
-puppet_store = puppet_store_mod.PUPPET_STORE
+# 傀儡独立 SQLite（真实列，绝不进 players.data 的 JSON blob）。
+# ⚠️ 变量名**故意不叫 puppet_store**：叫它就会把包属性 `doupo.puppet_store`（子模块）
+#    盖成实例，任何 `from . import puppet_store` 之后再取 `.PUPPET_STORE` 都会
+#    AttributeError。2026-11-18 事故就是这么炸的（按钮点「炼制傀儡」全报错）。
+#    需要模块请 `from .puppet_store import PUPPET_STORE`；本文件用 puppet_store_inst。
+puppet_store_inst = puppet_store_mod.PUPPET_STORE
 
 
 # priority=5（高于聊天处理器的 10） + block=True（命中即阻断 LLM 闲聊）
@@ -900,7 +904,7 @@ async def _(event: Event):
     qq = str(event.user_id)
     raw = _plain(event)
     if "傀儡遗迹" in raw:
-        txt = await commands.cmd_puppet_ruin(store, qq, puppet_store)
+        txt = await commands.cmd_puppet_ruin(store, qq, puppet_store_inst)
         # 出图与战报同源：战报跑完后重读水位线，卡面显示最新进度。
         png = None
         try:
@@ -908,23 +912,24 @@ async def _(event: Event):
                 await puppet_cmd.finish(txt)  # 未入道者无卡可出，不是降级
                 return
             day = date.today().isoformat()
-            st = await puppet_store.ruin_state(qq, day)
-            png = await card.render_ruin(st, day)
+            png = await card.render_ruin_for(qq, day, puppet_store_inst)
         except Exception as e:  # noqa: BLE001
             logger.error("傀儡遗迹卡渲染失败（拒绝静默降级）：%s: %s",
                          type(e).__name__, e)
         if png:
-            await finish_card(puppet_cmd, event, png, "ruin", "doupo_ruin.png")
+            # 先发战报（打了哪段/赢没赢/掉了什么），再发进度卡——进度卡看不出胜负与掉落。
+            await finish_card(puppet_cmd, event, png, "ruin", "doupo_ruin.png",
+                              caption=txt)
             return
         await puppet_cmd.finish("⚠️ 傀儡遗迹卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
         return
     if "炼制傀儡" in raw:
         await puppet_cmd.finish(
-            await commands.cmd_craft_puppet(store, qq, puppet_store))
+            await commands.cmd_craft_puppet(store, qq, puppet_store_inst))
         return
     m = re.search(r"傀儡\s*(.*)", raw)
     arg = (m.group(1) if m else "").strip()
-    txt = await commands.cmd_puppet(store, qq, arg, puppet_store)
+    txt = await commands.cmd_puppet(store, qq, arg, puppet_store_inst)
     try:
         p = await store.get_player(qq)
     except Exception as e:  # noqa: BLE001
@@ -936,9 +941,7 @@ async def _(event: Event):
         return
     png = None
     try:
-        roster = await puppet_store.list_puppets(qq)
-        elig = await puppet_store.eligibility(qq)
-        png = await card.render_puppet(roster, elig, p)
+        png = await card.render_puppet_for(qq, p, puppet_store_inst)
     except Exception as e:  # noqa: BLE001
         logger.error("斗破傀儡卡渲染失败（拒绝静默降级为纯文字）：%s: %s",
                      type(e).__name__, e)

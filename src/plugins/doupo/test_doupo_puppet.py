@@ -256,6 +256,84 @@ async def main() -> None:
         raised = True
     check("非法字段写入显式抛错", raised, "")
 
+    # ---- 11. 按钮路径：不传 pstore 也必须能跑（2026-11-18 事故回归） ----
+    # button_dispatch 调的是 cmd_*(store, qq)（没有 pstore 参数）。commands 里原写
+    # `from . import puppet_store as ps` 取到的却是被 __init__ 盖成实例的包属性 →
+    # ps.PUPPET_STORE 直接 AttributeError → 用户点傀儡卡按钮看到「（按钮处理出错…）」。
+    for label, fn in (
+            ("傀儡", lambda: cmds.cmd_puppet(store, QQ)),
+            ("炼制傀儡", lambda: cmds.cmd_craft_puppet(store, QQ)),
+            ("傀儡遗迹", lambda: cmds.cmd_puppet_ruin(store, QQ)),
+    ):
+        try:
+            out = await fn()
+            ok_btn, err = isinstance(out, str) and bool(out.strip()), ""
+        except Exception as e:  # noqa: BLE001
+            ok_btn, err = False, "%s: %s" % (type(e).__name__, e)
+        check("按钮路径「%s」不传 pstore 可用" % label, ok_btn, err)
+
+    # ---- 12. 出图入口：按 qq 取数，绝不能把玩家 dict 当 roster/state ----
+    from src.plugins.doupo import card as card_mod
+
+    png1 = await card_mod.render_puppet_for(QQ, p3, db)
+    check("render_puppet_for 真出 PNG",
+          bool(png1) and png1[:8] == b"\x89PNG\r\n\x1a\n", "bytes=%d" % len(png1 or b""))
+    png2 = await card_mod.render_ruin_for(QQ, DAY, db)
+    check("render_ruin_for 真出 PNG",
+          bool(png2) and png2[:8] == b"\x89PNG\r\n\x1a\n", "bytes=%d" % len(png2 or b""))
+    st_now = await db.ruin_state(QQ, DAY)
+    ruin_data = card_mod.build_ruin_data(st_now, DAY)
+    check("遗迹卡进度与真实水位线同源",
+          str(ruin_data["subtitle"]).startswith("今日进度 %d/" % int(st_now["stage"])),
+          str(ruin_data["subtitle"]))
+
+    # ---- 13. 静态守卫：包内不许 from . import 被实例遮蔽的名字 ----
+    # __init__.py 自己要 import 子模块（那时还没赋值），所以只查其它模块。
+    import ast  # noqa: PLC0415
+    import pathlib  # noqa: PLC0415
+
+    base_dir = pathlib.Path(ROOT) / "src" / "plugins" / "doupo"
+    shadowed = {"store", "puppet_store_inst", "puppet_store"}
+    bad_imports = []
+    for f in sorted(base_dir.glob("*.py")):
+        if f.name == "__init__.py":
+            continue
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 1 and not node.module:
+                for alias in node.names:
+                    if alias.name in shadowed:
+                        bad_imports.append("%s:%d from . import %s"
+                                           % (f.name, node.lineno, alias.name))
+    check("包内无 from . import 被遮蔽的名字（store/puppet_store）",
+          not bad_imports, str(bad_imports))
+
+    # ---- 14. 签名为 (roster, elig, p)/(state, day) 的卡，dispatch 必须特判 ----
+    # 统一 `renderer(p)` 会把玩家 dict 塞进 roster/state，渲出「持有 0 具 / 进度 0/3」
+    # 的假卡且**不报错**，比崩还难查，所以用签名把这类卡钉死。
+    import inspect  # noqa: PLC0415
+
+    dispatch_src = (base_dir / "button_dispatch.py").read_text(encoding="utf-8")
+    # 通用判据（不止傀儡）：dispatch 默认 `renderer(p)`，所以凡是首参**不叫 p** 的
+    # 渲染函数都必须在那里特判，否则会把玩家 dict 塞进 roster/state/top 里渲出假卡。
+    import importlib as _il  # noqa: PLC0415
+
+    plan = _il.import_module("src.plugins.doupo.button_dispatch").plan()
+    bad_shape = []
+    for key in sorted({v[2] for v in plan.values() if v[2]}):
+        fn = getattr(card_mod, "render_" + key, None)
+        if fn is None:
+            bad_shape.append("%s: 无 render_%s" % (key, key))
+            continue
+        first = list(inspect.signature(fn).parameters)
+        if first and first[0] != "p":
+            branched = ('card_key == "%s"' % key) in dispatch_src
+            uses_entry = ("render_%s_for(" % key) in dispatch_src
+            if not (branched and uses_entry):
+                bad_shape.append("%s(首参=%s) 未特判" % (key, first[0]))
+    check("出图口令：首参非 p 的卡在 dispatch 里都特判（走按 qq 入口）",
+          not bad_shape, str(bad_shape))
+
 
 def _run() -> int:
     asyncio.run(main())

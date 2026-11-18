@@ -823,3 +823,40 @@ def build_ruin_data(state: dict, day: str = "") -> dict:
 async def render_ruin(state: dict, day: str = "") -> bytes | None:
     """「傀儡遗迹」出图：三段进度卡，与战报文字同源（同一 stage 水位线）。"""
     return await _render_list("doupo_ruin", build_ruin_data(state, day), CARD_RUIN_NAME)
+
+
+# ---------------------------------------------------------------------------
+# 按 QQ 出图的两个唯一入口（2026-11-18 事故后补）
+#
+# 背景：``render_puppet(roster, elig, p)`` / ``render_ruin(state, day)`` 的签名
+# 与其它卡 ``render_*(p)`` 不同。按钮分发原本统一用 ``renderer(p)`` 调用，
+# 于是傀儡卡把**玩家 dict 当成名录列表**、遗迹卡把**玩家 dict 当成当日状态**，
+# 渲染出「持有 0 具 / 今日进度 0/3」的假卡（不报错，默默错）。
+#
+# 现在出图取数只在这两个函数里做一次，文本 matcher 与按钮分发都调它，
+# 谁再想「自己拼参数」就会因为签名不匹配在测试里立刻红。
+# ---------------------------------------------------------------------------
+def _puppet_store(pstore=None):
+    """傀儡库单例。必须从子模块取名（``from . import puppet_store`` 拿到的是实例）。"""
+    if pstore is not None:
+        return pstore
+    from .puppet_store import PUPPET_STORE  # noqa: PLC0415
+    return PUPPET_STORE
+
+
+async def render_puppet_for(qq: str, p: dict | None = None, pstore=None) -> bytes | None:
+    """按 QQ 渲染傀儡名录卡（数据与 ``cmd_puppet`` 同源，不另算一遍）。"""
+    store = _puppet_store(pstore)
+    roster = await store.list_puppets(str(qq))
+    elig = await store.eligibility(str(qq))
+    return await render_puppet(roster, elig, p)
+
+
+async def render_ruin_for(qq: str, day: str = "", pstore=None) -> bytes | None:
+    """按 QQ 渲染傀儡遗迹进度卡（today 缺省取本地当天，与 ``cmd_puppet_ruin`` 同源）。"""
+    store = _puppet_store(pstore)
+    if not day:
+        from datetime import date  # noqa: PLC0415
+        day = date.today().isoformat()
+    state = await store.ruin_state(str(qq), day)
+    return await render_ruin(state, day)

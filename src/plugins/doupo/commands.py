@@ -26,6 +26,13 @@ from . import tower_data as td
 from . import tower_session as ts
 from . import weekly_data as wd
 from . import weekly_session as ws
+# ⚠️ 必须 `from .puppet_store import ...`，**不能** `from . import puppet_store`：
+#    doupo/__init__.py 里 `puppet_store = puppet_store_mod.PUPPET_STORE` 会把包属性
+#    `puppet_store` 盖成 Store 实例，`from . import puppet_store` 拿到的是实例而不是模块，
+#    再取 `.PUPPET_STORE` 就 AttributeError。2026-11-18 事故：按钮点击走
+#    `button_dispatch`（不传 pstore）→ 三条傀儡按钮全部报「按钮处理出错」。
+#    从子模块直接取名字永远拿的是模块属性，与包属性是否被遮蔽无关。
+from .puppet_store import PUPPET_STORE as DEFAULT_PUPPET_STORE
 
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
@@ -2066,8 +2073,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     不拦未开通者——展示差哪道资格，作引导。
     """
     from . import puppet_core as pc
-    from . import puppet_store as ps
-    pstore = pstore or ps.PUPPET_STORE
+    pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
@@ -2120,8 +2126,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
 async def cmd_craft_puppet(store, qq, pstore=None) -> str:
     """炼制傀儡：过五道资格 → 扣真实列材料 → 建真实列傀儡行。"""
     from . import puppet_core as pc
-    from . import puppet_store as ps
-    pstore = pstore or ps.PUPPET_STORE
+    pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
@@ -2169,8 +2174,7 @@ async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
     （``puppet_expected_damage`` 唯一口径），不会出现「带傀儡怪血不变」。
     """
     from . import puppet_core as pc
-    from . import puppet_store as ps
-    pstore = pstore or ps.PUPPET_STORE
+    pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED

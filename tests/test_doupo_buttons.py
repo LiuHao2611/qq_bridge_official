@@ -240,6 +240,34 @@ def test_every_button_is_dispatchable():
     assert not extra, "dispatch plan 混入非按钮口令：%s" % sorted(extra)
 
 
+def test_card_renderer_shapes_match_dispatch():
+    """守门⑥：`render_<card_key>` 首参不叫 p 的，dispatch 必须特判。
+
+    2026-11-18 事故：``button_dispatch`` 统一用 ``renderer(p)`` 出卡，而
+    ``render_puppet(roster, elig, p)`` / ``render_ruin(state, day)`` 首参不是玩家
+    dict → 把玩家 dict 当名录/当日状态，渲出「持有 0 具 / 今日进度 0/3」的**假卡**，
+    既不报错也不降级，比崩更难查。用 AST 读签名，不 import（避开 nonebot 依赖）。
+    """
+    card_tree = ast.parse((_DOUPO / "card.py").read_text(encoding="utf-8"))
+    shapes: dict[str, list[str]] = {}
+    for n in card_tree.body:
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) \
+                and n.name.startswith("render_"):
+            shapes[n.name[len("render_"):]] = [a.arg for a in n.args.args]
+    dispatch_src = _DISPATCH_PY.read_text(encoding="utf-8")
+    bad = []
+    for key in sorted({v[2] for v in _baseline_dispatch_plan().values() if v[2]}):
+        args = shapes.get(key)
+        if args is None:
+            bad.append("%s: 没有 render_%s" % (key, key))
+            continue
+        if args and args[0] != "p":
+            if 'card_key == "%s"' % key not in dispatch_src \
+                    or "render_%s_for(" % key not in dispatch_src:
+                bad.append("%s(首参=%s) 未在 dispatch 特判" % (key, args[0]))
+    assert not bad, "出图参数形状错配（会渲出假卡）：%s" % bad
+
+
 def test_every_finish_card_key_has_actions():
     """每个出图点传入的 card_key 都必须有按钮组（防新增卡忘配按钮）。"""
     keys = _card_action_keys_from_source()

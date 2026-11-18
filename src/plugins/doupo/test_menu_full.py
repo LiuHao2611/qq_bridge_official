@@ -457,8 +457,10 @@ CASES = [
          must=["炼制傀儡", "未能开炉", "炼制成功"], ban=["尚未踏入", "用法"]),
     dict(id="46_puppet", text="傀儡", img="png",
          must=[], ban=["尚未踏入", "用法", "渲染失败"]),
-    dict(id="47_puppet_ruin", text="傀儡遗迹", img="png",
-         must=[], ban=["尚未踏入", "用法", "渲染失败"]),
+    # 47：遗迹先发**战报**（打了哪段/赢没赢/掉了什么）再发进度卡 → parts=2。
+    # 只发卡会把胜负与掉落吞掉（旧实现的真实缺陷），所以必须两条都在。
+    dict(id="47_puppet_ruin", text="傀儡遗迹", img="png", parts=2,
+         must=["傀儡遗迹", "胜"], ban=["尚未踏入", "用法", "渲染失败"]),
 ]
 
 
@@ -494,13 +496,16 @@ async def run_case(case):
     if err:
         record(label, False, "EXC " + err.strip().splitlines()[-1])
         return
-    if len(SENT) != 1:
-        record(label, False, f"回包数={len(SENT)}（应恰好 1 条）")
+    # 少数口令「先发结果文字、再发卡」（2026-11-18 傀儡遗迹：战报 + 进度卡），
+    # 用例用 parts 声明应有的条数；默认 1 条，维持其余用例的严格性。
+    want_parts = int(case.get("parts") or 1)
+    if len(SENT) != want_parts:
+        record(label, False, f"回包数={len(SENT)}（应恰好 {want_parts} 条）")
         return
 
-    sent = SENT[0]
+    sent = SENT[-1]              # 图片/主体一律按最后一条判定
     blobs = image_blobs(sent)
-    txt = text_of(sent)
+    txt = "\n".join(text_of(x) for x in SENT if text_of(x).strip())
     errs = []
     desc = []
 
