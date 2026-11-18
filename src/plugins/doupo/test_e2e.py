@@ -267,7 +267,7 @@ async def main():
     await fire("买 血灵草 2", mk_group(A, "买 血灵草 2"), "血灵草")
     await fire("炼药", mk_group(A, "炼药"), None, expect_image=True)  # 2026-11-16 丹方卡
     await fire("买 紫叶兰 1", mk_group(A, "买 紫叶兰 1"), "紫叶兰")
-    await fire("炼制 回灵丹", mk_group(A, "炼制 回灵丹"), "成功率")
+    await fire("炼制 回灵丹", mk_group(A, "炼制 回灵丹"), "把握")  # 2026-11-18 成数表述
     await fire("背包", mk_group(A, "背包"), None, expect_image=True)
     await fire("服丹 回灵丹", mk_group(A, "服丹 回灵丹"), "回灵丹")
     await fire("任务", mk_group(A, "任务"), "主线")

@@ -634,7 +634,6 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     """
     alch_idx = int(p.get("alch", 0))
     alch = cfg.ALCHEMIST[alch_idx]
-    base_rate = int(cfg.craft_rate(alch_idx) * 100)
     chunk, page, total_pages = core.recipes_page(p, page)
     total_avail = len(core.available_recipes(p))
 
@@ -650,7 +649,7 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             # 不改模板坐标骨架 —— 越1档「勉强」、越≥2档「几无可能」。
             rate, diff = cfg.craft_rate_for(alch_idx, r.get("grade", ""))
             tag = cfg.effect_tag(r.get("effect", ""))
-            rate_bit = "成%d%%" % int(rate * 100)
+            rate_bit = "%s把握" % cfg.rate_cn(rate)
             if diff > 0:
                 rate_bit += " 越%d档·勉强" % diff if diff == 1 else " 越%d档·几无" % diff
             desc_bits = []
@@ -680,8 +679,8 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     return {
         "icon": "wand",
         "title": "炼药",
-        "subtitle": ("%s炼药师 · 够格成功率 %d%% · 越阶骤降(×35%%/×5%%) · 药渣 ×%d" %
-                     (alch[0], base_rate, core.count_item(p, "药渣"))),
+        "subtitle": ("%s炼药师 · 低阶更稳/越阶骤降 · 药渣 ×%d" %
+                     (alch[0], core.count_item(p, "药渣"))),
         "page": page,
         "total_pages": total_pages,
         "total_avail": total_avail,

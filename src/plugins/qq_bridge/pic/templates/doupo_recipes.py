@@ -68,7 +68,7 @@ H_TIP = 12 + FS_TIP + 8
 _DEMO = {
     "icon": "wand",
     "title": "炼药",
-    "subtitle": "五品炼药师 · 成功率 80% · 药渣 ×12",
+    "subtitle": "五品炼药师 · 低阶更稳/越阶骤降 · 药渣 ×12",
     "page": 1, "total_pages": 2, "total_avail": 16, "shown": 10,
     "groups": [
         {"grade": "五品", "rows": [

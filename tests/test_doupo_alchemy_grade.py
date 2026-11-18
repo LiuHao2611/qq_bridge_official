@@ -74,10 +74,10 @@ def _p(lv=1, alch=3):
 # 1. 成功率随「炼药师品阶 vs 丹药品阶」变化
 # ---------------------------------------------------------------------------
 def test_rate_enough_uses_base():
-    """够格（含高炼药师炼低阶）用基础率，不额外惩罚。"""
-    for alch, grade in [(3, "四品"), (3, "二品"), (5, "五品"), (8, "帝品")]:
+    """刚好够格（diff==0）用基础率，不额外加成/惩罚。"""
+    for alch, grade in [(3, "四品"), (5, "六品"), (8, "九品"), (0, "一品")]:
         rate, diff = cfg.craft_rate_for(alch, grade)
-        assert diff <= 0, (alch, grade, diff)
+        assert diff == 0, (alch, grade, diff)
         assert abs(rate - cfg.craft_rate(alch)) < 1e-9, (alch, grade, rate)
 
 
@@ -164,7 +164,12 @@ def test_mp_recipes_visible_in_text():
                 break
     line = next((ln for ln in txt.splitlines() if "回气丹" in ln), "")
     assert "〔回斗气〕" in line, "回气丹行应显式标〔回斗气〕：%r" % line
-    assert "成 " in txt and "越" in txt, "文本卡须给出单丹成功率与越阶规则说明"
+    assert "成" in txt and "把握" in txt, "文本卡须用成数表述：%s" % txt[:200]
+    # 头两行（品阶 + 规则说明）不得出现百分号；每行成功率片段同（原功效描述的
+    # 「+5%」是效果数值，合法保留，故不检查全文）。
+    head = "\n".join(txt.splitlines()[:3])
+    assert "%" not in head and "越阶骤降" in head, "规则头行须用成数：%s" % head
+    assert "越" in txt, "文本卡须给出越阶规则说明"
 
 
 def test_mp_recipes_visible_in_card():
@@ -205,6 +210,98 @@ def test_card_rate_diff_by_alchemist():
     assert low_rate is not None and high_rate is not None
     assert low_diff <= 0 and high_diff <= 0
     assert high_rate >= low_rate, "炼药师品阶越高成功率越高：%s" % ((low_rate, high_rate),)
+
+
+# ---------------------------------------------------------------------------
+# 4. 高品阶炼低阶更稳（用户「四品炼一品还是70？」）
+# ---------------------------------------------------------------------------
+def test_low_grade_bonus_monotonic():
+    """四品炼一品 > 炼二品 > 炼三品 > 炼四品，每低一档更稳（不是一律 70%）。"""
+    rates = {g: cfg.craft_rate_for(3, g)[0] for g in
+             ("一品", "二品", "三品", "四品")}
+    assert rates["一品"] > rates["二品"] > rates["三品"] > rates["四品"], rates
+    assert abs(rates["四品"] - 0.70) < 1e-9, rates       # 够格基础率
+    assert abs(rates["一品"] - 0.94) < 1e-9, rates       # 0.70 + 3×0.08
+    assert abs(rates["三品"] - 0.78) < 1e-9, rates       # 0.70 + 1×0.08
+
+
+def test_low_grade_bonus_capped():
+    """低阶加成封顶 9成5，不超上限。"""
+    rate, diff = cfg.craft_rate_for(8, "一品")   # 九品炼一品 diff=-8
+    assert diff < 0 and rate <= cfg.CRAFT_RATE_CAP + 1e-9
+    assert abs(rate - 0.95) < 1e-9, rate
+
+
+def test_four_grade_full_ladder():
+    """四品炼药师完整梯度：低阶越稳、越高阶越难，成数表述符合原著口语。"""
+    ladder = [(g, cfg.craft_rate_for(3, g)[0]) for g in
+              ("一品", "二品", "三品", "四品", "五品", "六品")]
+    expect_cn = ["9成4", "8成6", "7成8", "7成", "2成4", "0成4"]
+    got_cn = [cfg.rate_cn(r) for _, r in ladder]
+    assert got_cn == expect_cn, (got_cn, expect_cn)
+    # 严格单调递减：品阶越高越难
+    vals = [r for _, r in ladder]
+    assert all(vals[i] > vals[i + 1] for i in range(len(vals) - 1)), vals
+
+
+# ---------------------------------------------------------------------------
+# 5. 成数表述 rate_cn（不用百分号）
+# ---------------------------------------------------------------------------
+def test_rate_cn_mapping():
+    cases = {
+        1.0: "十成", 0.94: "9成4", 0.70: "7成", 0.86: "8成6",
+        0.78: "7成8", 0.245: "2成4", 0.035: "0成4", 0.0: "0成",
+    }
+    for rate, want in cases.items():
+        got = cfg.rate_cn(rate)
+        assert got == want, (rate, got, want)
+        assert "%" not in got and "." not in got, "成数不得含%%或小数点：%s" % ((rate, got),)
+    # 越界夹取
+    assert cfg.rate_cn(1.5) == "十成" and cfg.rate_cn(-0.2) == "0成"
+
+
+def test_craft_reply_uses_cheng_no_percent():
+    """丹成/失败回包用「N成把握」而非「N%」，且带真实成数。"""
+    import asyncio
+    from doupo import store as store_mod
+
+    class _Mem:
+        def __init__(self, p):
+            self.p = p
+
+        async def get_player(self, qq):
+            return dict(self.p)
+
+        async def put_player(self, p):
+            self.p = dict(p)
+
+    p = _p(lv=1, alch=3)          # 四品炼药师，炼一品聚气散 → 9成4
+    for k, v in cfg.RECIPE_BY_NAME["聚气散"]["need"].items():
+        core.add_item(p, k, v)
+    p["last_craft"] = 0
+    store = _Mem(p)
+    r = asyncio.run(commands.cmd_craft(store, "10001", "聚气散"))
+    assert "成" in r and "把握" in r, r
+    assert "%" not in r, r
+    # 成功或失败都要带四品炼一品的真实成数 9成4（成功回包/失败回包同源 rate_cn）
+    assert ("丹成" in r or "失败" in r), r
+    assert "9成4" in r, r
+
+
+def test_card_desc_uses_cheng_no_percent():
+    """图片卡每枚丹药的 desc 用「N成把握」，无百分号。"""
+    p = _p(lv=103, alch=3)
+    d = card.build_recipes_data(p, 1)
+    import re
+    for g in d["groups"]:
+        for r in g["rows"]:
+            # 成功率片段（「…成把握」之前）不得含百分号；之后的原功效描述里
+            # 「闪避+5%」这类是效果数值，合法保留。
+            rate_part = r["desc"].split("把握")[0]
+            assert "%" not in rate_part, (r["name"], r["desc"])
+            assert "成" in rate_part, (r["name"], r["desc"])
+            assert "把握" in r["desc"], (r["name"], r["desc"])
+    assert "%" not in d["subtitle"], d["subtitle"]
 
 
 # ---------------------------------------------------------------------------

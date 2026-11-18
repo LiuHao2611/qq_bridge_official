@@ -178,7 +178,7 @@ def test_build_and_render_recipes_card():
         core.add_item(p, k, 99)
     d = card.build_recipes_data(p, 1)
     assert d["title"] == "炼药"
-    assert "六品炼药师" in d["subtitle"] and "成功率" in d["subtitle"]
+    assert "六品炼药师" in d["subtitle"] and "越阶骤降" in d["subtitle"]
 
     avail = core.available_recipes(p)
     chunk, page, total_pages = core.recipes_page(p, 1)

@@ -503,6 +503,12 @@ GRADE_ALCH_IDX = {
 }
 #: 越阶成功率衰减系数：越 1 档「勉强」、越 ≥2 档「几无可能」
 OVERREACH_PENALTY = {1: 0.35}
+#: 炼低于自身品阶的丹药：每低 1 档成功率加成（高品阶炼低阶十拿九稳）。
+#: 用户 2026-11-18「我四品炼药师炼一品丹药，概率还是 70？」——旧版 diff<=0
+#: 一律回基础率，导致四品炼一品与炼四品同为 70%，不合原著品阶压制。
+LOW_GRADE_BONUS = 0.08
+#: 低阶加成后的成功率上限（与 craft_rate 的 0.95 一致）
+CRAFT_RATE_CAP = 0.95
 
 
 def alch_grade_idx(grade: str) -> int:
@@ -529,16 +535,40 @@ def craft_rate_for(alch_idx: int, grade: str) -> tuple[float, int]:
     """某炼药师炼某品阶丹药的真实成功率与品阶差。
 
     返回 ``(rate, diff)``：``diff`` = 丹药所需品阶 − 炼药师品阶。
-      diff <= 0  够格（含高品阶炼低阶），rate = craft_rate(alch_idx)
-      diff == 1  勉强越阶，rate = 基础 ×0.35
-      diff >= 2  几无可能，rate = 基础 ×0.05
+      diff <  0  高品阶炼低阶：每低 1 档 +LOW_GRADE_BONUS，封顶 CRAFT_RATE_CAP
+                 （四品炼一品 = 0.70 + 3×0.08 = 0.94，十拿九稳）
+      diff == 0  刚好够格：rate = craft_rate(alch_idx)
+      diff == 1  勉强越阶：rate = 基础 ×0.35
+      diff >= 2  几无可能：rate = 基础 ×0.05
     """
     base = craft_rate(alch_idx)
     diff = alch_grade_idx(grade) - int(alch_idx)
-    if diff <= 0:
+    if diff < 0:
+        return min(CRAFT_RATE_CAP, base + (-diff) * LOW_GRADE_BONUS), diff
+    if diff == 0:
         return base, diff
     penalty = OVERREACH_PENALTY.get(1 if diff == 1 else 2, 0.05)
     return min(base, base * penalty), diff
+
+
+def rate_cn(rate: float) -> str:
+    """成功率 → 「成」表述（用户 2026-11-18「不要百分比，改成 7成这样的，符合原著」）。
+
+    一成 = 10%，用阿拉伯数字（精确匹配用户示例「7成」）。按整十百分比取成数，
+    个位余数直接跟在后面补足，不用百分号 / 小数点，像原著口语「几成把握」：
+      0.70 → "7成"      0.94 → "9成4"     0.86 → "8成6"     0.78 → "7成8"
+      0.245 → "2成4"（越1档）   0.035 → "0成4"（越2档以上，几无可能）
+      1.0 → "十成"      0.0 → "0成"
+    供丹成回包 / 文本炼药 / 卡片炼药共用，杜绝三处口径分叉。
+    """
+    r = max(0.0, min(1.0, float(rate)))
+    if r >= 0.999:
+        return "十成"
+    tenths = round(r * 100)          # 百分比整数：94
+    cheng, rem = divmod(tenths, 10)  # 9 成 · 4
+    if rem == 0:
+        return f"{cheng}成"
+    return f"{cheng}成{rem}"
 
 
 #: 炼制耗时（秒）——群里用「冷却」形式表现，不做异步计时器
