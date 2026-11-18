@@ -548,6 +548,78 @@ def effect_tag(effect: str) -> str:
     return str(EFFECT_TAG.get(str(effect) or "", ""))
 
 
+#: effect → 「本作实际发生什么」的默认模板（``recipe_impl`` 未手写时用它）。
+#: 纪律：这里的每一句都必须由结算代码兑现 —— 写进来就等于对外承诺。
+IMPL_BY_EFFECT = {
+    "hp": "气血 +%d",
+    "mp": "斗气 +%d",
+    "exp": "修为 +%d",
+    "luck": "机缘 +%d",
+    "dodge": "永久闪避 +%d%%",
+    "crit": "永久暴击 +%d%%",
+    "stat": "全属性 +%d",
+    "skill": "用于升级斗技",
+}
+
+
+def recipe_impl(rec: dict) -> str:
+    """这枚丹**在本作里真实会发生什么**（唯一源：卡面 / 「炼药」文本 / 背包共用）。
+
+    2026-11-18 假药事故后的契约：``desc`` 是**原著功效**，不是承诺；``impl`` 才是
+    承诺。两者可能不一致（原著有封印/寿命/假死，本作没有这些系统），所以卡面只印
+    ``impl``，``desc`` 归到文本层标「原著：」。
+
+    生成顺序：
+      1. 配方里手写的 ``impl`` 优先（表示「这条有人审过、与自动口径不同」）；
+      2. ``breakthrough`` 按 to_realm / break_boundary / star_chance / max_per_realm 拼；
+      3. 其余按 ``IMPL_BY_EFFECT`` 套 value。
+
+    守门 ``tests/test_doupo_recipe_honesty.py`` 会逐条比对：impl 必须非空、且与
+    effect 的量纲一致（增修为的不能说气血）。
+    """
+    hand = str(rec.get("impl") or "").strip()
+    if hand:
+        return hand
+    eff = str(rec.get("effect") or "")
+    val = int(rec.get("value") or 0)
+    if eff == "breakthrough":
+        to = int(rec.get("to_realm") or 1)
+        to_name = REALM_NAMES[min(to, len(REALM_NAMES) - 1)]
+        parts = []
+        if rec.get("break_boundary") and to - 1 >= 0:
+            parts.append("%s九星直破%s" % (REALM_NAMES[to - 1], to_name))
+        chance = float(rec.get("star_chance") or 0.0)
+        if chance >= 0.999:
+            parts.append("%s必升一星" % to_name)
+        elif chance > 0:
+            parts.append("%s%d%%升一星" % (to_name, int(round(chance * 100))))
+        max_per = int(rec.get("max_per_realm") or 0)
+        text = "，".join(parts) or "破境"
+        # 限制用括号附在末尾（不用逗号）：卡面自动折行时不会以「，」开头成孤字。
+        if max_per:
+            text += "（限 %d 枚）" % max_per
+        return text
+    tpl = IMPL_BY_EFFECT.get(eff)
+    if tpl:
+        # skill 等模板没有 %d（「用于升级斗技」），不能盲目套 %
+        return (tpl % val) if "%" in tpl else tpl
+    return ""
+
+
+#: 描述里出现这些词，就等于**承诺改变了境界/星级**——必须 effect="breakthrough"，
+#: 或者配方里显式手写 impl（表示作者已确认本作无法兑现、并如实标注）。
+#: 门禁用它扫全表，杜绝「文案写破境、代码只加修为」的假药复发。
+IMPL_PROMISE_WORDS = (
+    "提升一星", "提升两星", "提升三星", "提升数星", "升一星", "提升一至两星",
+    "提升至", "提升服用者", "提升实力", "提升等级", "突破晋入", "踏入",
+    "百分之百凝聚", "凝聚斗之气旋", "可突破", "助人突破", "成功率",
+    "短时间", "短时", "萎靡", "透支",
+    "寿命", "假死", "封印", "逃生", "火毒", "异火", "紫火", "灵魂",
+    "救活", "活命", "还命", "濒死", "化形", "变化形态", "毒物", "变异",
+    "丹雷", "潜力", "倍增", "魔兽", "冲击段位",
+)
+
+
 def craft_rate_for(alch_idx: int, grade: str) -> tuple[float, int]:
     """某炼药师炼某品阶丹药的真实成功率与品阶差。
 

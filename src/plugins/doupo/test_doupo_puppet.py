@@ -22,6 +22,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
@@ -54,7 +55,10 @@ ps = importlib.import_module("src.plugins.doupo.puppet_store")
 store_mod = importlib.import_module("src.plugins.doupo.store")
 
 QQ = "73001"
-DAY = "2026-11-18"
+# ⚠️ 必须跟着「今天」走：cmd_puppet_ruin 内部用 date.today()，测试硬编码某一天
+# 一旦跨零点就对不上（2026-11-19 00:0x 实机红过一次：水位线写在 11-18，
+# 命令读 11-19 又从第 1 段开始）。日期是环境量，不是断言的一部分。
+DAY = date.today().isoformat()
 _RESULTS: list[tuple[str, bool, str]] = []
 
 
@@ -307,6 +311,10 @@ async def main() -> None:
           "")
 
     # 今日已全通：卡片首段也要能说清，而不是留一片空白
+    # ⚠️ 不能依赖「上面那场第 3 段刚好打赢」——那是真实战斗，输了这里就假红
+    # （2026-11-18 实机红过一次：第 3 段力竭 → stage 停在 2 → 断言以为没全通）。
+    # 直接把水位线抬到全通，确定性验证「已全通」分支本身。
+    await db.ruin_clear(QQ, DAY, len(cfg.PUPPET_RUIN_STAGES))
     rep2: dict = {}
     await cmds.cmd_puppet_ruin(store, QQ, db, report=rep2)
     rows2 = (card_mod.build_ruin_data(await db.ruin_state(QQ, DAY), DAY, rep2)

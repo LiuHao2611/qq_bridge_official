@@ -663,9 +663,12 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             if tag:
                 desc_bits.append("〔%s〕" % tag)
             desc_bits.append(rate_bit)
-            orig = str(r.get("desc") or "")
-            if orig:
-                desc_bits.append(orig)
+            # 2026-11-18 假药普查：卡面**只印本作真会发生的事**（cfg.recipe_impl）。
+            # desc 是原著功效，有些依赖本作没有的系统（封印/寿命/假死/化形…），
+            # 印在卡上就是承诺做不到的事；它改为在「炼药」文本里标「原著：」。
+            body = cfg.recipe_impl(r)
+            if body:
+                desc_bits.append(body)
             rows.append({
                 "name": r["name"],
                 "mats": [[k, int(v)] for k, v in need.items()],

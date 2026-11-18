@@ -1221,7 +1221,13 @@ async def cmd_recipes(store, qq, page=1) -> str:
                 out.append(f"　{mark}{badge}{r['name']}　（{mats}）　{rate_txt}")
             else:
                 out.append(f"　{badge}{r['name']}　（{int(r.get('buy', 0))} 金购买）　{rate_txt}")
-            out.append(f"　　{r['desc']}")
+            # 2026-11-18 假药普查：先说「本作真会发生什么」（唯一源 cfg.recipe_impl），
+            # 只有与自动口径不同（配方里手写了 impl）时才补一行原著出处对照。
+            body = cfg.recipe_impl(r)
+            if body:
+                out.append(f"　　本作：{body}")
+            if r.get("impl") and r.get("desc"):
+                out.append(f"　　原著：{r['desc']}")
     out.append("")
     if total_pages > 1:
         out.append(f"　发「炼药2」…「炼药{total_pages}」翻页，或点下方按钮")
@@ -1281,7 +1287,8 @@ async def cmd_bag(store, qq) -> str:
         return NOT_ENTERED
     items = core.bag_slots(p)
     out = [f"🎒 包裹（{len(items)}/24 格）　💰 {p['gold']}"]
-    known = {r["name"]: r["desc"] for r in cfg.RECIPES}
+    # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
+    known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
