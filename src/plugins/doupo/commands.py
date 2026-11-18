@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import date
 
 from . import battle_comments as bc
 from . import battle_review as br
@@ -277,6 +278,9 @@ MENU_GROUPS = (
         ("异火", "看 5 种异火的主动技 / 被动、原著出处与喂养进度"),
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
+        ("炼制傀儡", "集齐传承+三主材+金属，炼一具人级铜傀儡（须先过五道资格）"),
+        ("傀儡", "查看傀儡卡（出图）；子命令 淬炼/结阵/收服/融魂"),
+        ("傀儡遗迹", "每日副本：魔炎谷库房→天墓能量之层→虚空雷池，掉三主材与传承竹简"),
     )),
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
@@ -2020,3 +2024,238 @@ async def cmd_pick(store, qq, n) -> str:
     if qs.STORE.take_expired(qq):
         return "⏰ 这题已超时作废（限 %d 秒），本题奖励已失去。" % cfg.CHOICE_TTL
     return ""
+
+
+# ---------------------------------------------------------------------------
+# 傀儡系统（2026-11-18，考据见 docs/斗破傀儡_原文证据台账_2026-11-18.md）
+# 所有傀儡数据在独立 SQLite 真实列（puppet_store），绝不进 players.data 的 JSON blob。
+# ---------------------------------------------------------------------------
+async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
+    """查看傀儡卡 / 子命令：淬炼、结阵、融魂、收服。
+    不拦未开通者——展示差哪道资格，作引导。
+    """
+    from . import puppet_core as pc
+    from . import puppet_store as ps
+    pstore = pstore or ps.PUPPET_STORE
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    qq = str(qq)
+    arg = (arg or "").strip()
+    elig = await pstore.eligibility(qq)
+    roster = await pstore.list_puppets(qq)
+    if not roster:
+        gate = pc.puppet_gate(p, 0, need_mp=False)
+        lines = ["【傀儡】你尚未拥有傀儡。", "炼一具须先过五道资格（挂已有养成）："]
+        checks = [
+            ("境界", pc.gate_realm(p, 0)), ("灵魂境界", pc.gate_soul(p)),
+            ("控火", pc.gate_fire_ctrl(p)), ("异火", pc.gate_flame(p)),
+        ]
+        for name, (ok, reason) in checks:
+            lines.append("  %s %s%s" % ("✅" if ok else "❌", name,
+                                        "" if ok else "（" + reason + "）"))
+        lines.append("资格齐后发「炼制傀儡」。发「傀儡遗迹」攒材料。")
+        return "\n".join(lines)
+    if arg.startswith("淬炼"):
+        return await _cmd_puppet_temper(store, qq, p, roster, elig, pstore)
+    if arg.startswith("结阵"):
+        return await _cmd_puppet_formation(qq, roster, elig, pstore)
+    if arg.startswith("收服"):
+        return await _cmd_puppet_claim(store, qq, p, arg, pstore)
+    if arg.startswith("融魂"):
+        return await _cmd_puppet_awaken(store, qq, p, roster, elig, pstore)
+    # 默认：展示当前傀儡
+    cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
+    tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
+    atk = pc.puppet_attack(cur)
+    lines = [
+        "【%s】%s档 · %s皮" % (cur["name"], tier_name, skin),
+        "　躯体：%s（%s%s）" % (cur["body_name"] or "—",
+                              cur["body_realm"] or "凡躯",
+                              ("·%d星" % cur["body_star"]) if cur["body_star"] else ""),
+        "　魔核：%d阶%s系　灵魂：%s" % (cur["core_tier"], cur["core_attr"] or "无",
+                                       cur["soul_source"] or "—"),
+        "　肉身攻击 %d（不吃斗气/斗技）" % int(atk),
+        "　雷淬纯度 %d%%%s" % (cur["purity"], "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
+        "　%s%s" % ("已认主·永不背叛" if cur["bonded"] else "未认主",
+                    "　有灵（北王式）" if cur["awakened"] else ""),
+    ]
+    if len(roster) > 1:
+        lines.append("　持有 %d 具；发「傀儡 结阵」查看合击" % len(roster))
+    lines.append("　子命令：淬炼 / 结阵 / 收服 / 融魂")
+    return "\n".join(lines)
+
+
+async def cmd_craft_puppet(store, qq, pstore=None) -> str:
+    """炼制傀儡：过五道资格 → 扣真实列材料 → 建真实列傀儡行。"""
+    from . import puppet_core as pc
+    from . import puppet_store as ps
+    pstore = pstore or ps.PUPPET_STORE
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    qq = str(qq)
+    gate = pc.puppet_gate(p, 0, need_mp=True)
+    if not gate["ok"]:
+        return "❌ 未能开炉：" + gate["reason"]
+    mats = await pstore.materials(qq)
+    # 传承从独立资格表读（不进 p / 不进 JSON）
+    elig = await pstore.eligibility(qq)
+    p_view = dict(p)
+    p_view["puppet_lore"] = elig["lore"]
+    # E10/E15：躯体须冰封保鲜，灵魂须先炼尽神智（否则入料反噬）
+    body = {"body_name": "强者之躯", "body_realm": cfg.realm_name(int(p.get("lv", 1))),
+            "body_star": 0, "body_fresh": True, "body_fresh_until": 0,
+            "mind_stripped": True}
+    chk = pc.craft_checks(p_view, mats, body, 0)
+    if not chk["ok"]:
+        return "❌ " + chk["reason"]
+    cost = {"强者躯体": 1, "火属性魔核": 1, "无主灵魂": 1, "暗金玄铁": 1}
+    if not await pstore.take_materials(qq, cost):
+        return "❌ 材料在校验后被他人取用，炼制中断、材料未扣。"
+    # 斗气按天烧：见底则中断、材料不退（此处扣一笔斗气续航）
+    need_mp = int(core.mp_max(p) * cfg.PUPPET_MP_FACTOR[0])
+    p["mp"] = max(0, int(p.get("mp", 0)) - need_mp)
+    await store.put_player(p)
+    puppet = pc.make_puppet(
+        p, body,
+        {"core_tier": 7, "core_attr": "火"},
+        {"soul_source": "无主灵魂", "soul_strength": 900, "mind_stripped": True},
+        {"metal_name": "暗金玄铁", "metal_grade": 2},
+        {"fire_tier": 7, "fire_attr": "火"},
+    )
+    pid = await pstore.add_puppet(qq, puppet)
+    if not elig["ready"]:
+        await pstore.set_ready(qq, True)
+    return ("⚗️ 炼制成功！【%s】人级铜傀儡（id=%d）——原著首炼即人级，"
+            "靠雷池淬炼可升地级银、天级金。发「傀儡」查看。" % (puppet["name"], pid))
+
+
+async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
+    """傀儡遗迹日副本：三段逐日推进，掉落进 puppet_materials 真实列。
+
+    难度走 ``monster_scaled`` 反解；出战傀儡的期望输出同时进反解与 ``fight``
+    （``puppet_expected_damage`` 唯一口径），不会出现「带傀儡怪血不变」。
+    """
+    from . import puppet_core as pc
+    from . import puppet_store as ps
+    pstore = pstore or ps.PUPPET_STORE
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    qq = str(qq)
+    day = date.today().isoformat()
+    st = await pstore.ruin_state(qq, day)
+    stages = cfg.PUPPET_RUIN_STAGES
+    if int(st["stage"]) >= len(stages):
+        return "⚔️ 今日傀儡遗迹已全通（%d/%d），明日再来。" % (len(stages), len(stages))
+    idx = int(st["stage"])
+    sg = stages[idx]
+    roster = await pstore.list_puppets(qq)
+    pu = await pstore.active_puppet(qq)
+    n = pc.formation_count(roster)
+    bonus = pc.puppet_expected_damage(pu, n)
+    mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
+    res = core.fight(p, mon, puppet=pu, formation_n=n)
+    core.record_last_battle(p, "傀儡遗迹", res, opponent=sg["monster"])
+    await store.put_player(p)
+    head = "【傀儡遗迹·%s】%s\n　%s" % (sg["name"], sg["desc"], sg["monster"])
+    if not res["win"]:
+        return (head + "\n❌ 力竭（%d 回合，敌余血 %d）。今日仍在第 %d 段，"
+                "调息后可再来。" % (int(res["rounds"]), int(res["mon_hp_left"]), idx + 1))
+    for name, qty in sg["drops"].items():
+        await pstore.add_material(qq, name, int(qty))
+    if "天妖傀竹简" in sg["drops"]:
+        await pstore.set_lore(qq, True)
+    await pstore.ruin_clear(qq, day, idx + 1)
+    drops = "、".join("%s×%d" % (k, int(v)) for k, v in sg["drops"].items())
+    tail = ""
+    if "天妖傀竹简" in sg["drops"]:
+        wild = pc.make_puppet(
+            p, {"body_name": "残破傀儡躯", "body_realm": "斗宗", "body_star": 0,
+                "body_fresh": True, "body_fresh_until": 0},
+            {"core_tier": 7, "core_attr": "火"},
+            {"soul_source": "无主残魂", "soul_strength": 600, "mind_stripped": True},
+            {"metal_name": "暗金玄铁", "metal_grade": 2},
+            {"fire_tier": 7, "fire_attr": "火"}, origin="wild")
+        wid = await pstore.add_wild_puppet(wild)
+        tail = ("\n📜 得《天妖傀》竹简——傀儡之技已习得。"
+                "\n🩸 遗迹里还有一具无主残傀（id=%d），发「傀儡 收服 %d」可降服。" % (wid, wid))
+    return (head + "\n✅ %d 回合胜（承伤 %d）\n　掉落：%s\n　今日进度 %d/%d%s" % (
+        int(res["rounds"]), int(res.get("taken") or 0), drops,
+        idx + 1, len(stages), tail))
+
+
+async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
+    from . import puppet_core as pc
+    cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
+    if cur["tier"] >= 2 and cur["purity"] >= cfg.PUPPET_PURITY_MAX:
+        return "【%s】已是天级金，原著上限，无需再淬。" % cur["name"]
+    if int(p.get("gold", 0)) < cfg.PUPPET_TEMPER_COST:
+        return "金币不足，雷淬需 %d 金。" % cfg.PUPPET_TEMPER_COST
+    p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_TEMPER_COST
+    await store.put_player(p)
+    new = pc.temper(cur)
+    await pstore.update_puppet(qq, cur["id"], **new)
+    if new.get("capped"):
+        return "⚡ 雷霆淬炼圆满！【%s】进化为【%s】（%s皮）——已至天妖傀上限。" % (
+            cur["name"], new["tier_name"], new["skin"])
+    return "⚡ 雷霆淬炼：纯度 %d%%，当前 %s·%s皮。" % (
+        new["purity"], new["tier_name"], new["skin"])
+
+
+async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
+    from . import puppet_core as pc
+    n = pc.formation_count(roster)
+    if n < 2:
+        return "结阵须至少两具傀儡（原著十具地妖傀结阵进化）。你目前 %d 具。" % n
+    names = "、".join(x["name"] for x in roster[:10])
+    return "【傀儡结阵】%d 具同场：%s\n　阵法合击，全员攻击 +%d%%（原著：银芒连成循环，可临时进阶）。" % (
+        n, names, int((n - 1) * 15))
+
+
+async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
+    """E37：收服遗迹里的无主残傀。须灵魂境界达标（控得住别人的傀儡）。"""
+    from . import puppet_core as pc
+    ok, why = pc.gate_soul(p)
+    if not ok:
+        return "❌ 收服无主傀儡须灵魂境界达标：" + why
+    m = re.search(r"收服\s*(\d+)", arg or "")
+    if not m:
+        wild = await pstore.wild_puppets()
+        if not wild:
+            return "遗迹里暂无无主残傀。打通「傀儡遗迹」第三段可遇。"
+        listing = "、".join("id=%s %s" % (x["id"], x["name"]) for x in wild[:8])
+        return "遗迹无主残傀：%s。发「傀儡 收服 <id>」降服（需 %d 金）。" % (
+            listing, cfg.PUPPET_CLAIM_COST)
+    pid = int(m.group(1))
+    if int(p.get("gold", 0)) < cfg.PUPPET_CLAIM_COST:
+        return "金币不足，收服需 %d 金。" % cfg.PUPPET_CLAIM_COST
+    if not await pstore.claim_puppet(qq, pid):
+        return "该傀儡已被他人收服或并不存在，收服失败。"
+    p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_CLAIM_COST
+    await store.put_player(p)
+    return "🩸 收服成功：残傀已认主（原主印记被你的灵魂覆写）。发「傀儡」查看。"
+
+
+async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore) -> str:
+    """E43/E44：熔入残魂生灵智（北王式改良），不是基础款。"""
+    from . import puppet_core as pc
+    cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
+    if cur.get("awakened"):
+        return "【%s】已有灵智，无需再熔。" % cur["name"]
+    ok, why = pc.gate_soul(p)
+    if not ok:
+        return "❌ 熔魂须灵魂力量够强：" + why
+    mats = await pstore.materials(qq)
+    need = {"无主灵魂": cfg.PUPPET_AWAKEN_SOUL}
+    lack = [k for k, v in need.items() if int(mats.get(k, 0)) < int(v)]
+    if lack:
+        return "融魂缺少：" + "、".join(lack) + "（去「傀儡遗迹」第二段取）"
+    if int(p.get("gold", 0)) < cfg.PUPPET_AWAKEN_COST:
+        return "金币不足，融魂需 %d 金。" % cfg.PUPPET_AWAKEN_COST
+    await pstore.take_materials(qq, need)
+    p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_AWAKEN_COST
+    await store.put_player(p)
+    await pstore.update_puppet(qq, cur["id"], awakened=True)
+    return "🔥 熔魂入体：【%s】生出灵智，可主动出手——已是北王式改良傀儡，非基础款。" % cur["name"]

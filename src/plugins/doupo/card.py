@@ -723,3 +723,96 @@ async def render_battle(last_battle: dict) -> bytes | None:
     """「战斗回看」出图：完整逐招过程卡，按钮「战斗评价」由 card_key 派生。"""
     return await _render_list("doupo_battle", build_battle_data(last_battle),
                               CARD_BATTLE_NAME)
+
+
+# ---------------------------------------------------------------------------
+# 傀儡卡（2026-11-18）
+# 数据来自 puppet_store 的独立 SQLite 真实列；这里只做展示映射，不重算数值。
+# ---------------------------------------------------------------------------
+CARD_PUPPET_NAME = "斗破傀儡"
+
+
+def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
+    """傀儡名录 → doupo_puppet 模板参数。
+
+    与 ``commands.cmd_puppet`` 纯文本兜底同源：攻击走 ``puppet_attack`` 唯一口径，
+    资格走 ``puppet_gate`` 同一套五道，不在渲染层另写判定。
+    """
+    from . import puppet_core as pc
+
+    roster = [x for x in (roster or []) if isinstance(x, dict)]
+    elig = elig or {}
+    out: dict = {
+        "title": "傀儡",
+        "subtitle": "持有 %d 具 · 出战 %d 具" % (
+            len(roster), 1 if any(x.get("id") == elig.get("active_id") for x in roster) else 0),
+        "puppets": [], "gates": [],
+        "tip": "发「傀儡 淬炼」雷池提纯 · 「傀儡 结阵」多人合击 · 「炼制傀儡」再炼一具",
+    }
+    for pu in roster:
+        tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(
+            int(pu.get("tier", 0)), ("人级傀儡", "铜"))
+        body = "%s（%s%s）" % (
+            pu.get("body_name") or "—", pu.get("body_realm") or "凡躯",
+            ("·%d星" % pu["body_star"]) if pu.get("body_star") else "")
+        out["puppets"].append({
+            "name": str(pu.get("name") or "傀儡"),
+            "badge": "%s · %s皮%s" % (tier_name, skin, " · 出战" if pu.get("id") == elig.get("active_id") else ""),
+            "atk": str(int(pc.puppet_attack(pu))),
+            "lines": [
+                "躯体 " + body,
+                "魔核 %d阶%s系 · 灵魂 %s" % (int(pu.get("core_tier", 0)),
+                                              pu.get("core_attr") or "无",
+                                              pu.get("soul_source") or "—"),
+                "雷淬纯度 %d%% · %s%s" % (
+                    int(pu.get("purity", 0)),
+                    "已认主·永不背叛" if pu.get("bonded") else "未认主",
+                    " · 有灵" if pu.get("awakened") else ""),
+            ],
+            "active": bool(pu.get("id") == elig.get("active_id")),
+        })
+    if not roster and p is not None:
+        checks = [
+            ("境界", pc.gate_realm(p, 0)), ("灵魂境界", pc.gate_soul(p)),
+            ("控火", pc.gate_fire_ctrl(p)), ("异火", pc.gate_flame(p)),
+        ]
+        out["gates"] = [{"name": name, "ok": ok, "why": reason}
+                        for name, (ok, reason) in checks]
+        out["tip"] = "五道资格齐备后发「炼制傀儡」· 材料去「傀儡遗迹」攒"
+    return out
+
+
+async def render_puppet(roster: list, elig: dict, p: dict | None = None) -> bytes | None:
+    """「傀儡」出图：名录卡；未拥有时渲染五道资格，绝不降级为纯文字空回。"""
+    return await _render_list("doupo_puppet",
+                              build_puppet_data(roster, elig, p), CARD_PUPPET_NAME)
+
+
+CARD_RUIN_NAME = "斗破傀儡遗迹"
+
+
+def build_ruin_data(state: dict, day: str = "") -> dict:
+    """遗迹当日状态 → doupo_ruin 模板参数；段落与掉落只读 cfg 唯一源。"""
+    stages = cfg.PUPPET_RUIN_STAGES
+    done = int((state or {}).get("stage", 0))
+    groups = []
+    for i, sg in enumerate(stages):
+        status = "已通关" if i < done else ("可挑战" if i == done else "未解锁")
+        drops = "、".join("%s×%d" % (k, int(v))
+                         for k, v in (sg.get("drops") or {}).items())
+        groups.append({
+            "name": "%s · %s" % ("一二三"[i] if i < 3 else str(i + 1), sg["name"]),
+            "rows": [str(sg.get("desc") or ""),
+                     "%s ｜ 掉 %s ｜ %s" % (sg["monster"], drops, status)],
+        })
+    return {
+        "title": "傀儡遗迹",
+        "subtitle": "今日进度 %d/%d%s" % (done, len(stages), (" · " + day) if day else ""),
+        "groups": groups,
+        "tip": "发「傀儡遗迹」逐段挑战 · 发「傀儡」看名录 · 发「炼制傀儡」开炉",
+    }
+
+
+async def render_ruin(state: dict, day: str = "") -> bytes | None:
+    """「傀儡遗迹」出图：三段进度卡，与战报文字同源（同一 stage 水位线）。"""
+    return await _render_list("doupo_ruin", build_ruin_data(state, day), CARD_RUIN_NAME)
