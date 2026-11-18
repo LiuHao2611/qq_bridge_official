@@ -640,6 +640,25 @@ async def _(event: Event):
     await shop.finish(msg)
 
 
+# 2026-11-18 玩家自定义每张卡片底部按钮：配置入口（隐藏口令，不进菜单）。
+# PRI-1 优先于普通口令，避免被「买」等抢；rule 限斗破模式。
+# 参数从纯文本里剥掉口令首词取得（不用 _arg，它会 replace 掉所有匹配）。
+btn_setup = on_regex(_pat(r"(?:按钮设置|自定义按钮)") + r"\s*(.*)",
+                     priority=PRI - 1, block=True, rule=_mode_is("doupo"))
+
+
+@btn_setup.handle()
+async def _(event: Event):
+    from . import custom_buttons as _cb  # noqa: PLC0415
+
+    event = view(event)
+    qq = str(event.user_id)
+    plain = re.sub(r"^\s*#?\s*", "", _plain(event))
+    m = re.match(r"(?:按钮设置|自定义按钮)\s*(.*)", plain, re.S)
+    arg = (m.group(1) if m else "").strip()
+    await finish_text(btn_setup, event, await _cb.handle_config(store, qq, arg))
+
+
 buy = on_regex(_pat(r"(?:买|购买)") + r"\s*(.*)", priority=PRI, block=True, rule=_mode_is("doupo"))
 
 

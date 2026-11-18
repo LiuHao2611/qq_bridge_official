@@ -213,8 +213,10 @@ async def handle_interaction(bot: QQBot, event: QQEvent) -> None:  # type: ignor
     try:
         from ...doupo.button_dispatch import (  # noqa: PLC0415
             dispatch_button as _doupo_dispatch,
+            dispatch_custom as _doupo_custom_dispatch,
             dispatch_page as _doupo_page_dispatch,
             dispatch_quiz as _doupo_quiz_dispatch,
+            parse_custom_cmd as _parse_custom_cmd,
             parse_page_cmd as _parse_page_cmd,
             parse_quiz_cmd as _parse_quiz_cmd,
         )
@@ -245,6 +247,19 @@ async def handle_interaction(bot: QQBot, event: QQEvent) -> None:  # type: ignor
             finally:
                 detach_official_ctx(token_pg)
             log.info(jlog("official_doupo_page_dispatch", cmd=cmd, handled=bool(handled)))
+            return
+
+        # 2026-11-18 玩家自定义按钮：data = doupo:cbtn:<真口令>（可带参），
+        # 先于静态 canonical 判定（它不是 canonical 口令，不在 ALL_BUTTON_CMDS）。
+        if _parse_custom_cmd(cmd) is not None:
+            from .base import attach_official_ctx, detach_official_ctx  # noqa: PLC0415
+
+            token_c = attach_official_ctx(full_ctx)
+            try:
+                handled = await _doupo_custom_dispatch(bot, full_ctx, cmd)
+            finally:
+                detach_official_ctx(token_c)
+            log.info(jlog("official_doupo_custom_dispatch", cmd=cmd, handled=bool(handled)))
             return
 
         if cmd in _DOUPO_CMDS:

@@ -63,6 +63,35 @@ _page_state: ContextVar[dict] = ContextVar("doupo_page_state", default={})
 #: per-task 的竞猜选项表：token -> (label...)。NoneBot 每事件独立 task，天然隔离。
 _quiz_options: ContextVar[dict] = ContextVar("doupo_quiz_options", default={})
 
+#: per-task 的「玩家自定义按钮」覆盖表：card_key -> ((label, cmd), ...)。
+#: 2026-11-18 用户「每个玩家自定义每张卡片底部按钮」。玩家配置存在存档里，
+#: 发送层读出来后 arm 进来；:func:`buttons_for_card` 命中本卡时优先用它，
+#: 彻底替换该卡固定按钮（玩家对每个按钮有增删改权，菜单卡除外）。
+#: 与 quiz/page 同构用 ContextVar：NoneBot 每事件独立 task，天然并发隔离不串号。
+DOUPO_CUSTOM_PREFIX = "doupo:cbtn:"
+_custom_buttons: ContextVar[dict] = ContextVar("doupo_custom_buttons", default={})
+
+
+def arm_custom(buttons: tuple[tuple[str, str], ...], card_key: str) -> object:
+    """登记本回合某卡的玩家自定义按钮，返回 ContextVar token 供 detach。
+
+    ``buttons`` 是 ``((label, real_cmd), ...)``；编码成哨兵 data 在这里做，
+    让按钮派生层之外的调用方不必知道 :mod:`doupo.custom_buttons` 的细节。
+    """
+    encoded = tuple(
+        Btn(label[:10], DOUPO_CUSTOM_PREFIX + cmd.strip(), False)
+        for label, cmd in (buttons or [])
+        if label and cmd
+    )
+    return _custom_buttons.set({(card_key or "").strip(): encoded})
+
+
+def disarm_custom(token) -> None:
+    try:
+        _custom_buttons.reset(token)
+    except (ValueError, TypeError):
+        pass
+
 
 def arm_quiz(token: str, options) -> object:
     """登记本回合竞猜选项，返回 ContextVar token 供 handler detach。"""
@@ -207,9 +236,15 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
     只在 ``card_key`` 精确命中时返回——绝不把斗破按钮塞进 game_tools 口令
     （那会污染档位族守门），也不对闲聊/斜杠命令给按钮。
     """
-    acts = CARD_ACTIONS.get((card_key or "").strip())
+    k = (card_key or "").strip()
+    acts = CARD_ACTIONS.get(k)
     if not acts:
         return ()
+    # 2026-11-18 玩家自定义按钮优先：本回合发送层 arm 了该卡的自定义按钮时，
+    # 完全替换固定按钮（用户对每个按钮有增删改权）。菜单卡的 arm 由发送层禁止。
+    custom = _custom_buttons.get().get(k)
+    if custom:
+        return tuple(custom)
     return tuple(Btn(c, c, False) for c in acts)
 
 
