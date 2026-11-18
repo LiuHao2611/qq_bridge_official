@@ -540,7 +540,7 @@ def build_flames_data(p: dict) -> dict:
         "icon": "star", "title": "异火",
         "subtitle": f"药渣 ×{dross}",
         "rows": rows,
-        "tip": "用法：养火 青莲地心火（一次喂光现有药渣）",
+        "tip": commands.flame_usage_hint(p),
     }
 
 

@@ -125,6 +125,13 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
 * **验收必须比对内容特征**：curl `raw.githubusercontent.com/.../main/<path>?t=<时间戳>`
   后 grep 本轮标志性字符串。只信 PUSH_OK = 假通过。别用 `git hash-object` 比 tree sha
   （autocrlf 会造「远端是旧内容」的假象）。
+* 🚨 **行尾必须跟远端既有行尾对齐**（2026-11-18 事故）：`core.autocrlf=true` 让工作区是
+  CRLF、git 提交是 LF，而 `tmp/push_incremental.py` 直接读磁盘字节 → 推上去的
+  `commands.py` 变「+2277/-2261」整文件重写（同一份代码只是行尾不同），blame 全废。
+  但**一刀切折 LF 也不行**：仓库里本来混着 LF 与 CRLF，统一折 LF 会让另一批文件
+  （card.py / test_commands.py / test_menu_full.py / MEMORY.md）同样变整篇重写。
+  现在脚本按「远端该文件已有行尾」输出（新文件用 LF），推完看 `get_commit` 的
+  additions/deletions 是否等于本地 `git diff --stat`——不等就是行尾又漂了。
 
 ## 5. 战斗系统 / 爬塔 / 战斗回看
 
