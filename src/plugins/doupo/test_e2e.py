@@ -221,9 +221,35 @@ async def main():
     pri_hist = {}
     for m in mats:
         pri_hist[m.priority] = pri_hist.get(m.priority, 0) + 1
-    want = cmds.menu_total()
-    RESULTS.append(("STATIC matcher 数量 = 菜单条数", len(mats) == want,
-                    f"count={len(mats)} menu_total={want}"))
+    # 数量不能写成「matcher 数 == 菜单条数」：一个 matcher 本来就接多条口令
+    # （「战斗」同时接 战斗/战斗回看/战斗评价，「周副本」接 周本/周本状态，「傀儡」
+    # 接 炼制傀儡/傀儡/傀儡遗迹，「炼制」接 炼制/炼制傀儡），也有故意不进玩家菜单的
+    # 运维口令（按钮设置）。所以改守两个真事实，它们比数字强得多：
+    #   ① 菜单里每一条口令都必须被某个 matcher 的正则命中 —— 否则用户看到口令没人接；
+    #   ② 除运维白名单外，每个 matcher 都必须能命中至少一条菜单口令 —— 否则是死代码。
+    def _regexes(m):
+        out = []
+        for c in getattr(getattr(m, "rule", None), "checkers", ()):
+            r = getattr(getattr(c, "call", None), "regex", None)
+            if r is None:
+                continue
+            out.append(getattr(r, "pattern", r) if not isinstance(r, str) else r)
+        return out
+
+    import re as _re
+    pats = [_regexes(m) for m in mats]
+    listed = [item[0] for grp in cmds.MENU_GROUPS for item in grp[1]]
+    uncovered = [n for n in listed
+                 if not any(any(_re.search(p, n) for p in ps) for ps in pats)]
+    # 按钮设置/自定义按钮 是运维口令，故意不进玩家菜单。
+    GREYLIST = ("按钮设置", "自定义按钮")
+    orphans = [ps for ps in pats
+               if not any(any(_re.search(p, n) for p in ps) for n in listed)
+               and not any(g in p for p in ps for g in GREYLIST)]
+    RESULTS.append(("STATIC 每条菜单口令都有 matcher 接住", not uncovered,
+                    f"menu_total={len(listed)} matchers={len(mats)} 漏接={uncovered}"))
+    RESULTS.append(("STATIC 无孤儿 matcher（除运维口令）", not orphans,
+                    f"mats={len(mats)} 孤儿={orphans}"))
     RESULTS.append(("STATIC 全部 priority∈{PRI,PRI-1} + block=True", pri_ok,
                     f"n={len(mats)} pri分布={pri_hist} block全True="
                     f"{all(m.block is True for m in mats)}"))
@@ -262,7 +288,12 @@ async def main():
     await fire("学斗技 口令命中并回包", mk_group(A, "学斗技"), None)
     # 2026-11-16 硬要求：A 是无传承宗门（云岚宗），异火只回纯文本一句，无图无按钮。
     await fire("异火 无传承→纯文本", mk_group(A, "异火"), "本宗无传承异火")
-    await fire("养火 青莲地心火", mk_group(A, "养火 青莲地心火"), "药渣")
+    # 2026-11-18 A 方案：未收服的异火不能直接养（堵住「养火即收服」的后门）。
+    # A 是无传承宗门（云岚宗），本宗不发火 → 先验门禁，再手工收服走一遍正路。
+    await fire("养火 未收服→拒绝", mk_group(A, "养火 青莲地心火"), "尚未收服")
+    _pa = await p_mod.store.get_player(str(A))
+    _pa.setdefault("flames", {})["青莲地心火"] = 1
+    await fire("养火 已收服→生效", mk_group(A, "养火 青莲地心火"), "药渣")
     await fire("宝库", mk_group(A, "宝库"), None, expect_image=True)
     await fire("买 血灵草 2", mk_group(A, "买 血灵草 2"), "血灵草")
     await fire("炼药", mk_group(A, "炼药"), None, expect_image=True)  # 2026-11-16 丹方卡

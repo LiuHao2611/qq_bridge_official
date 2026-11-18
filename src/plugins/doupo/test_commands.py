@@ -288,6 +288,10 @@ async def main():
     # ------------------------------------------------------------------
     r = await commands.cmd_flames(store, A)
     check("异火 列出 5 种", all(f["name"] in r for f in cfg.FLAMES))
+    # 2026-11-18 A 方案：未收服不可养 → 测试前置先把青莲地心火置为已收服
+    p = await store.get_player(A)
+    p["flames"]["青莲地心火"] = 1
+    await store.put_player(p)
     r = await commands.cmd_feed(store, A, "青莲地心火")
     check("养火 无药渣被挡", "药渣" in r, r[:40])
     p = await store.get_player(A)

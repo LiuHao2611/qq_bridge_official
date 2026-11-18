@@ -136,6 +136,8 @@ def create_player(qq, name, group) -> dict:
     except Exception:
         st.setdefault("faction", "")
         st.setdefault("faction_name", "")
+    # 入道发放「本宗所藏」异火（1 级）：原著有据的三处之一，无则不发放。
+    grant_faction_flame(st)
     # learned = 已领悟技名表。新号只有 1 门随机普通阶技；其余靠「学斗技」逐个领悟。
     try:
         low = [e["name"] for e in sk_mod.learnable(st) if e["tier"] == "普通"]
@@ -570,6 +572,9 @@ def change_faction(p, key: str) -> dict:
     p["gold"] = int(p.get("gold", 0)) - cost
     p["faction"] = hit["faction"]
     p["faction_name"] = hit["name"]
+    # 转宗不重复发放（同「不发入道物品」）；仅当玩家一朵异火都没有时补发本宗所藏，
+    # 既解决老档无火，也让「转去迦南/丹塔」成为一条真实的得火路径。
+    flame = grant_faction_flame(p)
     if isinstance(p.get("learned"), list):
         # 新模型：保留已领悟的通用技（跨宗仍会用）；新宗门专属技未领悟不能凭空上阵。
         # 赠 1 门新派低阶入门技作为「改换门庭的传承」，其余靠「学斗技」逐个领悟。
@@ -587,7 +592,7 @@ def change_faction(p, key: str) -> dict:
         p["loadout"] = []                  # 老档保持原行为：清空后按新派补满
         sk_mod.ensure_loadout(p)
     return {"ok": True, "faction": hit["faction"], "name": hit["name"],
-            "old": old_name, "cost": cost,
+            "old": old_name, "cost": cost, "flame": flame,
             "loadout": list(p.get("loadout") or []),
             "pool": hit["pool"]}
 
@@ -1938,6 +1943,34 @@ def skill_up(p, name) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 异火：本宗所藏发放（2026-11-18 A 方案）
+# ---------------------------------------------------------------------------
+def faction_flame(fid) -> str:
+    """本宗所藏异火名（只认 config 里原著有据的三处，无则空串）。"""
+    return str(cfg.FACTION_FLAME_GRANT.get(str(fid or "")) or "")
+
+
+def grant_faction_flame(p) -> str:
+    """入道 / 转宗时发放本宗所藏异火（1 级），返回火名或空串。
+
+    只在玩家**一朵异火都没有**时发放：
+      * 老档（全 0）首次入道/转宗即补发，不需要额外标记字段；
+      * 已有任意异火就不再发 → 天然防「反复转宗刷满三朵」；
+      * 异火只升不降，故一次生效，不会重复触发。
+    """
+    if not isinstance(p, dict):
+        return ""
+    fl = p.get("flames") or {}
+    if any(int(v or 0) > 0 for v in fl.values()):
+        return ""
+    name = faction_flame(p.get("faction"))
+    if not name:
+        return ""
+    p.setdefault("flames", {})[name] = 1
+    return name
+
+
+# ---------------------------------------------------------------------------
 # 异火喂养
 # ---------------------------------------------------------------------------
 def feed_flame(p, name, amount=None) -> dict:
@@ -1947,6 +1980,10 @@ def feed_flame(p, name, amount=None) -> dict:
     if name == cfg.FLAME_DIYAN:
         return {"ok": False, "reason": "diyan"}
     cur = int((p.get("flames") or {}).get(name, 0))
+    # 2026-11-18 A 方案：未收服不得喂养。旧逻辑 0 级也能直接喂到 1 级，
+    # 等于绕过了「降服」这一原著硬前提（也曾让傀儡异火闸形同虚设）。
+    if cur <= 0:
+        return {"ok": False, "reason": "unowned", "name": name}
     if cur >= cfg.FLAME_MAX_LV:
         return {"ok": False, "reason": "max", "lv": cur}
     need = int(fl["need"]) * (cur + 1)

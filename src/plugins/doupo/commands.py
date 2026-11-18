@@ -419,11 +419,15 @@ async def cmd_enter(store, qq, name, gid) -> str:
     if not str(gid).startswith("pv:"):
         await store.enable_group(str(gid))
     first = "、".join((p.get("learned") or [])[:1]) or "本宗基础技"
+    owned = [n for n, v in (p.get("flames") or {}).items() if int(v or 0) > 0]
+    flame_line = ("本宗异火【%s】已认你为主——「异火」可看，「养火」可养。\n" % owned[0]) \
+        if owned else ""
     return (
         "🔥 你自云岚山下睁眼，斗气绕体三周——\n"
         f"【{cfg.full_realm(1)}】\n"
         "手中握着那柄黑黝黝的巨尺「玄重尺」。\n"
-        f"初入门径，只领悟了一门【{first}】——斗技要一门门学，不可贪多。\n\n"
+        f"初入门径，只领悟了一门【{first}】——斗技要一门门学，不可贪多。\n"
+        + flame_line + "\n"
         "发送「人物」看面板，「战斗」试刀，「学斗技」领悟新斗技，「帮助」看全部规则。"
     )
 
@@ -796,8 +800,11 @@ async def cmd_faction(store, qq, args) -> str:
                         + "、".join(res.get("options") or ["（无）"]))
             return "转宗失败，请检查宗门名。"
         await store.put_player(p)
+        flame_line = ("\n　本宗异火【%s】已认你为主——「养火」可养。" % res["flame"]) \
+            if res.get("flame") else ""
         return (f"🏯 已转投【{res['name']}】（原【{res['old']}】），耗 {res['cost']:,} 金币。\n"
                 f"　四槽已按新门重配：" + "、".join(res["loadout"])
+                + flame_line
                 + "\n　已升的技能等级按技名保留；本门斗技见「斗技」。")
 
     fac_name = p.get("faction") or ""
@@ -1039,13 +1046,17 @@ async def cmd_flames(store, qq) -> str:
     out.append(f"　【{fname}·本宗传承】")
     for t in trad:
         out.append(f"　　{t}")
-    out.append("　以下为游历中可自行收服、喂养的异火（与本宗传承无关）：")
+    out.append("　以下异火须先收服才可喂养（未收服不可养）：")
     for f in cfg.FLAMES:
         name = f["name"]
         lv = int(fl.get(name, 0))
         if name == cfg.FLAME_DIYAN:
             state = "已收服" if p.get("diyan") else "未得（成就斗帝自燃）"
             out.append(f"　{f['icon']} {name}　{state}")
+        elif lv <= 0:
+            own = core.faction_flame(p.get("faction"))
+            hint = "（本宗所藏，入道/转宗即得）" if own == name else ""
+            out.append(f"　{f['icon']} {name}　未收服{hint}")
         elif lv >= cfg.FLAME_MAX_LV:
             out.append(f"　{f['icon']} {name}　{lv} 级（圆满）")
         else:
@@ -1084,6 +1095,11 @@ async def cmd_feed(store, qq, name) -> str:
             return "你没有药渣。炼药失败会产药渣——去「炼制」试试。"
         if res.get("reason") == "diyan":
             return "帝炎不靠喂养，只认斗帝。"
+        if res.get("reason") == "unowned":
+            own = core.faction_flame(p.get("faction"))
+            tip = ("本宗异火为【%s】，入道/转宗时自动收服。" % own) if own else \
+                  "本宗无异火赐下，须另寻机缘收服。"
+            return "❌ 【%s】尚未收服，不能直接喂养。%s" % (hit, tip)
         if res.get("reason") == "max":
             return f"【{hit}】已至 {res['lv']} 级圆满，再多药渣也烧不动了。"
         return "无可喂养。"

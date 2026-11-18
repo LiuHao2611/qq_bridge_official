@@ -279,7 +279,7 @@ def test_flames_shows_faction_tradition():
     check("无传承判定为 False", commands.has_tradition_flame(p) is False, str(p.get("faction")))
     out = asyncio.run(commands.cmd_flames(MemStore(p), "x"))
     check("本宗无传承异火提示", "本宗无传承异火" in out, out[:100])
-    check("无传承不列养成列表（纯文本一句）", "可自行收服" not in out and "青莲地心火" not in out,
+    check("无传承不列养成列表（纯文本一句）", "须先收服才可喂养" not in out and "青莲地心火" not in out,
           out[:160])
     check("无传承提示不含按钮/图片引导", "上阵" not in out and "斗技详情" not in out, out[:160])
 
@@ -287,10 +287,17 @@ def test_flames_shows_faction_tradition():
     p2 = core.create_player("flame-has", "萧", "g1")
     p2["faction"] = "xiaojia"
     p2["faction_name"] = fac.FACTIONS["xiaojia"]["name"]
+    # create_player 的入道随机宗门可能会顺手发一朵本宗异火（A 方案），
+    # 这里要的是「一朵都没有的萧家」，清空才对得上断言（否则随机 flaky）。
+    p2["flames"] = {}
     check("有传承判定为 True", commands.has_tradition_flame(p2) is True, str(p2.get("faction")))
     out2 = asyncio.run(commands.cmd_flames(MemStore(p2), "x"))
     check("本宗有传承异火列出", "萧玄" in out2 and "本宗传承" in out2, out2[:120])
-    check("有传承仍列养成列表", "可自行收服" in out2, out2[:120])
+    # 2026-11-18 A 方案：段标题从「可自行收服的异火」改为「须先收服才可喂养」；
+    # 未收服的火只标「未收服」，不再显示 0/N 级与下级药渣需求（避免误导成可直接养）。
+    check("有传承仍列养成列表", "须先收服才可喂养" in out2, out2[:160])
+    check("未收服的火标未收服且不给下级需求",
+          "未收服" in out2 and "下级需" not in out2, out2[:200])
 
 
 def test_flames_handler_no_card_without_tradition():
