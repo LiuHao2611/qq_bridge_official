@@ -49,6 +49,18 @@ PER_CARD_MAX = 5
 #: 非 canonical 口令、含冒号，绝不可能与真实口令冲突。
 CUSTOM_PREFIX = "doupo:cbtn:"
 
+#: 引用卡片识别（2026-11-18）：官方群消息被引用的卡片正文只有一张内嵌图片
+#: markdown（``![alt #宽px #高px](url)``），拿不到 msg_id / 卡片类型文字。
+#: 故发卡时把 card_key 编进图片 alt（``dpq:<key>``），引用时从 reply.content
+#: 正则反解。信息随消息走，重启不丢，零内存状态。
+QUOTE_ALT_PREFIX = "dpq:"
+
+#: 多页卡（炼药）的内部 key 前缀。翻页按钮占用按钮位，用户已决定「翻页优先，
+#: 不做自定义」。发卡 alt 把它编码成 ``dpq:page_N``（冒号→下划线，避免破坏
+#: markdown），引用时反解回 ``page:N`` 并给明确提示，绝不写入无效配置。
+MULTIPAGE_PREFIX = "page:"
+_MULTIPAGE_ALT = "page_"
+
 
 class CustomButtonError(ValueError):
     """玩家配置不合法。**必须**向上抛成可见提示，不许静默吞（禁兜底）。"""
@@ -89,6 +101,48 @@ def decode_data(data: str) -> str | None:
         return None
     cmd = raw[len(CUSTOM_PREFIX):].strip()
     return cmd or None
+
+
+def quote_alt(card_key: str) -> str | None:
+    """发卡时图片 alt 里嵌入的卡片标记；非法卡（如菜单卡）返回 None（用默认 alt）。
+
+    多页卡 key ``page:N`` 编码成 ``dpq:page_N``（冒号→下划线），让引用时能识别
+    出「这是多页卡」并明确拒绝，而不是在存档里写入永远不生效的配置。
+    """
+    import re as _re  # noqa: PLC0415
+
+    k = (card_key or "").strip()
+    if k.startswith(MULTIPAGE_PREFIX) and k[len(MULTIPAGE_PREFIX):].isdigit():
+        return QUOTE_ALT_PREFIX + _MULTIPAGE_ALT + k[len(MULTIPAGE_PREFIX):]
+    if not card_key_valid(k) or not _re.fullmatch(r"[a-z0-9_]+", k):
+        return None
+    return QUOTE_ALT_PREFIX + k
+
+
+def card_key_from_content(content: str) -> str | None:
+    """从被引用的卡片 markdown content 反解 card_key；非斗破卡/过期消息返 None。
+
+    content 形如 ``![dpq:shop #720px #2840px](https://...)``。只有带我们发的
+    ``dpq:`` 标记才算识别成功——引用别人的图、引用旧卡、引用文字都不处理
+    （用户明确「识别不了就不理，绝不猜卡片」）。多页卡 ``dpq:page_N`` 反解成
+    ``page:N``，交给 handle_config 明确拒绝。
+    """
+    import re as _re  # noqa: PLC0415
+
+    m = _re.search(r"!\[" + _re.escape(QUOTE_ALT_PREFIX) + r"([a-z0-9_]+)\s+#\d+px",
+                   content or "")
+    if not m:
+        return None
+    key = m.group(1)
+    if key.startswith(_MULTIPAGE_ALT) and key[len(_MULTIPAGE_ALT):].isdigit():
+        return MULTIPAGE_PREFIX + key[len(_MULTIPAGE_ALT):]
+    return key if key in CARD_LABELS else None
+
+
+def is_multipage_key(card_key: str | None) -> bool:
+    """是否多页卡内部 key（炼药卡）——这类卡翻页优先，不支持自定义按钮。"""
+    k = (card_key or "").strip()
+    return k.startswith(MULTIPAGE_PREFIX) and k[len(MULTIPAGE_PREFIX):].isdigit()
 
 
 def validate_entry(label: str, cmd: str, *, real: frozenset[str] | None = None) -> tuple[str, str]:
@@ -139,8 +193,14 @@ def get_buttons(p: dict[str, Any], card_key: str) -> tuple[tuple[str, str], ...]
     return tuple((e["label"], e["cmd"]) for e in entries[:PER_CARD_MAX])
 
 
-def set_button(p: dict[str, Any], card_key: str, label: str, cmd: str) -> int:
-    """新增或按显示名覆盖一条按钮，返回该卡按钮总数。"""
+def set_button(p: dict[str, Any], card_key: str, label: str, cmd: str,
+               *, allow_replace: bool = True) -> int:
+    """新增或按显示名覆盖一条按钮，返回该卡按钮总数。
+
+    ``allow_replace=False``（引用快捷新增用）：同名直接抛 :class:`CustomButtonError`
+    停止，绝不静默覆盖——用户明确「新增有重名时直接停止增加并提示」。
+    默认 True 保留旧语法的就地改语义（测试与手动覆盖仍可用）。
+    """
     k = (card_key or "").strip()
     if not card_key_valid(k):
         raise CustomButtonError("菜单卡不允许自定义按钮")
@@ -152,6 +212,12 @@ def set_button(p: dict[str, Any], card_key: str, label: str, cmd: str) -> int:
     if idx is None:
         items.append({"label": lab, "cmd": full})
     else:
+        if not allow_replace:
+            raise CustomButtonError(
+                "【%s】已有「%s」按钮（→ %s），没有新增。要改它请发「按钮设置 %s -%s」删掉后再加，"
+                "或直接把它写全（旧语法「%s %s=%s」）。"
+                % (CARD_LABELS.get(k, k), lab, items[idx]["cmd"],
+                   k, lab, k, lab, full))
         items[idx] = {"label": lab, "cmd": full}
     if len(items) > PER_CARD_MAX:
         raise CustomButtonError("每张卡最多 %d 个按钮（QQ 平台限制）" % PER_CARD_MAX)
@@ -270,8 +336,72 @@ def parse_config_arg(arg: str) -> tuple[str, str, str]:
     return card, "bad", rest
 
 
-async def handle_config(store, qq: str, arg: str) -> str:
-    """配置口令主逻辑：返回给用户的话。全程落盘走 store.put_player（SQLite 原子写）。"""
+def is_quick_add_arg(arg: str) -> bool:
+    """判断「引用卡片后的 arg」是不是一条纯口令快捷新增（而非删/清空/查看等子命令）。
+
+    2026-11-18 修 bug：原来只判 ``\"=\" not in arg``，导致引用着卡片发
+    ``宝库 -血灵草``（删）/``宝库 清空``/``宝库``（查看）都被当成新增，加上
+    ``-血灵草`` / ``清空`` / ``宝库`` 这种垃圾按钮——用户照重名提示去删必然踩坑。
+
+    判据（本质）：首词是**真实动作口令**且**不是卡片名/别名**。这样
+    ``买 血灵草 2``（快捷新增）为真，``宝库 -血灵草``（卡片名开头→旧语法）为假。
+    """
+    parts = (arg or "").strip().split()
+    if not parts or "=" in (arg or ""):
+        return False
+    first = parts[0]
+    # 卡片名/别名开头 → 旧语法（删/清空/查看/带卡名新增），绝不当快捷新增
+    if resolve_card(first) is not None:
+        return False
+    return first in real_commands()
+
+
+def auto_label(cmd: str) -> str:
+    """从完整口令自动取显示名：跳过动作首词，取其后第一个非纯数字词。
+
+    ``买 血灵草 2`` → ``血灵草``；``炼制 回灵丹`` → ``回灵丹``；
+    ``修炼`` → ``''``（没有参数词，调用方回退到整句或报错）。
+    """
+    parts = (cmd or "").strip().split()
+    if len(parts) < 2:
+        return ""
+    for word in parts[1:]:
+        if not word.isdigit():
+            return word[:LABEL_MAX]
+    return ""
+
+
+async def handle_config(store, qq: str, arg: str, *,
+                        quote_card: str | None = None) -> str:
+    """配置口令主逻辑：返回给用户的话。全程落盘走 store.put_player（SQLite 原子写）。
+
+    ``quote_card``：引用卡片时从卡片图片标记反解出的 card_key。给了它且没写
+    卡片名时，走「引用快捷新增」——arg 整体是口令，显示名自动取，卡片就是被引用的卡。
+    """
+    # ---- 多页卡（炼药）：翻页按钮占用按钮位，用户已决定不做自定义 ----
+    # 必须明确拒绝，绝不能写入 p["custom_buttons"]["page:N"]（发送层不读，
+    # 那就是个永远不生效的静默坑）。
+    if is_multipage_key(quote_card):
+        return "【炼药卡】是多页卡，靠「上一页/下一页」翻页，翻页按钮占用了底部按钮位，暂不支持自定义按钮。其它卡（宝库/人物/斗技等）都可以配。"
+
+    # ---- 引用快捷新增：arg 是纯口令（非删/清空/查看），卡片来自被引用卡片 ----
+    if quote_card and is_quick_add_arg(arg):
+        card_key = quote_card
+        cmd = (arg or "").strip()
+        if not cmd:
+            return "引用了【%s】，但没写口令。例：按钮设置 买 血灵草 2" % CARD_LABELS.get(card_key, card_key)
+        label = auto_label(cmd) or cmd[:LABEL_MAX]
+        p = await store.get_player(qq)
+        if not p:
+            return "你还没入道，先发「入道」再配置按钮。"
+        try:
+            n = set_button(p, card_key, label, cmd, allow_replace=False)
+        except CustomButtonError as e:
+            return "配置失败：%s" % e
+        await store.put_player(p)
+        return "已在【%s】加按钮「%s」→「%s」（现有 %d 个）。" % (
+            CARD_LABELS.get(card_key, card_key), label, cmd, n)
+
     card_token, action, payload = parse_config_arg(arg)
     if not card_token or action == "help":
         return help_text()

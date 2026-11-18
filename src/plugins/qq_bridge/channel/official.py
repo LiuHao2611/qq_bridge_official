@@ -141,10 +141,22 @@ async def _build_merged_card_segment(bot, image_datas: list[bytes],
     from .qq_keyboard import make_keyboard  # noqa: PLC0415
 
     kb_model, btns = make_keyboard(cmd)
+    # 2026-11-18 引用卡片识别：把 card_key 编进图片 alt，让用户引用本卡发
+    # 「按钮设置 买 血灵草 2」时能反解出是哪张卡。只认 doupo:<key> 且是合法卡；
+    # 失败一律用默认 alt（不影响出图，仅是「引用识别不了」而已，绝不阻断）。
+    img_alt = "card"
+    try:
+        if cmd.startswith("doupo:"):
+            from ...doupo.custom_buttons import quote_alt as _quote_alt  # noqa: PLC0415
+            alt = _quote_alt(cmd[len("doupo:"):])
+            if alt:
+                img_alt = alt
+    except Exception:  # noqa: BLE001 — 识别标记是增强项，失败保持默认 alt
+        pass
     parts: list[str] = []
     for i, data in enumerate(image_datas):
         mat = await ensure_material(bot, data, file_name="card_%d.png" % i)
-        parts.append(markdown_image(mat["url"], mat["width"], mat["height"]))
+        parts.append(markdown_image(mat["url"], mat["width"], mat["height"], alt=img_alt))
     seg = _QQMessage()
     seg += _QQSegment.markdown("\n".join(parts))  # 合法 markdown content（图片）
     if kb_model is not None and btns:              # 有按钮才挂，零按钮绝不发空 keyboard

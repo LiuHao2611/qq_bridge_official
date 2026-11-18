@@ -426,6 +426,32 @@ def test_injection_guards():
     assert kb.buttons_for("wm 绝路") == (), "第五次修改：武器绝路应零按钮"
 
 
+def test_wrap_button_rows_by_width():
+    """2026-11-18 按钮按长宽自动换行：中文宽、英文窄，长按钮独占行，不丢按钮。"""
+    B = kb.Btn
+    # 5 个短英文按钮：宽度小，一行放得下（≤5 个）→ 单行
+    short = tuple(B("a%d" % i, "c%d" % i) for i in range(5))
+    rows = kb.wrap_button_rows(short)
+    assert len(rows) == 1 and len(rows[0]) == 5, rows
+    # 长中文按钮（每个宽≥8）应被拆成多行，绝不放一行挤爆
+    long = tuple(B("血灵草丹药%d" % i, "c%d" % i) for i in range(4))
+    rows = kb.wrap_button_rows(long)
+    assert len(rows) >= 2, "长中文按钮没换行：%s" % (rows,)
+    assert all(1 <= len(r) <= 5 for r in rows)
+    # 一个超长按钮独占一行，且 label 不丢
+    one = (B("十" * 10, "x"),)
+    rows = kb.wrap_button_rows(one)
+    assert rows == ((one[0],),), rows
+    # 不丢按钮：任意输入分行后总数守恒
+    import random
+    rnd = random.Random(7)
+    labels = ["买", "血灵草", "聚气散abc", "炼制回灵丹", "x", "赤焰果", "服丹"]
+    mix = tuple(B(rnd.choice(labels), "c%d" % i) for i in range(9))
+    flat = tuple(b for r in kb.wrap_button_rows(mix) for b in r)
+    assert flat == mix, "换行丢/改了按钮"
+    assert len(kb.wrap_button_rows(mix)) <= 5, "超过 5 行平台上限"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [
@@ -437,6 +463,7 @@ if __name__ == "__main__":
         test_key_cards_nonempty_with_only_siblings,
         test_zero_button_makes_none_keyboard,
         test_injection_guards,
+        test_wrap_button_rows_by_width,
     ]
     passed = failed = 0
     for t in tests:

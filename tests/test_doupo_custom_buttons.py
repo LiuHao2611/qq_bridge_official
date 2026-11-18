@@ -321,6 +321,131 @@ def test_config_arg_parser():
     assert cb.resolve_card("菜单") is None
 
 
+def test_quote_alt_roundtrip():
+    """2026-11-18 引用卡片识别：发卡把 card_key 编进图片 alt，引用时反解。"""
+    assert cb.quote_alt("shop") == "dpq:shop"
+    assert cb.quote_alt("menu") is None        # 菜单卡禁止
+    assert cb.quote_alt("bad key!") is None    # 非法字符拒绝
+    content = "![dpq:shop #720px #2840px](https://qqbot.ugcimg.cn/x/y)"
+    assert cb.card_key_from_content(content) == "shop"
+    # 引用别人的图 / 旧卡（alt=card）/ 文字 / 未知卡 → 一律识别不出（绝不猜）
+    assert cb.card_key_from_content("![card #720px #2840px](url)") is None
+    assert cb.card_key_from_content("![dpq:unknown #100px #100px](url)") is None
+    assert cb.card_key_from_content("普通文字消息") is None
+    assert cb.card_key_from_content("") is None
+    # 多页卡（炼药）：page:N ↔ dpq:page_N，交给 handle_config 明确拒绝
+    assert cb.quote_alt("page:1") == "dpq:page_1"
+    assert cb.card_key_from_content("![dpq:page_1 #720px #2840px](url)") == "page:1"
+    assert cb.is_multipage_key("page:1") and not cb.is_multipage_key("shop")
+
+
+def test_multipage_card_rejected_explicitly():
+    """多页炼药卡引用配置必须明确拒绝，绝不写入无效的 page:N 配置（静默坑）。"""
+    import asyncio
+
+    class MemStore:
+        def __init__(self):
+            self.p = {"qq": "u1"}
+            self.wrote = False
+
+        async def get_player(self, qq):
+            return self.p
+
+        async def put_player(self, p):
+            self.wrote = True
+            self.p = p
+
+    st = MemStore()
+    msg = asyncio.run(cb.handle_config(st, "u1", "买 血灵草 2", quote_card="page:1"))
+    assert "多页卡" in msg or "暂不支持" in msg, msg
+    assert "上一页" in msg or "翻页" in msg, msg
+    assert not st.wrote, "多页卡被写入了无效配置"
+    assert "page:1" not in st.p.get("custom_buttons", {}), st.p
+
+
+def test_auto_label():
+    """显示名自动从口令主体取，不用玩家手输。"""
+    assert cb.auto_label("买 血灵草 2") == "血灵草"
+    assert cb.auto_label("炼制 回灵丹") == "回灵丹"
+    assert cb.auto_label("买 赤焰果 10") == "赤焰果"
+    assert cb.auto_label("修炼") == ""          # 无参数词
+    assert cb.auto_label("买 2") == ""          # 只有数字参数
+
+
+def test_add_rejects_duplicate():
+    """引用快捷新增时重名必须停止+可见提示，绝不静默覆盖（用户硬要求）。"""
+    p = {}
+    cb.set_button(p, "shop", "血灵草", "买 血灵草 2")
+    try:
+        cb.set_button(p, "shop", "血灵草", "买 血灵草 9", allow_replace=False)
+    except cb.CustomButtonError as e:
+        assert "血灵草" in str(e) and "没有新增" in str(e)
+    else:
+        raise AssertionError("重名未抛错——会静默覆盖成只剩一个按钮")
+    # 原值没被动过
+    assert cb.get_buttons(p, "shop") == (("血灵草", "买 血灵草 2"),)
+
+
+def test_handle_config_quote_creates_button():
+    """引用快捷：card_key 来自引用、口令是 arg、显示名自动生成，落盘真 Store。"""
+    import asyncio
+
+    class MemStore:
+        def __init__(self):
+            self.p = {"qq": "u1"}
+
+        async def get_player(self, qq):
+            return self.p
+
+        async def put_player(self, p):
+            self.p = p
+
+    st = MemStore()
+    msg = asyncio.run(cb.handle_config(st, "u1", "买 血灵草 2", quote_card="shop"))
+    assert "血灵草" in msg and "宝库" in msg
+    assert cb.get_buttons(st.p, "shop") == (("血灵草", "买 血灵草 2"),)
+    # 引用但识别不出 → 不传 quote_card → 走旧解析，不会误配到某张卡
+    msg2 = asyncio.run(cb.handle_config(st, "u1", "买 赤焰果 10"))
+    assert "不认识" in msg2 or "看不懂" in msg2 or "按钮设置" in msg2
+    assert cb.get_buttons(st.p, "shop") == (("血灵草", "买 血灵草 2"),)
+
+
+def test_quote_with_subcommand_not_mistaken_for_add():
+    """2026-11-18 bug：引用着卡片发「删/清空/查看」不能误判成新增垃圾按钮。"""
+    import asyncio
+
+    class MemStore:
+        def __init__(self, p):
+            self.p = p
+
+        async def get_player(self, qq):
+            return self.p
+
+        async def put_player(self, p):
+            self.p = p
+
+    p = {"qq": "u1"}
+    cb.set_button(p, "shop", "血灵草", "买 血灵草 2")
+    cb.set_button(p, "shop", "赤焰果", "买 赤焰果 10")
+    st = MemStore(p)
+
+    # 引用着卡发删除命令 → 必须真的删掉，而不是加一个「-血灵草」按钮
+    msg = asyncio.run(cb.handle_config(st, "u1", "宝库 -血灵草", quote_card="shop"))
+    assert "已删" in msg, msg
+    assert cb.get_buttons(st.p, "shop") == (("赤焰果", "买 赤焰果 10"),), cb.get_buttons(st.p, "shop")
+
+    # 引用着卡发清空 → 必须清空，而不是加「清空」按钮
+    msg2 = asyncio.run(cb.handle_config(st, "u1", "宝库 清空", quote_card="shop"))
+    assert "已清空" in msg2, msg2
+    assert cb.get_buttons(st.p, "shop") == ()
+
+    # 引用着卡只发卡片名（查看）→ 不能加「宝库」按钮
+    cb.set_button(st.p, "shop", "血灵草", "买 血灵草 2")
+    msg3 = asyncio.run(cb.handle_config(st, "u1", "宝库", quote_card="shop"))
+    assert "自定义按钮" in msg3, msg3
+    assert cb.get_buttons(st.p, "shop") == (("血灵草", "买 血灵草 2"),)
+
+
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

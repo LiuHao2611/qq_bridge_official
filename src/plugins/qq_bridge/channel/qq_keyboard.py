@@ -356,6 +356,42 @@ def make_button_message(kb_model, QQMessage, QQSegment):
     return seg
 
 
+#: 按钮自动换行（2026-11-18 用户「后台智能判断多个按钮的长宽，过长自动换行」）。
+#: 一个按钮的显示宽度：中文按 2、其它按 1；一行累计宽度上限 + 每行最多 5 个按钮
+#: （QQ 平台硬限）。超长按钮（label 10 字→宽 20）独占一行，不被截断。
+ROW_MAX_WIDTH = 16
+ROW_MAX_BUTTONS = 5
+
+
+def _btn_width(label: str) -> int:
+    """按钮显示宽度：中文全角算 2，其余算 1。"""
+    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in (label or ""))
+
+
+def wrap_button_rows(btns: tuple) -> tuple[tuple, ...]:
+    """按显示宽度把按钮切成多行，返回 ``((Btn,...), ...)``。
+
+    * 每行至多 :data:`ROW_MAX_BUTTONS` 个、累计宽度至多 :data:`ROW_MAX_WIDTH`；
+    * 单个按钮超宽也独占一行（绝不截断 label）；
+    * 总行数最多 5（QQ 平台硬限）——超出部分并入最后一行（宁可拥挤不丢按钮）。
+    """
+    rows: list[list] = []
+    cur: list = []
+    cur_w = 0
+    for b in btns:
+        w = max(1, _btn_width(getattr(b, "label", "")))
+        if cur and (len(cur) >= ROW_MAX_BUTTONS or cur_w + w > ROW_MAX_WIDTH):
+            rows.append(cur)
+            cur, cur_w = [], 0
+        cur.append(b)
+        cur_w += w
+    if cur:
+        rows.append(cur)
+    if len(rows) > 5:
+        rows = rows[:4] + [b for r in rows[4:] for b in r]  # 尾部并成一行
+    return tuple(tuple(r) for r in rows)
+
+
 def make_keyboard(text: str):
     """根据当前口令文本构造 ``MessageKeyboard``（供 official.py::send 调用）。
 
@@ -377,9 +413,8 @@ def make_keyboard(text: str):
         Permission, RenderData,
     )
 
-    row_buttons = []
-    for b in btns[:5]:  # 平台每行≤5；去掉自己+主菜单后最多 4 邻档，安全
-        row_buttons.append(Button(
+    def _to_button(b):
+        return Button(
             id="qb_%s" % (b.cmd or "menu"),
             render_data=RenderData(
                 label=b.label[:10],
@@ -393,8 +428,11 @@ def make_keyboard(text: str):
                 reply=False,
                 enter=False,
             ),
-        ))
-    kb = MessageKeyboard(
-        content=InlineKeyboard(rows=[InlineKeyboardRow(buttons=row_buttons)])
-    )
+        )
+
+    rows = [
+        InlineKeyboardRow(buttons=[_to_button(b) for b in row])
+        for row in wrap_button_rows(btns)
+    ]
+    kb = MessageKeyboard(content=InlineKeyboard(rows=rows))
     return kb, btns
