@@ -458,6 +458,10 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     改造前逐字节一致**，只是多两个空字段，任何既有调用方/测试都不受影响。
     """
     st = stats(p)
+    # 2026-11-18 根基裁定（隐形）：投机靠丹药堆修为者出手打折（原著「斗气虚浮、
+    # 取巧提升→实战吃亏」）。root_factor 不进 stats/人物卡/战报，前台零感知；
+    # _hit 是 PVE(fight) 与 PVP(duel) 共用的唯一出手口，一处注入双侧同效。
+    root = cfg.root_factor(p)
     crit = rng() * 100 < (crit_rate(p) + float(crit_add or 0))
     if entry is not None:
         lv = int((p.get("skills") or {}).get(entry["name"], 1))
@@ -466,6 +470,7 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     else:
         raw = st["力量"] * float(cfg.WEAPON_BASE_MULT)
         kind = "普攻"
+    raw *= root   # 根基虚浮 → 实际输出打折；适量丹药 root=1 逐字节不变
 
     # 基础单击（未计破防/条件）：也是 DoT 的伤害基数
     base = max(1, int(raw * mitigation(target_def) * (1.5 if crit else 1.0)))
@@ -703,6 +708,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
       把掷骰权上收到整场一次，避免每敌各掷导致累积概率突破 2% 硬顶。
     """
     st = stats(p)
+    root = cfg.root_factor(p)   # 根基裁定（隐形）：PVE 承伤侧打折；输出侧在 _hit 内
     hp = int(p.get("hp") or st["体力"])
     # 开战沿用当前斗气（结转），不再无条件满蓝；clamp 到上限防越界存档。
     mp = max(0, min(mp_max(p), int(p.get("mp", mp_max(p)))))
@@ -800,7 +806,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None) ->
                                       "move": "闪避"}))
             else:
                 roll = 1.0 - var + 2.0 * var * rng()
-                dealt = max(1, int(m_atk * mitigation(st["防御"]) * roll))
+                # 根基裁定（隐形）：虚浮者防御同样打折 → 同怪受到更多伤害。
+                # PVE 玩家承伤处；root=1（适量/正常修炼）时逐字节不变。
+                dealt = max(1, int(m_atk * mitigation(st["防御"] * root) * roll))
                 # 玩家侧减伤/闪避/反伤（卸力水镜/雷蝠天翼/燕返击）
                 inc = fx.on_incoming(p_fx, dealt, rng)
                 hp -= inc["final"]
@@ -1405,6 +1413,9 @@ def duel(p, vic, rng=random.random) -> dict:
     与 `fight` 共用四槽 / 按阶斗气 / 普攻兜底逻辑。
     """
     sp, sv = stats(p), stats(vic)
+    # 根基裁定（隐形）：双方各自的隐藏系数，防御侧按本人系数打折；输出侧在
+    # _hit 内按攻击方系数打折。PVP 双方对称生效，root=1 时逐字节不变。
+    root_p, root_v = cfg.root_factor(p), cfg.root_factor(vic)
     hp_p, hp_v = int(sp["体力"]), int(sv["体力"])
     mp_p, mp_v = mp_max(p), mp_max(vic)
     log, rounds = [], 0
@@ -1431,7 +1442,7 @@ def duel(p, vic, rng=random.random) -> dict:
         hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
         v_ctx["target_hp_ratio"] = hp_v / hp_v0
         e, c = _pick_skill(p, mp_p, rng)
-        hit = _hit(p, int(sv["防御"]), e, rng, p_fx, v_fx, v_ctx)
+        hit = _hit(p, int(sv["防御"] * root_v), e, rng, p_fx, v_fx, v_ctx)
         if e is not None:
             mp_p -= c
         hp_v -= hit["dmg"]
@@ -1460,7 +1471,7 @@ def duel(p, vic, rng=random.random) -> dict:
             hp_before_v, mp_before_v, foe_hp_before_v = hp_v, mp_v, hp_p
             p_ctx["target_hp_ratio"] = hp_p / hp_p0
             e2, c2 = _pick_skill(vic, mp_v, rng)
-            hit2 = _hit(vic, int(sp["防御"]), e2, rng, v_fx, p_fx, p_ctx)
+            hit2 = _hit(vic, int(sp["防御"] * root_p), e2, rng, v_fx, p_fx, p_ctx)
             if e2 is not None:
                 mp_v -= c2
             inc = fx.on_incoming(p_fx, hit2["dmg"], rng)
@@ -1726,6 +1737,10 @@ def use_item(p, name) -> dict:
         return {"ok": True, "msg": lead + f"斗气 +{p['mp'] - before}（{p['mp']}/{mx}）"}
     if eff == "exp":
         p["exp"] = int(p.get("exp", 0)) + val
+        # 2026-11-18 根基裁定：记账「丹药来源修为」，供战斗隐藏系数 root_factor 用。
+        # 这是全项目唯一的「服药→修为」入口，苦修/战斗/任务修为都不走这里，
+        # 天然区分「外力速成」与「扎实修炼」；老档无此字段视为 0（无惩罚）。
+        p["pill_exp"] = int(p.get("pill_exp", 0)) + val
         return {"ok": True, "msg": lead + f"修为 +{val}"}
     if eff == "luck":
         p["luck"] = min(9999, int(p.get("luck", 0)) + val)
