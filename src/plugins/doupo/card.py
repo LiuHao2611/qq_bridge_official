@@ -510,7 +510,9 @@ def build_flames_data(p: dict) -> dict:
     else:
         rows.append({"title": f"{fname}·本宗传承", "right": "无",
                      "sub": "本宗无传承异火。以下异火皆为游历中所遇，与师门无关。", "note": ""})
-    rows.append({"title": "可自行收服的异火", "right": "", "sub": "与本宗传承无关，喂养得主动技/被动。", "note": ""})
+    rows.append({"title": "可收服的异火", "right": "",
+                 "sub": "须先收服才可喂养；未收服不显示下级需求。", "note": ""})
+    own = core.faction_flame(p.get("faction"))
     for f in cfg.FLAMES:
         name = f["name"]
         lv = int(fl.get(name, 0))
@@ -518,6 +520,11 @@ def build_flames_data(p: dict) -> dict:
         if name == cfg.FLAME_DIYAN:
             state = "已收服" if p.get("diyan") else "未得（成就斗帝自燃）"
             sub = f["desc"]
+        elif lv <= 0:
+            # 2026-11-18 A 方案：未收服不得喂养，卡面也不许再写「下级需 N 药渣」
+            state = "未收服"
+            sub = f["desc"]
+            note = "本宗异火，入道/转宗即得" if own == name else "须另寻机缘收服"
         elif lv >= cfg.FLAME_MAX_LV:
             state = f"{lv} 级（圆满）"
             sub = f["desc"]

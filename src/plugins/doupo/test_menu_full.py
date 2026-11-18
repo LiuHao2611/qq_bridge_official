@@ -277,6 +277,8 @@ def _p_skillup(p):
 
 def _p_feed(p):
     core.add_item(p, "药渣", 100000)
+    # 2026-11-18 A 方案：未收服不可养 → 用例必须先让玩家真正持有该异火
+    p.setdefault("flames", {})["青莲地心火"] = 1
 
 
 def _p_flames(p):
