@@ -61,6 +61,18 @@ log = get_logger()
 
 #: 单机器人素材上限 100 张，留 8 张安全余量
 MAX_MATERIALS = 92
+#: 官方硬上限（bot.q.qq.com 素材管理文档：单机器人默认 100 张），prepare/complete
+#: 超限返回 40035007。本地 MAX_MATERIALS=92 只管「自己缓存的图」，管不到官方库里
+#: 别的模块/历史遗留的孤儿素材——2026-11-18 实测官方 100/100（本地仅 42，58 张
+#: 孤儿无人清）导致所有新图 prepare 失败、降级成纯图片没按钮。故加配额自愈。
+OFFICIAL_QUOTA = 100
+#: 自愈清理后至少腾出的空位（避免清一张立刻又被并发上传填满）
+QUOTA_VACANCY_TARGET = 16
+#: 服务端「图片数超限」错误码
+ERR_QUOTA_EXCEEDED = 40035007
+#: 全局并发锁：同一机器人多个并发 prepare 同时撞配额时，只允许一个在清理，
+#: 避免重复删除/竞态。进程级单例，与 _store 同生命周期。
+_quota_lock = asyncio.Lock()
 
 #: 素材映射落盘（2026-11-17 用户最高声明「用户数据不许丢」的连带项）。
 #: 原先只在内存：容器一重启，92 张已上传素材的 image_id 全忘，于是把同一批图
@@ -199,6 +211,20 @@ class MaterialStore:
         self._items.move_to_end(md5)  # LRU：命中即最近使用
         return self._items[md5]
 
+    def known_image_ids(self) -> set[str]:
+        """本地缓存登记的全部 image_id（配额自愈时用作「非孤儿」白名单）。"""
+        self._ensure_loaded()
+        return {str(v.get("image_id")) for v in self._items.values()
+                if v.get("image_id")}
+
+    def forget_image_id(self, image_id: str) -> None:
+        """按 image_id 摘除本地缓存条目（官方侧已删除时同步，防误引用失效引用）。"""
+        self._ensure_loaded()
+        for md5, item in list(self._items.items()):
+            if str(item.get("image_id") or "") == str(image_id):
+                self._items.pop(md5, None)
+        self._save()
+
     def put(self, md5: str, item: dict) -> None:
         # 必须先读回已落盘的条目，否则新写入会把旧缓存整表覆盖掉（等于丢缓存）
         self._ensure_loaded()
@@ -279,12 +305,28 @@ def image_size(data: bytes) -> tuple[int, int]:
     return w, h
 
 
-async def _prepare(bot, file_name: str, data: bytes, content_type: str) -> dict:
-    """POST /v2/media-images/prepare → {upload_id, presigned_url, ...}。
+def _err_code(e: BaseException) -> int | None:
+    """从各类异常里尽力取出官方错误码，用于识别配额触顶 40035007。
 
-    ``content_type`` 必须与后续 PUT 的 ``Content-Type`` 头逐字一致，否则 COS
-    预签名校验失败（403 AccessDenied）——2026-11-11 真网络矩阵实验坐实。
+    ActionFailed 有 .code 属性；httpx/其他包装层可能把 code 藏在 .body 或消息里。
+    取不到返回 None——调用方据此决定是否触发配额自愈，不靠字符串猜。
     """
+    for attr in ("code", "err_code"):
+        v = getattr(e, attr, None)
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str) and v.isdigit():
+            return int(v)
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        v = body.get("code") or body.get("err_code")
+        if isinstance(v, int):
+            return v
+    return None
+
+
+async def _prepare_once(bot, file_name: str, data: bytes, content_type: str) -> dict:
+    """单次 POST /v2/media-images/prepare；不含配额自愈。"""
     base = bot.adapter.get_api_base()
 
     def _make_req():
@@ -304,10 +346,38 @@ async def _prepare(bot, file_name: str, data: bytes, content_type: str) -> dict:
     try:
         ret = await _retry_net(lambda: bot._request(_make_req()), "prepare")
     except Exception as e:  # noqa: BLE001
-        raise MaterialUploadError("prepare_failed: %s" % type(e).__name__) from e
+        # 日志带上真实错误码/消息（旧实现只记类名，把 40035007 藏起来，排障全靠猜）
+        log.warning(jlog("material_prepare_failed", error=type(e).__name__,
+                         code=_err_code(e), detail=str(e)[:160]))
+        raise MaterialUploadError("prepare_failed: %s(code=%s)"
+                                  % (type(e).__name__, _err_code(e))) from e
     if not isinstance(ret, dict) or not ret.get("upload_id") or not ret.get("presigned_url"):
         raise MaterialUploadError("prepare_bad_response: missing upload_id/presigned_url")
     return ret
+
+
+async def _prepare(bot, file_name: str, data: bytes, content_type: str) -> dict:
+    """POST /v2/media-images/prepare → {upload_id, presigned_url, ...}。
+
+    ``content_type`` 必须与后续 PUT 的 ``Content-Type`` 头逐字一致，否则 COS
+    预签名校验失败（403 AccessDenied）——2026-11-11 真网络矩阵实验坐实。
+
+    2026-11-18 配额自愈：官方单机器人素材上限 100，prepare 撞 40035007 时，
+    先删孤儿/最旧素材腾空间，再重试一次。只针对配额错误、只重试一次；其它
+    错误（格式/网络/鉴权）维持原失败路径，绝不静默吞。
+    """
+    try:
+        return await _prepare_once(bot, file_name, data, content_type)
+    except MaterialUploadError as e:
+        code = _err_code(e.__cause__) if e.__cause__ else None
+        if code != ERR_QUOTA_EXCEEDED:
+            raise
+        log.warning(jlog("material_quota_exceeded_healing", code=code))
+        freed = await _quota_vacancy(bot)
+        if not freed:
+            raise   # 清不掉（无孤儿/删失败），如实抛 40035007，不假装成功
+        log.info(jlog("material_quota_healed", freed=freed, retry="prepare"))
+        return await _prepare_once(bot, file_name, data, content_type)
 
 
 async def _http_put(url: str, data: bytes, content_type: str) -> int:
@@ -383,6 +453,71 @@ async def _delete(bot, image_id: str) -> None:
     except Exception as e:  # noqa: BLE001
         log.warning(jlog("material_lru_delete_failed", error=type(e).__name__,
                          image_id=str(image_id)[:24]))
+
+
+async def _list_images(bot) -> list[dict]:
+    """GET /v2/media-images 分页拉全量有效素材（官方库真实占用，不只本地缓存）。
+
+    用 bot._request（官方 API 域名、带鉴权、token 过期自动刷新），与 prepare/
+    complete 同源。返回按上传时间倒序的 image dict 列表；任一步失败抛原异常，
+    由 _quota_vacancy 记为「自愈失败」并让 prepare 保持失败（不静默吞）。
+    """
+    base = bot.adapter.get_api_base()
+    url = base.joinpath("v2", "media-images")
+    out: list[dict] = []
+    cursor = ""
+    for _ in range(20):  # 100 张 / 每页通常 ≥50，20 页足够；硬上限防死循环
+        req = _new_request("GET", url if not cursor else url.copy_add_query(cursor=cursor))
+        ret = await bot._request(req)
+        if not isinstance(ret, dict):
+            raise MaterialUploadError("quota_list_bad_response")
+        out.extend(ret.get("images") or [])
+        cursor = str(ret.get("next_cursor") or "")
+        if not cursor:
+            break
+    return out
+
+
+async def _quota_vacancy(bot) -> int:
+    """官方素材配额撞顶时释放空位，返回实际删除张数。
+
+    清理顺序（最安全优先）：
+      1. 孤儿素材——官方库有、本地 media_assets.json 不记录的 image_id。它们
+         对应的消息早已发出（平台已转存副本），且本地 LRU 永远不会删它们，
+         是 2026-11-18 配额触顶的元凶；
+      2. 若孤儿不足以腾出 QUOTA_VACANCY_TARGET 个空位，再按 created_at 最旧
+         删本地缓存里的素材，并同步从 _store 移除（避免下次误引用已删的）。
+
+    全程持 _quota_lock（并发 prepare 同时撞顶时只清一次）。删除失败只记日志、
+    不阻断——删不掉就返回已删数，prepare 重试后仍 40035007 会如实抛错。
+    """
+    async with _quota_lock:
+        try:
+            images = await _list_images(bot)
+        except Exception as e:  # noqa: BLE001
+            log.warning(jlog("quota_vacancy_list_failed", error=type(e).__name__))
+            return 0
+        total = len(images)
+        keep = set(_store.known_image_ids())
+        # 孤儿优先，其次最旧（官方返回按 created_at 倒序，反转即最旧在前）
+        orphans = [im for im in images if str(im.get("image_id") or "") not in keep]
+        locals_old = [im for im in reversed(images)
+                      if str(im.get("image_id") or "") in keep]
+        targets = orphans + locals_old
+        need = max(0, total - (OFFICIAL_QUOTA - QUOTA_VACANCY_TARGET))
+        deleted = 0
+        for im in targets:
+            if deleted >= need:
+                break
+            iid = str(im.get("image_id") or "")
+            if not iid:
+                continue
+            await _delete(bot, iid)
+            deleted += 1
+            _store.forget_image_id(iid)   # 本地缓存同步摘除，防误引用已删素材
+        log.info(jlog("quota_vacancy_done", before=total, need=need,
+                      deleted=deleted, orphans=len(orphans)))
+        return deleted
 
 
 async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict:
