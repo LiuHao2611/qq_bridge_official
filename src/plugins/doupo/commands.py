@@ -1031,6 +1031,21 @@ def no_tradition_flame_msg(p: dict) -> str:
     return f"🔥 {fname}本宗无传承异火，暂无异火可展示或养成。"
 
 
+def flame_usage_hint(p: dict) -> str:
+    """异火卡/文本底部的「用法」一行：必须指向玩家**真能养**的那一朵。
+
+    A 方案前这里写死「养火 青莲地心火」——迦南玩家手里是陨落心炎，照抄必然被
+    「尚未收服」挡回，属于自己给自己挖坑的提示。
+    """
+    owned = [n for n, v in (p.get("flames") or {}).items() if int(v or 0) > 0]
+    if owned:
+        return "用法：养火 %s（一次喂光现有药渣）" % owned[0]
+    own = core.faction_flame(p.get("faction"))
+    if own:
+        return "用法：先收服再养——本宗异火【%s】入道/转宗即得" % own
+    return "用法：先收服一朵异火，再「养火 <火名>」"
+
+
 async def cmd_flames(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
@@ -1073,7 +1088,7 @@ async def cmd_flames(store, qq) -> str:
             out.append(f"　　原著：{cite}")
     out.append("")
     out.append("　收服后主动技可用「上阵 <技名>」放进四槽，「斗技详情 <技名>」看全文与出处")
-    out.append("　用法：养火 青莲地心火（一次喂光现有药渣）")
+    out.append("　" + flame_usage_hint(p))
     return "\n".join(out)
 
 

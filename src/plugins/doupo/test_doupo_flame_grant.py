@@ -37,6 +37,7 @@ nonebot.load_plugin("src.plugins.doupo")
 
 import importlib  # noqa: E402
 
+from src.plugins.doupo import card as card_mod  # noqa: E402
 from src.plugins.doupo import commands as cmds  # noqa: E402
 from src.plugins.doupo import config as cfg  # noqa: E402
 from src.plugins.doupo import core  # noqa: E402
@@ -147,6 +148,21 @@ async def main():
     q4 = core.create_player("12003", "斗帝", 900000077)
     check("帝炎仍只由 diyan 成就位表达",
           "帝炎" not in owned(q4) and q4.get("diyan") is False, "")
+
+    # ---- 9. 异火卡/文本底部「用法」必须指向玩家真能养的那一朵 ----
+    #     旧版写死「养火 青莲地心火」：迦南玩家手里是陨落心炎，照抄必被「尚未收服」挡回。
+    h_own = cmds.flame_usage_hint({"flames": {"陨落心炎": 1}, "faction": "jianan"})
+    check("用法提示用玩家已收服的火", "陨落心炎" in h_own, h_own)
+    h_wait = cmds.flame_usage_hint({"flames": {}, "faction": "jianan"})
+    check("未收服时用法改提示先收服+本宗火名",
+          "先收服" in h_wait and "陨落心炎" in h_wait, h_wait)
+    h_none = cmds.flame_usage_hint({"flames": {}, "faction": "xiaojia"})
+    check("无本宗所藏时用法不强指某一朵",
+          "先收服" in h_none and "青莲地心火" not in h_none, h_none)
+    h_card = card_mod.build_flames_data(
+        {"faction": "jianan", "faction_name": "迦南学院",
+         "flames": {"陨落心炎": 1}})["tip"]
+    check("异火卡 tip 与文本同一口径", h_card == h_own, h_card)
 
 
 def _run():
