@@ -1668,16 +1668,18 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         take_item(p, mat, n)
     p["last_craft"] = now_ts
 
-    rate = cfg.craft_rate(p.get("alch", 0))
+    # 2026-11-18 原著口径：成功率随「炼药师品阶 vs 丹药品阶」变化，不再所有丹药一个值。
+    # diff>0 越阶衰减（第495章四品勉强炼五品「成功率太小」），diff<=0 够格用基础率。
+    rate, diff = cfg.craft_rate_for(p.get("alch", 0), rec.get("grade", ""))
     if rng() < rate:
         add_item(p, name, 1)
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
         up = _alch_level_up(p)
-        return {"ok": True, "rate": rate, "alch_up": up}
+        return {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
     add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
     p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP // 2
     up = _alch_level_up(p)
-    return {"ok": False, "reason": "fail", "rate": rate,
+    return {"ok": False, "reason": "fail", "rate": rate, "diff": diff,
             "dross": cfg.CRAFT_FAIL_DROSS, "alch_up": up}
 
 

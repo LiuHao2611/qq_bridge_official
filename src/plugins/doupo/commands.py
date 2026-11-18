@@ -341,7 +341,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "玄重尺十级即「异火恒古尺」（其它武器不触发觉醒文案）",
     )),
     ("炼药", (
-        "成功率 = 55% + 5%/品阶（最高 95%）；失败给药渣，药渣喂异火",
+        "够格丹药成丹率 = 55% + 5%/炼药师品阶（最高 95%）；越阶按原著骤降",
+        "越1档×35%（勉强）、越2档以上×5%（几无可能）；失败给药渣，药渣喂异火",
+        "丹名前〔回斗气〕〔回血〕等为功效标签，回气丹等可恢复斗气（跨战结转）",
     )),
     ("异火", (
         "青莲地心火 斗气槽+25%/级；陨落心炎 经验+50%/级；",
@@ -1147,10 +1149,15 @@ async def cmd_recipes(store, qq, page=1) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    alch = cfg.ALCHEMIST[int(p.get("alch", 0))]
+    alch_idx = int(p.get("alch", 0))
+    alch = cfg.ALCHEMIST[alch_idx]
     chunk, page, total_pages = core.recipes_page(p, page)
     avail = core.available_recipes(p)
-    out = [f"⚗️ 炼药　{alch[0]}炼药师（成功率 {int(cfg.craft_rate(int(p.get('alch', 0))) * 100)}%）",
+    # 2026-11-18：基础成功率只适用于「够格」丹药；越阶按原著骤降，头行讲清规则，
+    # 每枚丹药行再给该玩家的真实成功率，杜绝「四品炼药师炼七品还一个概率」。
+    base_rate = int(cfg.craft_rate(alch_idx) * 100)
+    out = [f"⚗️ 炼药　{alch[0]}炼药师（够格丹药成丹率 {base_rate}%）",
+           f"　越阶骤降：越1档×35%、越2档以上×5%（原著第495章四品勉强炼五品）",
            f"　境界 {cfg.full_realm(int(p.get('lv', 1)))} · 可用丹方 {len(avail)} 枚 · 第 {page}/{total_pages} 页"]
     for grade in cfg.GRADE_ORDER:
         rows = [r for r in chunk if r["grade"] == grade]
@@ -1159,13 +1166,20 @@ async def cmd_recipes(store, qq, page=1) -> str:
         out.append(f"【{grade}丹药】")
         for r in rows:
             need = r.get("need") or {}
+            rate, diff = cfg.craft_rate_for(alch_idx, r.get("grade", ""))
+            tag = cfg.effect_tag(r.get("effect", ""))
+            badge = f"〔{tag}〕" if tag else ""
+            if diff > 0:
+                rate_txt = f"成 {int(rate * 100)}% · 越{diff}档"
+            else:
+                rate_txt = f"成 {int(rate * 100)}%"
             if need:
                 mats = "、".join(f"{k}×{v}" for k, v in need.items())
                 ok = all(core.count_item(p, k) >= v for k, v in need.items())
                 mark = "✅" if ok else "　"
-                out.append(f"　{mark}{r['name']}　（{mats}）")
+                out.append(f"　{mark}{badge}{r['name']}　（{mats}）　{rate_txt}")
             else:
-                out.append(f"　{r['name']}　（{int(r.get('buy', 0))} 金购买）")
+                out.append(f"　{badge}{r['name']}　（{int(r.get('buy', 0))} 金购买）　{rate_txt}")
             out.append(f"　　{r['desc']}")
     out.append("")
     if total_pages > 1:
@@ -1192,17 +1206,27 @@ async def cmd_craft(store, qq, name) -> str:
         return f"丹炉尚温，需再候 {res['left']} 秒。"
     chance = core.advance_task(p, "craft", 1) if res.get("ok") else None
     await store.put_player(p)
+    # 2026-11-18 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
+    # 越2档以上「几无可能」。diff>0 时把原因写进回包，玩家才知道为什么老失败。
+    over = int(res.get("diff") or 0)
+    over_hint = ""
+    if over == 1:
+        over_hint = "　⚠ 越1档勉强开炉（原著：状态巅峰才成，成功率骤降）\n"
+    elif over >= 2:
+        over_hint = f"　⚠ 越{over}档——几无可能，仅可勉强尝试\n"
     if not res.get("ok"):
         if res.get("reason") == "mat":
             return "❌ 材料不足：" + "、".join(res["missing"]) + "\n　去「宝库」买药。"
         if res.get("reason") in ("fail",):
             msg = (f"💨 炼制失败（成功率 {int(res['rate'] * 100)}%）——\n"
-                   f"　药渣 +{res['dross']}，可拿去「养火」。")
+                   f"{over_hint}　药渣 +{res['dross']}，可拿去「养火」。")
             if res.get("alch_up"):
                 msg += f"\n　炼药经验积累，晋为【{res['alch_up']}炼药师】！"
             return msg
         return "炼制失败。"
     msg = f"⚗️ 丹成！【{hit}】×1（成功率 {int(res['rate'] * 100)}%）"
+    if over:
+        msg += "\n" + over_hint.rstrip("\n")
     if res.get("alch_up"):
         msg += f"\n　炼药经验积累，晋为【{res['alch_up']}炼药师】！"
     out = [msg]

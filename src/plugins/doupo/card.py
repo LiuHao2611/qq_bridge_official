@@ -623,7 +623,9 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
       * 可见丹方 = ``core.recipes_page(p, page)``（内含等级过滤 + 分页夹取）；
       * 分组顺序 = ``cfg.GRADE_ORDER``（与纯文本一致）；
       * 齐备标记 = ``core.count_item`` 逐味判（与纯文本 `ok` 判据逐字一致）；
-      * 成功率 = ``cfg.craft_rate``。
+      * 功效标签 = ``cfg.effect_tag``，单丹成功率 = ``cfg.craft_rate_for``
+        （2026-11-18 原著口径：够格用基础率、越 1 档×0.35、越≥2 档×0.05）。
+        标签与成功率都拼进 ``desc``，由模板自适应折行，不动坐标骨架。
 
     2026-11-16 用户要求「等级不够不展示 / 丹药多了分页 / 两列展示」：
     低阶丹药由 ``available_recipes`` 直接过滤掉，卡上只出现当前境界可用者；
@@ -632,7 +634,7 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     """
     alch_idx = int(p.get("alch", 0))
     alch = cfg.ALCHEMIST[alch_idx]
-    rate = int(cfg.craft_rate(alch_idx) * 100)
+    base_rate = int(cfg.craft_rate(alch_idx) * 100)
     chunk, page, total_pages = core.recipes_page(p, page)
     total_avail = len(core.available_recipes(p))
 
@@ -643,10 +645,28 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             if r["grade"] != grade:
                 continue
             need = r.get("need") or {}
+            # 2026-11-18 原著口径：单丹成功率随品阶差变化，功效显式挂标签。
+            # 信息拼进 desc（模板 Canvas.wrap 折行 + _block_h 同源度量），
+            # 不改模板坐标骨架 —— 越1档「勉强」、越≥2档「几无可能」。
+            rate, diff = cfg.craft_rate_for(alch_idx, r.get("grade", ""))
+            tag = cfg.effect_tag(r.get("effect", ""))
+            rate_bit = "成%d%%" % int(rate * 100)
+            if diff > 0:
+                rate_bit += " 越%d档·勉强" % diff if diff == 1 else " 越%d档·几无" % diff
+            desc_bits = []
+            if tag:
+                desc_bits.append("〔%s〕" % tag)
+            desc_bits.append(rate_bit)
+            orig = str(r.get("desc") or "")
+            if orig:
+                desc_bits.append(orig)
             rows.append({
                 "name": r["name"],
                 "mats": [[k, int(v)] for k, v in need.items()],
-                "desc": str(r.get("desc") or ""),
+                "desc": " · ".join(desc_bits),
+                "effect_tag": tag,
+                "rate": int(rate * 100),
+                "diff": diff,
                 "ready": all(core.count_item(p, k) >= int(v) for k, v in need.items()),
                 # 无药方丹药：卡面改为「N 金购买」而非空材料行（与原著考据口径一致）
                 "buyonly": not bool(need),
@@ -660,8 +680,8 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     return {
         "icon": "wand",
         "title": "炼药",
-        "subtitle": ("%s炼药师 · 成功率 %d%% · 药渣 ×%d" %
-                     (alch[0], rate, core.count_item(p, "药渣"))),
+        "subtitle": ("%s炼药师 · 够格成功率 %d%% · 越阶骤降(×35%%/×5%%) · 药渣 ×%d" %
+                     (alch[0], base_rate, core.count_item(p, "药渣"))),
         "page": page,
         "total_pages": total_pages,
         "total_avail": total_avail,
