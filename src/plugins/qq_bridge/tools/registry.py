@@ -60,6 +60,14 @@ class ToolContext:
     trace_id: str = ""
     #: 协议通道（双轨并行：napcat / official；提醒等异步回传要用）
     channel: str = "napcat"
+    #: 「先回一句话」出口：``async (text: str) -> None``，由调用方注入。
+    #: None = 本次没法发（工具照常跑，只是不发探路话）——**绝不因此报错**。
+    #: 2026-11-18 加：慢工具（源码问答 20~90 秒）跑起来之前先让用户听到回音，
+    #: 真机事故「我问了，他不理我」= 33 秒后才回，用户早以为机器人死了。
+    notify: Callable[[str], Awaitable[None]] | None = None
+    #: 本回合已经发过探路话的工具名（per-turn 去重：同一轮问两次不刷屏）。
+    #: 生命周期跟 ToolContext 走——调用方每回合 new 一个，天然按回合隔离。
+    notified: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -82,6 +90,10 @@ class Tool:
     #: 用全局 30s 会被当场掐断；但也不能为了它把全局超时调大（提醒/下载类工具
     #: 卡住时应当尽快失败）。
     timeout: float | None = None
+    #: 开跑前先回给用户的一句话（"" = 不发）。只有**真的慢到会被当掉线**的工具
+    #: 才配这个：20 秒以上的静默在群里等于"机器人没理我"（2026-11-18 真机事故）。
+    #: 这句话由 dispatch 直接发给用户，**不进模型上下文**，也不落对话历史。
+    progress_text: str = ""
     #: 运行统计（内存态，重启清零可接受）
     calls: int = 0
     fails: int = 0
@@ -115,7 +127,10 @@ class ToolRegistry:
             log.warning(jlog("tool_register_overwrite", tool=name))
         self._tools[name] = tool
         log.info(jlog("tool_registered", tool=name, risk=tool.risk,
-                      enabled=bool(tool.enabled)))
+                      enabled=bool(tool.enabled),
+                      # 慢工具会先替机器人回一句探路话——启动日志里看得见，
+                      # 出问题时不用猜「到底接没接上」
+                      notice=bool((tool.progress_text or "").strip())))
         return tool
 
     def unregister(self, name: str) -> bool:
@@ -189,6 +204,34 @@ class ToolRegistry:
                 return "参数 %s 必须是 %s 之一" % (key, "/".join(str(e) for e in enum))
         return ""
 
+    # ---------------- 探路话（慢工具跑之前先给个回音） ----------------
+    async def _progress(self, tool: Tool, ctx: ToolContext) -> None:
+        """执行前先回用户一句「我去查，等我一下」。
+
+        CLOSE-02 的**反面用法**：这里不仅不能静默，还得主动出声——慢工具
+        （源码问答 20~90 秒）全程没有一条消息，群里看着就是「他不理我」。
+        三条纪律：
+          1. **只发一次**：同一回合同一个工具不重复（`ctx.notified` 记账）；
+          2. **发不出去也不挡活**：报错只记日志，工具照常执行（探路话是体验，
+             不是前置条件；因为一句提示发失败就丢掉答案，是更严重的故障）；
+          3. **先记账再发**：发送中途炸了也不重试，避免连发刷屏。
+        """
+        text = (tool.progress_text or "").strip()
+        if not text:
+            return
+        notify = getattr(ctx, "notify", None)
+        if notify is None or tool.name in ctx.notified:
+            return
+        ctx.notified.add(tool.name)
+        try:
+            await notify(text)
+            log.info(jlog("tool_progress_sent", tool=tool.name, scope=ctx.scope,
+                          trace_id=ctx.trace_id, text_len=len(text)))
+        except Exception as e:  # noqa: BLE001 — 探路话失败绝不拖垮工具
+            log.warning(jlog("tool_progress_failed", tool=tool.name,
+                             scope=ctx.scope, error=type(e).__name__,
+                             detail=str(e)[:160], trace_id=ctx.trace_id))
+
     # ---------------- 分发 ----------------
     async def dispatch(self, name: str, args: dict, ctx: ToolContext) -> str:
         """执行一个工具调用，返回**给模型看的文本结果**。
@@ -234,6 +277,8 @@ class ToolRegistry:
                           detail=arg_err[:120], trace_id=ctx.trace_id))
             return "工具 %s 入参不对：%s" % (name, arg_err)
         # 执行（CLOSE-05 显式超时；串行——有副作用工具不并行，ai-groupmate 纪律）
+        # 慢工具先给个回音（只发一次；发不出去不影响执行）
+        await self._progress(tool, ctx)
         # 工具自带 timeout 优先（长任务如源码问答要 160s），否则用全局默认。
         timeout = float(tool.timeout
                         or getattr(Config, "AI_TOOL_TIMEOUT", 30.0) or 30.0)

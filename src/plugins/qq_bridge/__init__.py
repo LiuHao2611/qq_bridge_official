@@ -3001,11 +3001,27 @@ async def _handle_ai_chat(ev, trace_id: str) -> None:
         if _fc_runner.registry.get("doupo_code_ask") is not None:
             extra_system = extra_system + "\n" + _doupo_code_hint()
         from .tools import ToolContext as _ToolCtx
+
+        async def _tool_notify(notice: str) -> None:
+            """慢工具开跑前先回一句（探路话）。
+
+            `doupo_code_ask` 一次要跑二三十秒，这期间用户收不到任何消息——
+            2026-11-18 真机事故：「我问了，他不理我」（其实回了，只是 33 秒后）。
+            这里只发**一句纯文本**：不走连发/表情包（那是正餐的待遇），
+            也不落对话历史（不是模型的发言，是系统的回声）。
+            发送失败不抛错——由 tools.registry 的 `_progress` 记日志兜住，
+            工具照常执行（一句提示发不出去，不该把答案也搭进去）。
+            """
+            await send_text(ctx, notice)
+            log.info(jlog("ai_tool_notice_sent", scope=scope, user_id=ev.user_id,
+                          text_len=len(notice or ""), trace_id=trace_id))
+
         _tctx = _ToolCtx(scope=scope, user_id=ev.user_id, group_id=ev.group_id,
                          is_private=not ev.is_group,
                          is_owner=_is_owner(ev.user_id),
                          trace_id=trace_id,
-                         channel=getattr(ev, "channel", "napcat"))
+                         channel=getattr(ev, "channel", "napcat"),
+                         notify=_tool_notify)
         reply, err = await ai_chatter.chat_tools(
             scope, text, ev.user_id, extra_system=extra_system, note=note,
             converse=_fc_runner.converse, tool_ctx=_tctx)

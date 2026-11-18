@@ -47,3 +47,18 @@ def load_module(rel: str, name: str):
     _sys.modules[name] = m
     spec.loader.exec_module(m)
     return m
+
+
+def load_ai_mode(prefix: str = "_aistack"):
+    """加载 ``ai_mode``（纯函数区可裸测），同样绕开包 ``__init__``。
+
+    ai_mode 只牵两个轻依赖：``.config`` 与 ``.queue``（后者是包，用正常的
+    ``import_module`` 走子模块搜索即可）。这样测「连发拆条」不必装 psutil /
+    rapidocr 一整套运行环境。
+    """
+    pkg = _types.ModuleType(prefix)
+    pkg.__path__ = [str(BASE)]
+    _sys.modules[prefix] = pkg
+    importlib.import_module(prefix + ".config")
+    importlib.import_module(prefix + ".queue")
+    return importlib.import_module(prefix + ".ai_mode")

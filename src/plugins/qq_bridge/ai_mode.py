@@ -676,17 +676,32 @@ def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
     return sentences_done
 
 
+#: 超过这个长度就不再玩「拆条连发」的花活，整段一条发完（只影响气泡数，
+#: **绝不影响内容**——见 process_llm_response 的本地化说明）
+_BURST_LONG_CHARS = 300
+
+
 def process_llm_response(text: str, typo: bool = True) -> list[str]:
     """LLM 回复 → 拟人连发消息列表（MaiMBot process_llm_response 编排搬运）。
 
     流程：过长守卫 → 错别字注入 → 概率拆条 → 数量守卫。
     返回的每个元素 = 一个气泡；长度为 1 = 单条发送。
-    守卫降级文案按本喵人设适配（原版是麦麦昵称）。
+
+    ★ 本地化改动（2026-11-18，与上游 MaiMBot **故意不同**）：
+      上游在这两处守卫里是「超长就回一句『懒得说』」「拆太多就回『本喵不知道哦』」
+      —— 拿**内容**换防刷屏。那是聊天搭子的取舍（闲聊说长句确实烦人），但本机
+      的 AI 模式还要回答「爬塔 37 层爆装备概率是多少」「这个判定有哪些分支」，
+      答案天然是长文本：一旦被换成『懒得说』，用户拿到的就是**内容和数字全丢**，
+      等于把模型刚查完的源码结论扔了。这违反本项目「禁止降级 / 禁止兜底」铁律，
+      也违反用户反复强调的「不许把答案降级成别的东西」。
+      现在的口径：**长度只决定「拆不拆条」，不决定「说不说」**——超长/拆太多
+      一律整段单条发出（少几个气泡而已，内容一个字不少）。
     """
     if not text:
         return []
-    if len(text) > 300:
-        return ['懒得说']  # 原版行为：超长直接摆烂（防刷屏）
+    if len(text) > _BURST_LONG_CHARS:
+        log.info(jlog("burst_long_passthrough", chars=len(text)))
+        return [text]  # 原版返回 ['懒得说']（丢内容）；本机改成整段发
     typoed_text = text
     if typo and Config.AI_TYPO_ENABLE:
         try:
@@ -701,5 +716,6 @@ def process_llm_response(text: str, typo: bool = True) -> list[str]:
             log.warning(jlog("typo_inject_failed", error=type(e).__name__))
     sentences = split_into_sentences_w_remove_punctuation(typoed_text)
     if len(sentences) > max(2, int(Config.AI_BURST_MAX_PARTS)):
-        return ['本喵不知道哦']  # 原版行为：拆太多放弃花哨（阈值可配）
+        log.info(jlog("burst_parts_passthrough", parts=len(sentences)))
+        return [text]  # 原版返回 ['本喵不知道哦']（丢内容）；本机改成整段发
     return sentences

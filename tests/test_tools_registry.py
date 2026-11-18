@@ -255,3 +255,63 @@ async def test_dispatch_counts_calls(reg, ctx):
     await reg.dispatch("echo", {}, ctx)
     assert reg.get("echo").calls == 2
     assert reg.get("echo").fails == 0
+
+
+# ---------------- 11. 探路话（慢工具跑之前先给个回音） ----------------
+# 2026-11-18 真机事故「我问了，他不理我」：源码问答一次 33 秒，这期间群里
+# 一条消息都没有。dispatch 现在会在慢工具开跑前先替机器人说一句话。
+@pytest.mark.anyio
+async def test_progress_sent_once_per_turn(reg, ctx):
+    """同一回合里同一个工具调两次，探路话只发一次（不刷屏）。"""
+    sent: list[str] = []
+
+    async def notify(text: str) -> None:
+        sent.append(text)
+
+    ctx.notify = notify
+    reg.register(_echo_tool("slow_talk"))
+    reg.get("slow_talk").progress_text = "稍等，我去翻一翻"
+
+    await reg.dispatch("slow_talk", {}, ctx)
+    await reg.dispatch("slow_talk", {}, ctx)
+    assert sent == ["稍等，我去翻一翻"]
+    # 新回合（新 ToolContext）= 新的一次提示
+    ctx2 = ToolContext(scope="g:1", user_id=42, group_id=1, trace_id="t2",
+                       notify=notify)
+    await reg.dispatch("slow_talk", {}, ctx2)
+    assert sent == ["稍等，我去翻一翻", "稍等，我去翻一翻"]
+
+
+@pytest.mark.anyio
+async def test_progress_failure_never_breaks_tool(reg, ctx):
+    """探路话发不出去（渠道挂了）→ 只记日志，工具结果照常返回。"""
+    async def notify(text: str) -> None:
+        raise RuntimeError("渠道 502")
+
+    ctx.notify = notify
+    reg.register(_echo_tool("slow_talk", result="真·答案"))
+    reg.get("slow_talk").progress_text = "稍等"
+
+    out = await reg.dispatch("slow_talk", {}, ctx)
+    assert out == "真·答案"
+    assert reg.get("slow_talk").calls == 1
+
+
+@pytest.mark.anyio
+async def test_progress_absent_when_no_notify_or_no_text(reg):
+    """没接通知出口 / 工具没声明文案 → 一句都不该发（也不能报错）。"""
+    calls: list[str] = []
+
+    async def notify(text: str) -> None:
+        calls.append(text)
+
+    # ① 工具没写 progress_text（ctx 有出口也不发）
+    reg.register(_echo_tool("plain"))
+    ctx = ToolContext(scope="g:1", trace_id="t1", notify=notify)
+    await reg.dispatch("plain", {}, ctx)
+    # ② 工具写了，但这次没接出口（照样执行、不抛错）
+    reg.register(_echo_tool("slow_talk", result="答案"))
+    reg.get("slow_talk").progress_text = "稍等"
+    out = await reg.dispatch("slow_talk", {}, ToolContext(scope="g:2", trace_id="t3"))
+    assert calls == []
+    assert out == "答案"

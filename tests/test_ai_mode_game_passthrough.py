@@ -85,7 +85,10 @@ def test_route_passthrough_game_cmd_in_ai_mode(monkeypatch):
             await mod._route(ev(t), "tid-" + t)
             assert len(ai_chat_calls) == 0, f"{t} 不应进 AI 陪聊"
         # 闲聊：仍应进 AI 陪聊
-        for t in ["今天天气真好", "在吗"]:
+        # ★ 别用「在吗」当闲聊样本（2026-11-18 修）：它现在是女仆口令的触发词
+        #   （maid → /ping），会先被 ai_mode_maid_passthrough 截走，压根到不了
+        #   AI 陪聊。这条用例在 HEAD 上就是红的，属于样本过时，不是分流坏了。
+        for t in ["今天天气真好", "你是谁呀"]:
             ai_chat_calls.clear()
             await mod._route(ev(t), "tid-" + t)
             assert len(ai_chat_calls) == 1, f"{t} 应进 AI 陪聊"
