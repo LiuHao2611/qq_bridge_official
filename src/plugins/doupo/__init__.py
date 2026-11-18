@@ -651,12 +651,26 @@ btn_setup = on_regex(_pat(r"(?:按钮设置|自定义按钮)") + r"\s*(.*)",
 async def _(event: Event):
     from . import custom_buttons as _cb  # noqa: PLC0415
 
+    raw_event = event
     event = view(event)
     qq = str(event.user_id)
     plain = re.sub(r"^\s*#?\s*", "", _plain(event))
     m = re.match(r"(?:按钮设置|自定义按钮)\s*(.*)", plain, re.S)
     arg = (m.group(1) if m else "").strip()
-    await finish_text(btn_setup, event, await _cb.handle_config(store, qq, arg))
+
+    # 引用卡片识别：官方群消息 msg_type=103 时 event.reply 是被引用消息，
+    # 其 content 里带发卡时嵌入的 dpq:<card_key> 标记。识别不出就传 None，
+    # handle_config 会要求显式写卡片名——绝不猜（用户明确「识别不了就不理」）。
+    quote_card = None
+    try:
+        reply = getattr(raw_event, "reply", None)
+        if reply is not None:
+            quote_card = _cb.card_key_from_content(str(getattr(reply, "content", "") or ""))
+    except Exception:  # noqa: BLE001 — 引用解析是增强项，失败当没引用
+        quote_card = None
+    logger.info("btn_setup quote_card=%s arg=%r", quote_card, arg)
+
+    await finish_text(btn_setup, event, await _cb.handle_config(store, qq, arg, quote_card=quote_card))
 
 
 buy = on_regex(_pat(r"(?:买|购买)") + r"\s*(.*)", priority=PRI, block=True, rule=_mode_is("doupo"))
