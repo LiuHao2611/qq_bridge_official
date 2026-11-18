@@ -400,6 +400,11 @@ HERBS = [
 ]
 # 2026-11-16 原著考据扩充：32 种原著药材（有明确药方的丹药所需）并入宝库
 from .recipes_data import NOVEL_HERBS, NOVEL_RECIPES, GRADE_MIN_LV, RECIPES_PER_PAGE  # noqa: E402
+from .recipes_data import NOVEL_MATERIALS, MATERIAL_TIER_LV, MATERIAL_DROP_RATE, BOSS_KIND_TOKENS  # noqa: E402
+# 天材地宝索引（服丹/炼化入口 + 分级掉落共用唯一数据源）
+MATERIAL_NAMES = [m["name"] for m in NOVEL_MATERIALS]
+MATERIAL_BY_NAME = {m["name"]: m for m in NOVEL_MATERIALS}
+assert len(MATERIAL_BY_NAME) == len(MATERIAL_NAMES), "天材地宝重名，检查 NOVEL_MATERIALS"
 
 HERBS = HERBS + list(NOVEL_HERBS)
 HERB_NAMES = [h["name"] for h in HERBS]
