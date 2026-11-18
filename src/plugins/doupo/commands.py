@@ -2167,11 +2167,15 @@ async def cmd_craft_puppet(store, qq, pstore=None) -> str:
             "靠雷池淬炼可升地级银、天级金。发「傀儡」查看。" % (puppet["name"], pid))
 
 
-async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
+async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
     """傀儡遗迹日副本：三段逐日推进，掉落进 puppet_materials 真实列。
 
     难度走 ``monster_scaled`` 反解；出战傀儡的期望输出同时进反解与 ``fight``
     （``puppet_expected_damage`` 唯一口径），不会出现「带傀儡怪血不变」。
+
+    ``report``：可选 dict，出结果后把**结构化战况**写进去（段位/胜负/回合/掉落），
+    供 ``card.build_ruin_data`` 并进同一张进度卡。2026-11-18 用户明确要求
+    「点一次只出一条内容」——战报不能另发一条文字。不传 = 只回文本，行为不变。
     """
     from . import puppet_core as pc
     pstore = pstore or DEFAULT_PUPPET_STORE
@@ -2183,6 +2187,9 @@ async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
     st = await pstore.ruin_state(qq, day)
     stages = cfg.PUPPET_RUIN_STAGES
     if int(st["stage"]) >= len(stages):
+        if report is not None:
+            report.update({"cleared": True, "total": len(stages),
+                           "stage_idx": len(stages) - 1, "win": True})
         return "⚔️ 今日傀儡遗迹已全通（%d/%d），明日再来。" % (len(stages), len(stages))
     idx = int(st["stage"])
     sg = stages[idx]
@@ -2196,6 +2203,12 @@ async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
     await store.put_player(p)
     head = "【傀儡遗迹·%s】%s\n　%s" % (sg["name"], sg["desc"], sg["monster"])
     if not res["win"]:
+        if report is not None:
+            report.update({"stage_idx": idx, "stage_name": sg["name"],
+                           "monster": sg["monster"], "win": False,
+                           "rounds": int(res["rounds"]),
+                           "mon_hp_left": int(res["mon_hp_left"]),
+                           "drops": {}})
         return (head + "\n❌ 力竭（%d 回合，敌余血 %d）。今日仍在第 %d 段，"
                 "调息后可再来。" % (int(res["rounds"]), int(res["mon_hp_left"]), idx + 1))
     for name, qty in sg["drops"].items():
@@ -2216,6 +2229,15 @@ async def cmd_puppet_ruin(store, qq, pstore=None) -> str:
         wid = await pstore.add_wild_puppet(wild)
         tail = ("\n📜 得《天妖傀》竹简——傀儡之技已习得。"
                 "\n🩸 遗迹里还有一具无主残傀（id=%d），发「傀儡 收服 %d」可降服。" % (wid, wid))
+    if report is not None:
+        report.update({"stage_idx": idx, "stage_name": sg["name"],
+                       "monster": sg["monster"], "win": True,
+                       "rounds": int(res["rounds"]),
+                       "taken": int(res.get("taken") or 0),
+                       "drops": dict(sg["drops"]),
+                       "lore": "天妖傀竹简" in sg["drops"],
+                       "wild_id": locals().get("wid"),
+                       "total": len(stages)})
     return (head + "\n✅ %d 回合胜（承伤 %d）\n　掉落：%s\n　今日进度 %d/%d%s" % (
         int(res["rounds"]), int(res.get("taken") or 0), drops,
         idx + 1, len(stages), tail))

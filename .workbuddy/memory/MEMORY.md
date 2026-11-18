@@ -210,3 +210,11 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
   `tests/test_doupo_buttons.py::test_card_renderer_shapes_match_dispatch`（AST）。
 * **出图口令带结果时用 `finish_card(caption=…)`**：战报先发、卡后发，别让卡把结果吞掉
   （傀儡遗迹曾只发进度卡，胜负与掉落全丢）。按钮路径同理，且要防底部兜底重复发送。
+
+## 10. 一处输出 = 一条消息（2026-11-18 用户明确要求）
+
+* 「有结果的出图口令」**不许**拆成「文字 + 卡」两条。战况/掉落这类结果要并进卡片本体：
+  命令把结构化结果写进可选 `report` dict，`build_*_data(..., report)` 并成首段。
+* `finish_card` 不允许再加 caption/分条发送类参数——2026-11-18 加过一次，被用户当场否掉。
+* `tests/test_menu_full.py` 的用例默认 `parts=1`；只有真的业务需要多条时才写 `parts=N`。
+* 验收战斗类命令**必须用库副本**（`tmp/` 下复制，含 `-wal`），不许直接连生产库——当晚踩了两次。

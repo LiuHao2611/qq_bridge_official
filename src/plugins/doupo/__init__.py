@@ -904,22 +904,22 @@ async def _(event: Event):
     qq = str(event.user_id)
     raw = _plain(event)
     if "傀儡遗迹" in raw:
-        txt = await commands.cmd_puppet_ruin(store, qq, puppet_store_inst)
-        # 出图与战报同源：战报跑完后重读水位线，卡面显示最新进度。
+        # 一次点击只出一条卡片：战况（段位/胜负/回合/掉落）由 cmd_puppet_ruin 写进
+        # report，再并进同一张进度卡。2026-11-18 用户明确否掉了「战报一条 + 卡一条」。
+        rep: dict = {}
+        txt = await commands.cmd_puppet_ruin(store, qq, puppet_store_inst, report=rep)
         png = None
         try:
             if not await store.get_player(qq):
                 await puppet_cmd.finish(txt)  # 未入道者无卡可出，不是降级
                 return
             day = date.today().isoformat()
-            png = await card.render_ruin_for(qq, day, puppet_store_inst)
+            png = await card.render_ruin_for(qq, day, puppet_store_inst, rep)
         except Exception as e:  # noqa: BLE001
             logger.error("傀儡遗迹卡渲染失败（拒绝静默降级）：%s: %s",
                          type(e).__name__, e)
         if png:
-            # 先发战报（打了哪段/赢没赢/掉了什么），再发进度卡——进度卡看不出胜负与掉落。
-            await finish_card(puppet_cmd, event, png, "ruin", "doupo_ruin.png",
-                              caption=txt)
+            await finish_card(puppet_cmd, event, png, "ruin", "doupo_ruin.png")
             return
         await puppet_cmd.finish("⚠️ 傀儡遗迹卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
         return
