@@ -1737,12 +1737,32 @@ def _alch_level_up(p) -> str:
     return cfg.ALCHEMIST[idx][0] if idx != int(p.get("alch", 0)) else ""
 
 
-def use_item(p, name) -> dict:
+def _advance_one(p) -> int:
+    """硬推一级（丹药破境专用）：不查修为、不掷斗帝骰，回满气血斗气。
+
+    与 ``level_up`` 的区别：``level_up`` 是「够了修为才能升」，这里是**丹药顶替
+    瓶颈**（原著三纹青灵丹就是干这个的）。所以只做三件事：lv+1、钳上限、回满。
+    """
+    lv = int(p.get("lv", 1))
+    if lv >= cfg.MAX_LV:
+        return lv
+    p["lv"] = lv + 1
+    _refill(p)
+    return p["lv"]
+
+
+def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     """服用丹药 / 炼化天材地宝（2026-11-18 材料不再是背包摆设）。
 
     解析优先级：先按丹药配方，未命中再按天材地宝表。两者的 effect/value 走同一
-    结算分支（hp/mp/exp/luck/dodge/crit/stat/skill），只对 ``msg`` 前缀做区分——
-    既有丹药的 reason/msg 文案逐字不变，既有测试与安全网关不受影响。
+    结算分支（hp/mp/exp/luck/dodge/crit/stat/skill/breakthrough），只对 ``msg``
+    前缀做区分——既有丹药的 reason/msg 文案逐字不变，既有测试与安全网关不受影响。
+
+    ``used_counts``（2026-11-18 破境丹）：``{境界下标: 已服次数}``，由命令层从
+    ``pill_use`` 表读出后传入，用来判「一阶限 N 枚」（原著抗性）。默认 None = 不做
+    次数限制（既有单测/脚本调用行为逐字节不变）。
+
+    ``rng``：升星判定用的随机源，默认 ``random.random``，便于单测钉死概率。
     """
     rec = cfg.RECIPE_BY_NAME.get(name)
     is_material = False
@@ -1773,6 +1793,51 @@ def use_item(p, name) -> dict:
         # 天然区分「外力速成」与「扎实修炼」；老档无此字段视为 0（无惩罚）。
         p["pill_exp"] = int(p.get("pill_exp", 0)) + val
         return {"ok": True, "msg": lead + f"修为 +{val}"}
+    if eff == "breakthrough":
+        # 原著第 315 / 321 章两枚破境丹，共用同一套结算（口径唯一，不写两份）：
+        #   三纹青灵丹：break_boundary=True、star_chance=0.30、max_per_realm=1
+        #     「助斗师强者突破晋入大斗师的界限；大斗师服下有少许几率提升一星，
+        #      并无药效反噬」「在一阶之中唯有一次服用机会，再服则因药体抗性白费」
+        #   紫心破障丹：break_boundary=False、star_chance=1.0、max_per_realm=2
+        #     「只能作用于大斗师级别……能够提升一星的实力……同一级别能够接连的
+        #      服用两枚而不至于产生太大的抗性……稳步的提升两星实力」
+        # 三档分支，任何一档都不空手：
+        #   ① 卡在界限前一级（斗师九星）且该丹有破界之能 → 丹力顶开壁障，晋入；
+        #   ② 已在目标阶 → 按 max_per_realm 限次，掷 star_chance 升一星；
+        #   ③ 其他境界     → 药不对症，按 value 转修为（不白白浪费）。
+        to_realm = int(rec.get("to_realm") or 1)
+        max_per = max(1, int(rec.get("max_per_realm") or 1))
+        lv = int(p.get("lv", 1))
+        ri = cfg.realm_index(lv)
+        realm_name = cfg.REALM_NAMES[min(to_realm, len(cfg.REALM_NAMES) - 1)]
+        if rec.get("break_boundary") and ri == to_realm - 1 and lv < cfg.MAX_LV \
+                and cfg.realm_index(lv + 1) == to_realm:
+            _advance_one(p)
+            return {"ok": True, "breakthrough": True,
+                    "msg": (lead + "丹力冲关，一举踏破【%s】壁障——晋入【%s】，气血斗气已满"
+                            % (realm_name, cfg.full_realm(int(p["lv"]))))}
+        if ri == to_realm:
+            used = int((used_counts or {}).get(ri, 0))
+            if used_counts is not None and used >= max_per:
+                # 丹药已被扣掉（take_item 在最前面），如实告知「白服」。
+                return {"ok": False, "reason": "resisted",
+                        "msg": ("药体已生抗性，同阶再服只是白费——【%s】这一阶"
+                                "至多服 %d 枚见效，晋阶后可再服"
+                                % (realm_name, max_per))}
+            if rng() < float(rec.get("star_chance", 0.0)):
+                _advance_one(p)
+                return {"ok": True, "star_up": True, "mark_used": ri,
+                        "msg": (lead + "药力化开，硬生生拔起一星——晋入【%s】"
+                                % cfg.full_realm(int(p["lv"])))}
+            p["exp"] = int(p.get("exp", 0)) + val
+            p["pill_exp"] = int(p.get("pill_exp", 0)) + val
+            return {"ok": True, "mark_used": ri,
+                    "msg": (lead + "药力打了个转，星位未动（无药效反噬），"
+                            "余力化修为 +%d" % val)}
+        p["exp"] = int(p.get("exp", 0)) + val
+        p["pill_exp"] = int(p.get("pill_exp", 0)) + val
+        return {"ok": True, "msg": lead + "此丹专为破【%s】而炼，"
+                "当前境界药力不显，化修为 +%d" % (realm_name, val)}
     if eff == "luck":
         p["luck"] = min(9999, int(p.get("luck", 0)) + val)
         return {"ok": True, "msg": lead + f"机缘 +{val}（现 {p['luck']}）"}

@@ -73,6 +73,18 @@ CREATE TABLE IF NOT EXISTS meta (
     k TEXT PRIMARY KEY,
     v TEXT NOT NULL
 );
+-- 2026-11-18 破境丹「一阶限 N 枚」：原著「大斗师在此阶唯有一次服用机会，
+-- 再服则因药体抗性白费」「紫心破障丹同阶可连服两枚」。这是**玩家数据**，
+-- 按最高声明必须是真实列，不能塞进 players.data 的 JSON blob。
+-- 用自增 id 而不是复合主键：紫心破障丹同阶要吃两枚，复合主键会把第二枚压掉。
+CREATE TABLE IF NOT EXISTS pill_use (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    qq        TEXT    NOT NULL,
+    name      TEXT    NOT NULL,
+    realm_idx INTEGER NOT NULL,
+    used_at   REAL    NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pill_use ON pill_use(qq, name, realm_idx);
 """
 
 
@@ -159,7 +171,9 @@ class Store:
         try:
             con = self._conn()
             with con:
+                self._rename_legacy_pill_use(con)
                 con.executescript(_SCHEMA)
+                self._copy_legacy_pill_use(con)
                 ver = con.execute("PRAGMA user_version").fetchone()[0]
                 if ver < DB_VER:
                     con.execute("PRAGMA user_version=%d" % DB_VER)
@@ -169,6 +183,34 @@ class Store:
         finally:
             if con is not None:
                 con.close()
+
+    #: 破境丹记录表的旧形状（复合主键、无法记「同阶第二枚」）。
+    _PILL_USE_OLD = "pill_use_legacy_20261118"
+
+    @classmethod
+    def _rename_legacy_pill_use(cls, con: sqlite3.Connection) -> None:
+        """把「没有 id 列」的旧 pill_use 改名挪开，等新表建好再迁回来。
+
+        只在旧形状存在时动手；新库/已迁移库原样不动。**不删数据**：
+        旧行会在 ``_copy_legacy_pill_use`` 里逐条搬进新表。
+        """
+        cols = [r[1] for r in con.execute("PRAGMA table_info(pill_use)")]
+        if not cols or "id" in cols:
+            return
+        con.execute("DROP TABLE IF EXISTS %s" % cls._PILL_USE_OLD)
+        con.execute("ALTER TABLE pill_use RENAME TO %s" % cls._PILL_USE_OLD)
+
+    @classmethod
+    def _copy_legacy_pill_use(cls, con: sqlite3.Connection) -> None:
+        """把挪开的旧行搬进新表，搬完 drop 旧表（幂等：旧表不存在就直接返回）。"""
+        has = con.execute("SELECT name FROM sqlite_master WHERE type='table'"
+                          " AND name=?", (cls._PILL_USE_OLD,)).fetchone()
+        if not has:
+            return
+        con.execute(
+            "INSERT INTO pill_use(qq, name, realm_idx, used_at)"
+            " SELECT qq, name, realm_idx, used_at FROM %s" % cls._PILL_USE_OLD)
+        con.execute("DROP TABLE %s" % cls._PILL_USE_OLD)
 
     # ---- 生命周期 ----
     async def load(self) -> None:
@@ -385,6 +427,47 @@ class Store:
     async def groups(self) -> List[str]:
         async with self._lock:
             return list(self._data["groups"])
+
+    # ---- 丹药服用记录（pill_use，真实列） ----
+    async def pill_used_counts(self, qq: str, name: str) -> dict:
+        """该玩家在这枚丹药上**每个境界各服过几次** → ``{realm_idx: 次数}``。
+
+        破境丹的「一阶限 N 枚」靠它判（原著抗性）。返回 dict 而不是集合：
+        紫心破障丹同阶可连服两枚，只记「服过没有」会把它压成一枚。
+        """
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    rows = con.execute(
+                        "SELECT realm_idx, COUNT(*) FROM pill_use"
+                        " WHERE qq=? AND name=? GROUP BY realm_idx",
+                        (str(qq), str(name))).fetchall()
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("丹药记录读取失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return {int(r[0]): int(r[1]) for r in rows}
+
+    async def mark_pill_used(self, qq: str, name: str, realm_idx: int) -> None:
+        """记一次「这枚丹药在该境界又服了一枚」，返回该境界累计次数。
+
+        主键改成 (qq,name,realm_idx,used_at) 才能记多枚；这里用 **INSERT 不 OR
+        REPLACE**，重复服用是真实的第二行 —— 五枚同阶丹药不能被压成一行。
+        """
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    con.execute(
+                        "INSERT INTO pill_use(qq, name, realm_idx, used_at)"
+                        " VALUES(?,?,?,?)",
+                        (str(qq), str(name), int(realm_idx), time.time()))
+                    row = con.execute(
+                        "SELECT COUNT(*) FROM pill_use WHERE qq=? AND name=?"
+                        " AND realm_idx=?",
+                        (str(qq), str(name), int(realm_idx))).fetchone()
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("丹药记录写入失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return int(row[0]) if row else 0
 
 
 def now() -> float:
