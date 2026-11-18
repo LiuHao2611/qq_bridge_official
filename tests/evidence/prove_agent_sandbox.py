@@ -80,6 +80,16 @@ def main() -> int:
 
     check("允许正常只读命令", A._guard("grep -rn BOSS /repo/src") == "")
     check("拒绝输出重定向", "重定向" in A._guard("echo x > /tmp/y"))
+    check("拒绝追加重定向", "重定向" in A._guard("cat a >> b"))
+
+    # 8b. 守卫**不许误杀比较运算符**（2026-11-18 真机：模型写 `x >= 12` 被当成
+    #     写文件，连拒 3 轮，白烧三次模型调用）。误杀比漏抓更贵。
+    for ok_cmd in ('python3 -c "print(1 if a >= 12 else 0)"',
+                   'python3 -c "d = {1: 2}; print(d[1])"',
+                   "grep -rn BOSS /repo/src 2>/dev/null",
+                   "sed -n '1,20p' /repo/src/a.py 2>&1 | head -5"):
+        out = A._guard(ok_cmd)
+        check("放行比较/常见无重定向：%s" % ok_cmd[:30], out == "", out[:40])
 
     check("read_file 拒绝越界路径", A._safe_path("../../etc/passwd") is None)
     check("read_file 允许仓库内路径",

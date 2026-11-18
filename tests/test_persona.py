@@ -115,3 +115,50 @@ def test_sticker_hint_follows_persona(tmp_path):
     assert store.hint_for("g:1") == "人设一致性：我是C。"
     assert "猫管家" not in store.hint_for("g:1")
     store.clear_scope("g:1")
+
+
+def test_notice_follows_persona(tmp_path):
+    """慢任务探路话必须跟着人设走（2026-11-18 用户：人设也要符合）。
+
+    真实场景：源码问答要跑二三十秒，机器人得先开口说一句。
+    那句话是**机器人本人**在说话，不能是客服腔，也不能换了人设还带猫管家的口癖。
+    """
+    store = PersonaStore(tmp_path)
+    Config.AI_PERSONA = DEFAULT_ID
+    # 默认人设：本喵自己的说法（有脾气、短）
+    notice = store.notice_for("g:1")
+    assert "本喵" in notice
+    assert "稍等" not in notice and "正在" not in notice, "别用客服腔"
+    assert 10 <= len(notice) <= 30, "探路话要短：%r" % notice
+
+    # 显式配了 notice 的人设 → 用它自己的
+    store.save(Persona(id="tmp_n", name="临时N", prompt="我是N",
+                       notice="别催，我去翻代码，二十秒。"))
+    store.set_scope("g:1", "tmp_n")
+    assert store.notice_for("g:1") == "别催，我去翻代码，二十秒。"
+    assert "本喵" not in store.notice_for("g:1")
+
+    # 没配 notice 的人设 → 中性兜底，绝不能串到别人的口癖
+    store.save(Persona(id="tmp_m", name="临时M", prompt="我是M"))
+    store.set_scope("g:2", "tmp_m")
+    fb = store.notice_for("g:2")
+    assert fb
+    for bad in ("本喵", "露娜", "稍等", "正在"):
+        assert bad not in fb, "兜底串味：%r 含 %r" % (fb, bad)
+    store.clear_scope("g:1")
+    store.clear_scope("g:2")
+
+
+def test_notice_roundtrip_in_json():
+    """notice 要能存进人设 JSON 再读回来（配置页/导入导出不能丢）。"""
+    p = Persona(id="x", name="X", prompt="p", notice="我去查，等着。")
+    again = Persona.from_dict(p.to_dict())
+    assert again is not None and again.notice == "我去查，等着。"
+
+
+def test_notice_fallback_matches_tool_default():
+    """人设库兜底文案 == 工具上写的那句（两处漂移会导致「有时客服腔有时不」）。"""
+    from qq_bridge.persona import NOTICE_FALLBACK
+    assert NOTICE_FALLBACK == "翻源码去了，二十来秒，别催。"
+    src = (ROOT / "src/plugins/qq_bridge/tools/builtins.py").read_text(encoding="utf-8")
+    assert 'progress_text="%s"' % NOTICE_FALLBACK in src

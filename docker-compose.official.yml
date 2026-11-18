@@ -126,6 +126,9 @@ services:
       AGENT_MAX_TURNS: "14"
       AGENT_MAX_TOOLS: "10"
       AGENT_TIMEOUT: "150"
+      #: 单次模型调用超时（秒）。90 太紧：长上下文 + thinking 会跑过 90s 直接
+      #: APITimeoutError，答案全丢（2026-11-18 真机 139.9s 失败那次）。
+      AGENT_HTTP_TIMEOUT: "120"
       TZ: "Asia/Shanghai"
     read_only: true
     tmpfs:

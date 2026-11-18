@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from ..config import Config, get_logger, jlog
 from .llm import LLMClient
@@ -45,6 +46,12 @@ class FCRunner:
         msgs = list(messages)
         tools_payload = self.registry.openai_payload()
         for round_no in range(1, max_rounds + 1):
+            # 逐步日志（2026-11-18 用户要求「每一步都打印」）：一轮一行，
+            # 能看出「带着多少历史去问、模型决定调什么、工具花了多久」。
+            log.info(jlog("fc_round_start", scope=ctx.scope, round=round_no,
+                          msgs=len(msgs), tools=len(tools_payload),
+                          trace_id=ctx.trace_id))
+            t_llm = time.perf_counter()
             try:
                 msg = await self.client.chat(msgs, tools=tools_payload)
             except Exception as e:  # noqa: BLE001 — LLMError 及其它，显式上抛
@@ -54,6 +61,11 @@ class FCRunner:
                                  detail=detail[:160], trace_id=ctx.trace_id))
                 return "", detail
             tool_calls = msg.get("tool_calls") or []
+            log.info(jlog("fc_llm_done", scope=ctx.scope, round=round_no,
+                          elapsed_ms=int((time.perf_counter() - t_llm) * 1000),
+                          tool_calls=len(tool_calls),
+                          content_len=len(str(msg.get("content") or "")),
+                          trace_id=ctx.trace_id))
             if not tool_calls:
                 # 模型给出最终回复（可能 content 为空——理论上 llm.py 已挡）
                 return str(msg.get("content") or ""), ""
@@ -92,6 +104,9 @@ class FCRunner:
                     })
                     continue
                 result = await self.registry.dispatch(name, args, ctx)
+                log.info(jlog("fc_tool_returned", scope=ctx.scope, round=round_no,
+                              tool=name, result_len=len(str(result or "")),
+                              trace_id=ctx.trace_id))
                 msgs.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id") or "",

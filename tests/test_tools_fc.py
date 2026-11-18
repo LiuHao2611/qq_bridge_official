@@ -204,3 +204,50 @@ async def test_wire_format_tool_calls_nested_in_subsequent_round():
     assert tc["id"] == "call_1"
     # 嵌套壳之外，扁平键不得残留（避免协议二义）
     assert "name" not in tc or tc.get("name") == tc["function"]["name"]
+
+
+# ---------------- 8. 逐步日志（2026-11-18 用户：每一步都打印） ----------------
+@pytest.mark.anyio
+async def test_converse_logs_every_step():
+    """一轮一行的日志：轮次开始 → 模型返回 → 工具回填，缺一环就复盘不了。
+
+    ★ 不能用 caplog：项目 logger 是 ``propagate=False``（自己挂 handler），
+      根 logger 收不到。这里直接给 qq_bridge 的 logger 挂一个内存 handler。
+    """
+    import logging
+
+    from qq_bridge.config import get_logger
+
+    lines: list[str] = []
+
+    class _Mem(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    log = get_logger()
+    h = _Mem(level=logging.INFO)
+    old_level = log.level
+    log.addHandler(h)
+    log.setLevel(logging.INFO)
+    try:
+        reg = _reg_with_echo()
+        client = FakeClient([
+            {"content": "", "tool_calls": [
+                {"id": "c1", "name": "echo", "arguments": '{"x":"hi"}'}]},
+            {"content": "好了", "tool_calls": []},
+        ])
+        reply, err = await FCRunner(reg, client=client).converse(
+            [{"role": "user", "content": "hi"}], _ctx())
+    finally:
+        log.removeHandler(h)
+        log.setLevel(old_level)
+
+    assert (reply, err) == ("好了", "")
+    text = "\n".join(lines)
+    assert "event=fc_round_start" in text and "round=1" in text
+    assert "event=fc_llm_done" in text and "elapsed_ms=" in text
+    assert "tool_calls=1" in text
+    assert "event=fc_tool_returned" in text and "tool=echo" in text
+    assert "round=2" in text, "第二轮也要有日志"
+    # 工具入参得能看见（不然不知道模型让它干什么）
+    assert "event=tool_call_start" in text and '"x": "hi"' in text
