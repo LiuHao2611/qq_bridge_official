@@ -41,7 +41,8 @@ MUTATIONS = [
      '"ratio": round(t["foe"] / top, 4), "share": _pct(t["foe"], total),',
      '"ratio": 1.0, "share": _pct(t["foe"], total),'),
     ("模板对新旧数据不分流", TPL,
-     '    return any(data.get(k) for k in ("verdict", "kpis", "bars", "beats", "actions"))',
+     '    return any(data.get(k) for k in\n'
+     '               ("verdict", "kpis", "bars", "beats", "actions", "rounds"))',
      '    return True'),
     ("不落盘 exhausted", CORE,
      '            "exhausted": bool(res.get("exhausted")),',
@@ -50,6 +51,24 @@ MUTATIONS = [
      '            "auto_pills": {"hp": int((res.get("auto_pills") or {}).get("hp") or 0),\n'
      '                           "mp": int((res.get("auto_pills") or {}).get("mp") or 0)},',
      '            "auto_pills": {"hp": 0, "mp": 0},'),
+    ("气泡丢掉 rounds 字段", BR,
+     '        "rounds": round_bubbles(battle),\n',
+     '        "rounds": [],\n'),
+    ("气泡左右列错边", BR,
+     '        b["mine" if a.get("side") == "我方" else "foe"].append(a)',
+     '        b["mine" if a.get("side") != "我方" else "foe"].append(a)'),
+    ("气泡两列并成一列（几何碰撞）", TPL,
+     '    col_w = (content_w - 2 * BUBBLE_PAD - BUBBLE_COL_GAP) // 2',
+     '    col_w = content_w - 2 * BUBBLE_PAD'),
+    ("气泡数值不右锚定（对齐漂移）", TPL,
+     '            right = cx + col_w\n'
+     '            ey = body_y\n'
+     '            for ei, e in enumerate(b["sides"][key]):\n'
+     '                cy = ey + LINE_H // 2\n',
+     '            ey = body_y\n'
+     '            for ei, e in enumerate(b["sides"][key]):\n'
+     '                right = cx + col_w - 24 if ei % 2 else cx + col_w\n'
+     '                cy = ey + LINE_H // 2\n'),
 ]
 
 

@@ -375,6 +375,119 @@ def test_ruin_card_uses_legacy_skeleton():
           f"size={img.size}")
 
 
+def _overlap_2d(a, b) -> bool:
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def _check_boxes(bounds, boxes, min_gap: int = 2) -> list[str]:
+    """与 card-design skill 同规则：溢出 / 两方向重叠 / 同行间距过小。"""
+    bx0, by0, bx1, by1 = bounds
+    problems: list[str] = []
+    items = [x for x in boxes if x[1] >= 0]
+    for label, x0, y0, x1, y1 in items:
+        if x0 < bx0 - 1 or y0 < by0 - 1 or x1 > bx1 + 1 or y1 > by1 + 1:
+            problems.append("[溢出] %s 越界: (%d,%d,%d,%d)" % (label, x0, y0, x1, y1))
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            la, a = items[i][0], items[i][1:]
+            lb, b = items[j][0], items[j][1:]
+            if _overlap_2d(a, b):
+                problems.append("[重叠] %s <-> %s: %s vs %s" % (la, lb, a, b))
+            if a[1] < b[3] and b[1] < a[3]:
+                gap_x = b[0] - a[2] if a[0] <= b[0] else a[0] - b[2]
+                if 0 <= gap_x < min_gap:
+                    problems.append("[间距] %s <-> %s 水平间距 %dpx" % (la, lb, gap_x))
+    return problems
+
+
+def test_round_bubbles_group_by_round_and_side():
+    """逐招明细一回合一个气泡：按连续回合分组，左右两列分别装我方 / 敌方行为。"""
+    battle = {"rounds": 4, "log": [
+        {"index": 1, "round": 1, "foe": "甲", "move": "普攻", "dmg": 100},
+        {"index": 2, "round": 1, "foe": "甲", "move": "兽击", "dmg": 50, "taken": True},
+        {"index": 3, "round": 2, "foe": "甲", "move": "普攻", "dmg": 100},
+        {"index": 4, "round": 1, "foe": "乙", "move": "服药", "pill": "回气散", "amount": 200, "dmg": 0},
+        {"index": 5, "round": 1, "foe": "乙", "move": "兽击", "dmg": 60, "taken": True},
+        {"index": 6, "round": 2, "foe": "乙", "move": "普攻", "dmg": 100},
+    ]}
+    bubbles = br.round_bubbles(battle)
+    check("气泡数 = 连续回合数", len(bubbles) == 4, str([b["round"] for b in bubbles]))
+    check("回合号连续", [b["round"] for b in bubbles] == [1, 2, 3, 4],
+          str([b["round"] for b in bubbles]))
+    total = sum(len(b["mine"]) + len(b["foe"]) for b in bubbles)
+    check("动作一条不丢", total == len(battle["log"]), f"{total}/{len(battle['log'])}")
+    check("服药归我方列", any(a["move"] == "服用回气散"
+                          for b in bubbles for a in b["mine"]),
+          str([b["mine"] for b in bubbles]))
+    check("敌方兽击不进我方列",
+          all(a["move"] != "兽击" for b in bubbles for a in b["mine"]), "敌方串列")
+    data = br.build_data(battle)
+    check("build_data 带 rounds 增量字段", bool(data.get("rounds")), str(data.keys()))
+    check("旧 groups 仍给遗迹卡复用",
+          [g["name"] for g in data["groups"]] == ["战况", "逐招明细"],
+          str([g["name"] for g in data["groups"]]))
+    duel = {"rounds": 1, "log": [{"index": 1, "round": 1, "who": "v",
+                                  "move": "紫云翼", "dmg": 300}]}
+    db = br.round_bubbles(duel)
+    check("切磋对手归敌方列", db[0]["foe"] and not db[0]["mine"], str(db))
+
+
+def test_round_bubble_card_layout_passes_check_boxes():
+    """card-design 硬门禁：气泡卡渲染后溢出 0 / 重叠 0 / 间距 0。"""
+    pic = card._load_pic()
+    check("pic 包可加载（气泡自检）", pic is not None)
+    if pic is None:
+        return
+    battle = _sample_battle()
+    # 加长到多回合多事件，逼出窄列里的招式名/数值/词条碰撞
+    extra = []
+    for r in range(2, 13):
+        extra.extend([
+            {"index": len(extra) + 1, "round": r, "move": "佛怒火莲·毁灭火莲",
+             "dmg": 10233 + r, "crit": True, "mp_cost": 1807,
+             "notes": ["破防30%", "火属性"], "kind": "斗技"},
+            {"index": len(extra) + 2, "round": r, "move": "狂暴撞击", "dmg": 2400 + r,
+             "taken": True, "notes": ["伤害×1.6"]},
+        ])
+    battle["log"] = list(battle["log"]) + extra
+    battle["rounds"] = 12
+    data = card.build_battle_data(battle)
+    for width in (720,):   # 与生产一致；其它宽度在 test_menu_full 里覆盖
+        boxes = []
+        png = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                              width=width, data=data, boxes=boxes)
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        # bar 的 rec 是「图形占位」而非文字，宽度小；自检只查文字盒
+        texts = [b for b in boxes if "_bar" not in b[0]]
+        problems = _check_boxes((12, 12, img.width - 12, img.height - 12), texts)
+        check("气泡卡 %d 宽 boxes 足量" % width, len(texts) > 40, f"n={len(texts)}")
+        # 光靠「boxes 不重叠」会在模板回退成平面列表时假通过：必须断言气泡特征盒存在
+        round_heads = [b for b in texts if b[0].endswith("_h")]
+        check("气泡真的渲染（每回合一个回合号盒）",
+              len(round_heads) == len(data["rounds"]),
+              f"boxes={len(round_heads)} rounds={len(data['rounds'])}")
+        check("气泡左右列头都在",
+              any(b[0].endswith("_mine_s") for b in texts)
+              and any(b[0].endswith("_foe_s") for b in texts), "缺我方/敌方列头")
+        # 右锚定：同一列所有数值的右边界必须**彼此相等**（不随招式名长度漂移）。
+        # 只查绝对值 col_edge 会在字体度量不稳定时假红；右锚定本质是「同列对齐」这个相对量。
+        # 必须覆盖该列**全部**数值盒（r{回合}_{我方|敌方}{序号}_v），
+        # 只查第 0 个会让「从第 1 个起漂移」的回退假通过。
+        for key, label in (("mine", "我方"), ("foe", "敌方")):
+            edges = [b[3] for b in texts
+                     if ("_%s" % key) in b[0] and b[0].endswith("_v")]
+            # 敌方未必每回合都出手，盒数不能和回合数比；只需至少 2 个才谈得上「对齐」。
+            check("%s列数值统一右锚定" % label,
+                  len(edges) >= 2 and (max(edges) - min(edges)) <= 2,
+                  f"n={len(edges)} min={min(edges) if edges else None} "
+                  f"max={max(edges) if edges else None}")
+        check("气泡卡 %d 宽几何自检 0 问题" % width, not problems,
+              " | ".join(problems[:5]))
+        check("气泡卡 %d 宽输出 PNG" % width,
+              png.startswith(b"\x89PNG") and img.width == width, f"size={img.size}")
+
+
 def test_battle_review_text_after_roundtrip():
     async def run():
         with tempfile.TemporaryDirectory() as d:
