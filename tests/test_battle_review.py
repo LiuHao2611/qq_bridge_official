@@ -241,6 +241,18 @@ def test_actions_hide_zero_damage_as_dash():
     check("服药标记为丹药色", acts[1]["tone"] == "pill", acts[1]["tone"])
 
 
+def test_action_shows_atk_debuff_linkage():
+    """降攻联动（2026-11-19）：回看卡须把「攻击被压低」显示成词条+构成行。"""
+    battle = {"rounds": 1, "log": [
+        {"index": 1, "round": 1, "move": "兽击", "dmg": 320, "who": "m",
+         "atk_raw": 900, "atk_debuff": 360, "def_cut": 220},
+    ]}
+    acts = br.action_items(battle)
+    check("降攻打词条", "降攻" in acts[0]["tags"].split("·"), acts[0]["tags"])
+    check("降攻进构成行", "降攻 -360" in acts[0]["comp"], acts[0]["comp"])
+    check("降攻字段透传", acts[0]["atk_debuff"] == 360, str(acts[0].get("atk_debuff")))
+
+
 def test_totals_split_sides_for_duel():
     """切磋（who=v）没有 taken 字段，阵营判据若只看 taken 会把对手输出算成我方。"""
     battle = {"rounds": 3, "log": [

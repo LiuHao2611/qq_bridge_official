@@ -1244,6 +1244,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         _try_auto_pill("hp")
         _try_auto_pill("mp")
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
+        # 禁技（2026-11-19 修）：被怪挂 silence 时本回合只能武器普攻，斗气不扣。
+        if int(p_fx.get("silence", 0)) > 0:
+            entry, cost = None, 0
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
                    crit_add=crit_add, extra_effects=self_effects)
@@ -1276,7 +1279,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             p_entry = pc.puppet_log_entry(puppet, p_dmg, formation_n)
             dmg_log.append(_mark(p_entry, m_hp))
         # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）× 塔禁疗倍率
-        heal_frac = (lifesteal + float(hit.get("heal_ratio", 0))) * heal_mult
+        # 减疗（2026-11-19 修）：对手挂到 p_fx 的 debuff_heal 压低本次回血。
+        heal_frac = (lifesteal + float(hit.get("heal_ratio", 0))) * heal_mult * fx.heal_mult(p_fx)
         if heal_frac > 0:
             hp = min(st["体力"], hp + int(hit["dmg"] * heal_frac))
         # 塔·怪物反伤：玩家造成伤害后按比例反弹（Boss 词缀）
@@ -1321,15 +1325,20 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 # 回看卡「承伤构成」：atk_raw = 防御前原始，dealt0 = 防御后/技能前。
                 # 三个字段只供展示，不参与任何数值计算（旧行为逐字节不变）。
                 atk_raw = max(1, int(m_atk * roll))
+                # 降攻效果（2026-11-19 修）：玩家技挂 debuff_atk 到 m_fx，
+                # 怪实际出手前按 target_atk_mult 打折。无降攻时系数=1，逐字节不变。
+                m_atk_eff = m_atk * fx.target_atk_mult(m_fx)
+                dealt_atk_raw = max(1, int(m_atk_eff * roll))
                 # 根基裁定（隐形）：虚浮者防御同样打折 → 同怪受到更多伤害。
                 # PVE 玩家承伤处；root=1（适量/正常修炼）时逐字节不变。
-                dealt = max(1, int(m_atk * mitigation(st["防御"] * root) * roll))
+                dealt = max(1, int(m_atk_eff * mitigation(st["防御"] * root) * roll))
                 dealt0 = dealt
                 # 怪物技能（2026-11-19）：概率施放，只作用于本回合，不改面板。
                 # 效果一律并入「兽击」那一条 log 的 notes —— 不额外插 dmg=0 的条目，
                 # 否则回看卡会把一次攻击渲染成两行、并把总量算重。
                 sk_note, sk_name = [], ""
-                sk = mon.get("skill")
+                # 禁技（2026-11-19 修）：玩家技挂 silence 到 m_fx，本回合怪放不出技能
+                sk = mon.get("skill") if int(m_fx.get("silence", 0)) <= 0 else None
                 if sk:
                     _sc = float(sk.get("chance") or cfg.MONSTER_SKILL_BASE_CHANCE)
                     if mon.get("is_boss"):
@@ -1364,9 +1373,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                              "move": "兽击",
                              # 回看卡「承伤构成」：原始 → 防御削减 → 减伤吸收 → 实际。
                              # 纯展示字段，不参与结算（旧行为逐字节不变）。
-                             "atk_raw": int(atk_raw),
-                             "def_cut": max(0, int(atk_raw - dealt0)),
-                             "absorbed": max(0, int(dealt - inc["final"]))}
+                             "atk_raw": int(dealt_atk_raw),
+                             "def_cut": max(0, int(dealt_atk_raw - dealt0)),
+                             "absorbed": max(0, int(dealt - inc["final"])),
+                             # 降攻生效展示：原始攻击被降攻压低（纯展示，不参与结算）
+                             "atk_debuff": max(0, atk_raw - dealt_atk_raw)}
                 notes = list(sk_note) + list(inc["notes"] or [])
                 if notes:
                     log_entry["notes"] = notes
@@ -2158,6 +2169,8 @@ def duel(p, vic, rng=random.random) -> dict:
         hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
         v_ctx["target_hp_ratio"] = hp_v / hp_v0
         e, c = _pick_skill(p, mp_p, rng)
+        if int(p_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
+            e, c = None, 0
         hit = _hit(p, int(sv["防御"] * root_v), e, rng, p_fx, v_fx, v_ctx)
         if e is not None:
             mp_p -= c
@@ -2167,7 +2180,8 @@ def duel(p, vic, rng=random.random) -> dict:
                     "foe_hp_before": max(0, int(foe_hp_before))})
         log.append(_mark(hit, "p", hp_p, mp_p, hp_v))
         if hit.get("heal_ratio"):
-            hp_p = min(hp_p0, hp_p + int(hit["dmg"] * hit["heal_ratio"]))
+            # 减疗（2026-11-19 修）：vic 挂到 p_fx 的 debuff_heal 压低 p 回血
+            hp_p = min(hp_p0, hp_p + int(hit["dmg"] * hit["heal_ratio"] * fx.heal_mult(p_fx)))
             log[-1]["hp_after"] = int(hp_p)
         if hp_v <= 0:
             break
@@ -2187,6 +2201,8 @@ def duel(p, vic, rng=random.random) -> dict:
             hp_before_v, mp_before_v, foe_hp_before_v = hp_v, mp_v, hp_p
             p_ctx["target_hp_ratio"] = hp_p / hp_p0
             e2, c2 = _pick_skill(vic, mp_v, rng)
+            if int(v_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
+                e2, c2 = None, 0
             hit2 = _hit(vic, int(sp["防御"] * root_p), e2, rng, v_fx, p_fx, p_ctx)
             if e2 is not None:
                 mp_v -= c2
@@ -2199,7 +2215,8 @@ def duel(p, vic, rng=random.random) -> dict:
                          "foe_hp_before": max(0, int(foe_hp_before_v))})
             log.append(_mark(hit2, "v", hp_v, mp_v, hp_p))
             if hit2.get("heal_ratio"):
-                hp_v = min(hp_v0, hp_v + int(inc["final"] * hit2["heal_ratio"]))
+                # 减疗（2026-11-19 修）：p 挂到 v_fx 的 debuff_heal 压低 vic 回血
+                hp_v = min(hp_v0, hp_v + int(inc["final"] * hit2["heal_ratio"] * fx.heal_mult(v_fx)))
                 log[-1]["hp_after"] = int(hp_v)
             if inc["reflect"]:
                 hp_v -= inc["reflect"]
