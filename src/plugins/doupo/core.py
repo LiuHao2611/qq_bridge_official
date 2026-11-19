@@ -543,33 +543,40 @@ def is_nine_star_breakthrough(p) -> bool:
 
 
 def make_breakthrough_boss(p, rng=random.random) -> dict:
-    """九星突破 BOSS：**原著有名有姓的反派**（2026-11-20 用户「别写快照玩法」）。
+    """九星突破 BOSS：**原著有名有姓的反派** + 内部战力快照锁难度。
 
-    旧版用「战力快照反解」造一只「心魔劫影」——本质是打自己的镜像，没有身份、
-    没有台词、没有机制，用户评「敷衍」。本版改为按突破档从 ``cfg.BREAK_BOSSES``
-    取一名原著 BOSS（药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝…），
-    每人带登场引言、原著台词、专属技能与"恶心机制"。
+    2026-11-20 用户澄清原话：「战力快照要有，只是不要发出来，发出来会影响游戏体验」。
+    因此分两层，谁都不许混：
 
-    数值口径**不变**（仍只由玩家等级反解，保证不卡关）：
-      * 用玩家当前等级（不深拷贝、不放大属性）走 ``monster_scaled`` 造同阶怪；
-      * 在其上乘 ``BOSS_BREAK_HP_MULT`` / ``BOSS_BREAK_ATK_MULT`` 做出突破关应有的
-        「更耐打 + 略疼」；难度真正来自该 BOSS 的机制（禁技/眩晕/反伤/减疗）。
+      * **内部**：触发瞬间 ``copy.deepcopy(p)`` 锁一份战力快照，作为
+        ``monster_scaled`` 的反解基准 —— BOSS 强度锁定在"触发那一刻"，不受战斗中
+        掉血/服药/临时增益影响；``snapshot_power`` 留在 mon / out 里供校验。
+      * **对外**：只有原著身份、登场引言、台词、技能、机制。
+        命令层、战报、卡片都**禁止**输出快照战力数字或「心魔劫影」字样。
+
+    旧版把快照做成"打自己的镜像"且把战力印在文案里，用户评「敷衍」+影响体验。
+    本版只保留快照的数值锁定作用，身份改从 ``cfg.BREAK_BOSSES`` 取
+    （药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝…），不放大快照属性本身
+    ——早先放大属性会让低等级怪攻击反解畸高，卡死新手。
     ``rng`` 保留只是兼容既有调用签名，不消费（BOSS 由突破档确定，不随机）。
     """
-    ch = cfg.break_boss_for_lv(int(p.get("lv", 1)))
+    snap = copy.deepcopy(p)   # 内部快照：触发瞬间锁定，战斗过程不再变化
+    ch = cfg.break_boss_for_lv(int(snap.get("lv", 1)))
     species = {
-        "name": ch["name"], "lv": int(p.get("lv", 1)),
+        "name": ch["name"], "lv": int(snap["lv"]),
         "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": cfg.BOSS_BREAK_KIND,
         "skill": dict(ch["skill"]),
         "character": dict(ch),
     }
-    mon = monster_scaled(p, species)
+    mon = monster_scaled(snap, species)
     mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
     mon["atk"] = max(1, int(mon["atk"] * float(cfg.BOSS_BREAK_ATK_MULT)))
     mon["is_boss"] = True
     mon["breakthrough_boss"] = True
     mon["boss_title"] = str(ch.get("title") or "")
+    # 内部校验字段：**禁止**出现在任何玩家可见文案/卡片（见 commands.cmd_break 守门）
+    mon["snapshot_power"] = power(p)
     return mon
 
 
@@ -577,7 +584,7 @@ def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
     """九星突破 BOSS 战完整流程（命令层调用；core 只做逻辑不改存档持久化）。
 
     前置必须由调用方先用 ``is_nine_star_breakthrough(p)`` 判定。本函数：
-      1. 按突破档取一名原著 BOSS（make_breakthrough_boss），沿用同一套等级反解；
+      1. 内部锁战力快照 + 按突破档取一名原著 BOSS（make_breakthrough_boss）；
       2. 用既有的 ``fight()`` 打这一场（自动服药/锁定物品口径与普通战斗一致）；
       3. 胜利 → 掉火焰（roll_breakthrough_flame）→ level_up 完成突破；
          失败 → 保留战斗损耗（掉血/耗药），经验不扣，可再次挑战。
@@ -590,7 +597,9 @@ def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
         "rounds": int(res.get("rounds", 0)),
         "taken": int(res.get("taken", 0)),
         "hp_end": int(p.get("hp", 0)),
-        # 2026-11-20 原著 BOSS 元数据（去快照）：命令层据此渲染沉浸式引言/台词。
+        # 内部校验字段，绝不渲染：用户「快照要有，但不要发出来」。
+        "snapshot_power": int(mon.get("snapshot_power", 0)),
+        # 原著 BOSS 元数据：命令层据此渲染沉浸式引言/台词。
         "boss_name": str(mon.get("name") or ""),
         "boss_title": str(mon.get("boss_title") or ""),
         "character": dict(mon.get("character") or {}),

@@ -10,7 +10,7 @@
    优化买物品上限，不要限制99。」
 
 逐条钉死：
-  1. **去快照**：make_breakthrough_boss 不再有 snapshot_power；文案不含"快照战力"。
+  1. **快照内藏**：内部保留 snapshot_power 锁难度；玩家文案零露出（无"快照/战力/心魔劫影"）。
   2. **原著 BOSS**：12 突破档 12 个不同 BOSS，各有 source/intro/skill/mech。
   3. **台词有出处**：角色库里每条 quotes 都是原著语料的逐字子串（防代编）。
   4. **登场引言**：fight 把 intro 写成独立旁白 log（intro=True，dmg=0），
@@ -26,15 +26,18 @@
   * 把 12 档 BOSS 都换成同一只 → test_twelve_distinct_bosses 红；
   * 删掉 intro 旁白 → test_intro_bubble_in_log 红；
   * 删掉 mech 挂 p_fx → test_mechanic_silence_blocks_skill 红；
-  * 把 cmd_buy 上限改回 99 → test_buy_150_not_clamped 红。
+  * 把 cmd_buy 上限改回 99 → test_buy_150_not_clamped 红；
+  * 删内部 snapshot_power 或把它印进文案 → test_snapshot_internal_but_invisible 红。
 
 运行：python tests/test_doupo_boss_cast.py（脚本式，exit 0 = 全绿）
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re as _re
 import sys
+import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -96,12 +99,42 @@ def _mon(p, *, character, hp=300, atk=1):
 # ---------------------------------------------------------------------------
 # ① 去快照
 # ---------------------------------------------------------------------------
-def test_no_snapshot_field():
-    boss = core.make_breakthrough_boss(_p(9))
-    check("无 snapshot_power 字段", "snapshot_power" not in boss, str(sorted(boss.keys())))
-    check("BOSS 有原著 name", bool(boss.get("name")) and boss["name"] != "心魔劫影",
-          boss.get("name", ""))
+def test_snapshot_internal_but_invisible():
+    """用户澄清：快照要有（内部锁难度），只是不要发出来（影响体验）。"""
+    p = _p(9)
+    expect = core.power(p)
+    boss = core.make_breakthrough_boss(p)
+    check("内部保留 snapshot_power（触发瞬间战力）",
+          int(boss.get("snapshot_power", 0)) == expect,
+          "expect=%d got=%s" % (expect, boss.get("snapshot_power")))
+    check("快照只锁难度，不覆盖原著 BOSS 身份",
+          boss.get("name") == cfg.break_boss_for_lv(9)["name"]
+          and boss["name"] != "心魔劫影", boss.get("name", ""))
     check("BOSS 有 title", bool(boss.get("boss_title")), boss.get("boss_title", ""))
+
+    # 对外：命令层源码与真输出都不得出现快照/战力数字/心魔劫影
+    import inspect
+    from doupo import commands
+    from doupo.store import Store
+    src = inspect.getsource(commands.cmd_break)
+    body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    check("cmd_break 代码不引用 snapshot_power", "snapshot_power" not in body,
+          body[:160])
+
+    async def _run():
+        st = Store(os.path.join(tempfile.mkdtemp(prefix="bossnap_"), "d.json"))
+        await st.load()
+        q = core.create_player("SNAPQ", "快照验收", "群")
+        q["lv"], q["exp"] = 27, cfg.exp_need(27) + 10
+        core._refill(q)
+        await st.put_player(q)
+        return await commands.cmd_break(st, "SNAPQ", rng=lambda: 0.01)
+
+    out = asyncio.run(_run())
+    leak = [w for w in ("快照", "战力", "心魔劫影", "snapshot") if w in out]
+    check("真突破文案零快照露出", not leak, str(leak) + " | " + out[:140])
+    check("真突破文案仍有原著引言/BOSS", "云棱" in out and "我是云岚宗的大长老" in out,
+          out[:140])
 
 
 # ---------------------------------------------------------------------------
