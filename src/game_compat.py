@@ -199,8 +199,14 @@ def image_seg(event: Any, data: bytes, file_name: str = "doupo.png") -> Any:
 DOUPO_CARD_PREFIX = "doupo:"
 
 
-async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
+async def send_card_via_channel(ctx: dict, data: bytes | list[bytes],
+                                card_key: str) -> dict:
     """用官方通道直接发一张「图片+按钮」卡片（供出图 handler 与按钮回调共用）。
+
+    ``data`` 可以是单张 bytes，也可以是**多页** ``list[bytes]`` —— 多页会由
+    ``OfficialChannel.send`` 的合并逻辑内嵌进**同一条** markdown 消息
+    （``_build_merged_card_segment`` 本来就遍历 ``image_datas``），按钮仍挂在那条
+    消息上：既满足「一处输出 = 一条消息」，也满足 2026-11-19 的「超长就分页」。
 
     ``ctx`` 必须含完整字段（openid/reply_ref），由调用方负责 attach 到 ContextVar
     （:func:`attach_official_ctx`）。返回 OfficialChannel.send 的结果 dict。
@@ -209,6 +215,7 @@ async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
     from src.plugins.qq_bridge.channel.base import Outgoing  # noqa: PLC0415
     from src.plugins.qq_bridge.channel import OFFICIAL, get_channel  # noqa: PLC0415
 
+    images = [d for d in (data if isinstance(data, (list, tuple)) else [data]) if d]
     kcmd = DOUPO_CARD_PREFIX + str(card_key)
     ctx["keyboard_cmd"] = kcmd
 
@@ -242,17 +249,21 @@ async def send_card_via_channel(ctx: dict, data: bytes, card_key: str) -> dict:
             "custom_buttons_arm_failed card=%s: %s: %s", card_key, type(e).__name__, e)
 
     try:
-        return await get_channel(OFFICIAL).send(ctx, Outgoing(images=[data], keyboard_cmd=kcmd))
+        return await get_channel(OFFICIAL).send(ctx, Outgoing(images=images, keyboard_cmd=kcmd))
     finally:
         if custom_token is not None:
             db.disarm_custom(custom_token)
 
 
-async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
+async def finish_card(matcher: Any, event: Any, data: bytes | list[bytes], card_key: str,
                       file_name: str = "doupo.png",
                       page: int | None = None,
                       total_pages: int | None = None) -> None:
     """出一张斗破/修仙卡片；官方通道在卡片下方挂对应功能按钮，NapCat 行为不变。
+
+    ``data`` 支持 ``list[bytes]``（2026-11-19 战斗回看「超长就分页」）：官方通道
+    内嵌成**一条** markdown 多图消息（按钮照挂），NapCat 则一条消息多个图片段。
+    单页传 bytes，行为与以前逐字节一致。
 
     ## 为什么需要这一层（2026-11-16）
 
@@ -280,9 +291,15 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
     按钮切到「上一页/下一页」哨兵；单页或不传则维持普通功能按钮，零行为变化。
     """
     raw = event.raw if isinstance(event, EvView) else event
+    datas = [d for d in (data if isinstance(data, (list, tuple)) else [data]) if d]
+    if not datas:
+        await matcher.finish()
+        return
     if not is_official(raw):
-        # NapCat：完全保持原行为（图片段直接 finish）
-        await matcher.finish(image_seg(event, data, file_name))
+        # NapCat：一条消息多个图片段（分页时就是这个路径；单页仍是原来那一段）
+        segs = [image_seg(event, d, file_name if i == 0 else "%d_%s" % (i + 1, file_name))
+                for i, d in enumerate(datas)]
+        await matcher.finish(*segs)
         return
 
     from src.plugins.qq_bridge.channel.base import (  # noqa: PLC0415
@@ -306,7 +323,7 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
 
             page_token = db.arm_page(int(page), int(total_pages))
             effective_key = "page:%d" % int(page)   # → keyboard_cmd "doupo:page:N"
-        ret = await send_card_via_channel(ctx, data, effective_key)
+        ret = await send_card_via_channel(ctx, datas, effective_key)
         if not (isinstance(ret, dict) and ret.get("ok")):
             raise RuntimeError("official_send_not_ok: %s" % (ret.get("reason") if isinstance(ret, dict) else type(ret).__name__))
         sent_via_channel = True
@@ -327,8 +344,10 @@ async def finish_card(matcher: Any, event: Any, data: bytes, card_key: str,
         # 已由 OfficialChannel.send 发出（图片+按钮一条），空 finish 仅结束 handler。
         await matcher.finish()
     else:
-        # 降级：走 NoneBot 原生发送纯图段（无按钮，但绝不丢图）。
-        await matcher.finish(image_seg(event, data, file_name))
+        # 降级：走 NoneBot 原生发送纯图段（无按钮，但绝不丢图；多页同一条消息）。
+        segs = [image_seg(event, d, file_name if i == 0 else "%d_%s" % (i + 1, file_name))
+                for i, d in enumerate(datas)]
+        await matcher.finish(*segs)
 
 
 async def finish_text(matcher: Any, event: Any, text: str,

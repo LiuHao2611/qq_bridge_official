@@ -39,7 +39,7 @@ __all__ = [
     "Canvas", "canvas", "fonts", "icons", "widgets", "theme",
     "Theme", "NEON", "LIGHT", "AUTO", "resolve_theme",
     "render", "render_sync", "render_raw", "list_templates", "PicRenderError",
-    "pic_cache", "PicCache", "make_key",
+    "split_pages", "pic_cache", "PicCache", "make_key",
 ]
 
 
@@ -169,6 +169,31 @@ def _config() -> dict:
 def enabled() -> bool:
     """自绘图片总开关（关闭时调用方应直接走纯文本）。"""
     return _config()["enable"]
+
+
+#: 支持「一张卡拆多页」的模板 → 该模板模块里的分页函数。
+#: 2026-11-19 用户「超长就分页」：战斗回看的回合数没有上限（HARD_ROUND_CAP=300），
+#: 26 回合就 5,200px；纯靠加高只会越来越没法看，必须按真实测量高度切页。
+#: 分页函数由模板自己实现（只有模板知道每块多高），本层只负责转发。
+_PAGE_SPLITTERS = {
+    "doupo_battle": _doupo_battle.split_pages,
+}
+
+
+def split_pages(template: str, data: dict, width: int | None = None,
+                **kw) -> list[dict]:
+    """把一份卡片数据切成多页数据（模板不支持分页时原样返回一页）。
+
+    调用方（``doupo.card``）拿到的仍是「每页一份 data」，逐页 ``render_sync``；
+    分页策略归模板所有，渲染层不复制任何高度常量。
+    """
+    name = (template or "").strip().lower()
+    if name not in _TEMPLATES:
+        raise PicRenderError("未知模板：%s（可用：%s）" % (template, ", ".join(list_templates())))
+    fn = _PAGE_SPLITTERS.get(name)
+    if fn is None:
+        return [data or {}]
+    return fn(data or {}, width=width, **kw)
 
 
 #: 渲染代码签名（进程内算一次）。2026-11-15：字体签名已进缓存 key，但**模板/画布

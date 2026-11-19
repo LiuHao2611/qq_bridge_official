@@ -14,6 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BR = os.path.join(ROOT, "src", "plugins", "doupo", "battle_review.py")
 CORE = os.path.join(ROOT, "src", "plugins", "doupo", "core.py")
 TPL = os.path.join(ROOT, "src", "plugins", "qq_bridge", "pic", "templates", "doupo_battle.py")
+GC = os.path.join(ROOT, "src", "game_compat.py")
 
 MUTATIONS = [
     ("阵营判据退回只看 taken", BR,
@@ -146,6 +147,38 @@ MUTATIONS = [
      '           f"｜{v[\'kind\']}｜{v[\'rounds\']}回合｜对手 {v[\'opponent\']}"]',
      '           f"｜{v[\'end_text\'] or v[\'kind\']}"\n'
      '           f"｜{v[\'rounds\']}回合｜对手 {v[\'opponent\']}"]'),
+    # ---- 分页（2026-11-19 用户「超长就分页」）----
+    # 完全不分页 → 26 回合又回到 4,964px 的长图
+    ("超长战报不分页", TPL,
+     '    if card_height(data, content_w) <= max_h:\n        return [data]',
+     '    if True:\n        return [data]'),
+    # 末页被丢掉 → 后面的回合凭空消失
+    ("分页丢最后一页", TPL,
+     '        out.append(page)\n    return out',
+     '        if n < total:\n            out.append(page)\n    return out'),
+    # 页码从 0 起 → 「第 0/3 页」/ 页数对不上
+    ("页码写错（从 0 起）", TPL,
+     '        page["page"] = {"index": n, "total": total,',
+     '        page["page"] = {"index": n - 1, "total": total,'),
+    # 续页也带结算区 → 每页都重复终局/输出/节点（越翻越长）
+    ("续页重复结算区", TPL,
+     '            for k in ("end", "kpis", "bars", "beats", "groups", "actions"):\n'
+     '                page.pop(k, None)',
+     '            for k in ("groups",):\n'
+     '                page.pop(k, None)'),
+    # 页数封顶时把尾巴全塞末页（实拍会变成 39,937px 的巨图）
+    ("封顶塞末页（巨图回归）", TPL,
+     '        per = (len(plan) + max_pages - 1) // max_pages\n'
+     '        slices = [(i, min(i + per, len(plan))) for i in range(0, len(plan), per)]',
+     '        slices = slices[:max_pages - 1] + [(slices[max_pages - 1][0], len(plan))]'),
+    # NapCat 只发第一页（分页等于白做）
+    ("NapCat 只发第一页", GC,
+     '        await matcher.finish(*segs)',
+     '        await matcher.finish(segs[0])'),
+    # 官方退回单图发送（其余页静默丢失）
+    ("官方只发第一张图", GC,
+     'Outgoing(images=images, keyboard_cmd=kcmd)',
+     'Outgoing(images=images[:1], keyboard_cmd=kcmd)'),
 ]
 
 
