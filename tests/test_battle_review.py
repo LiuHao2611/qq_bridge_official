@@ -66,6 +66,7 @@ from doupo import battle_review as br  # noqa: E402
 from doupo import card  # noqa: E402
 from doupo import button_dispatch  # noqa: E402
 from doupo import commands  # noqa: E402
+from doupo import config as cfg  # noqa: E402
 from doupo import core  # noqa: E402
 from doupo.store import Store  # noqa: E402
 
@@ -623,45 +624,55 @@ def test_damage_composition_and_end_state():
               for a in items),
           str([(a["raw"], a["dmg"], a["tags"]) for a in items][:3]))
 
-    # ---- 2. 战败：p["hp"] 已被重置成上限×0.7，终局必须显示 0 ----
+    # ---- 2. 战败：不归零，气血保底「上限 × LOSE_HP_FLOOR（5%）」 ----
+    # 用户 2026-11-19：「不要 0 血量，留百分之五就行」，且回看与人物卡必须是同一个数
     p = _player("q9")
     hp_max = int(core.stats(p)["体力"])
-    p["hp"] = int(hp_max * 0.7)   # 与 fight() 战败后的重置值一致
-    res = {"win": False, "rounds": 3, "taken": 99999, "hp_end": 0, "mp_end": 84,
-           "foe_hp_end": 7120, "foe_hp_max": 12000,
+    floor_hp = max(1, int(hp_max * cfg.LOSE_HP_FLOOR))
+    res = {"win": False, "rounds": 3, "taken": 99999, "hp_end": floor_hp,
+           "mp_end": 84, "foe_hp_end": 7120, "foe_hp_max": 12000, "downed": True,
            "log": [{"index": 1, "round": 1, "move": "兽击", "dmg": 99999,
                     "taken": True, "hp_after": -287, "mp_after": 84}]}
     snap = core.record_last_battle(p, "遭遇", res, opponent="血战佣兵")
     data = br.build_data(snap)
     rows = {r["label"]: r for r in (data.get("end") or {}).get("rows") or []}
-    check("终局气血 = 战斗结束值 0（不是战败回血的 70%）",
-          rows.get("我气血", {}).get("value") == 0, str(rows.get("我气血")))
+    check("战败气血 = 上限 5%（不是 0）",
+          rows.get("我气血", {}).get("value") == floor_hp and
+          abs(rows["我气血"]["value"] - hp_max * 0.05) <= 1,
+          f"{rows.get('我气血')} hp_max={hp_max}")
     check("终局斗气 = 结束值", rows.get("我斗气", {}).get("value") == 84,
           str(rows.get("我斗气")))
     check("终局敌方余血", rows.get("敌气血", {}).get("value") == 7120,
           str(rows.get("敌气血")))
-    check("战败原因是气血耗尽（不是「没斗气」）",
-          data["verdict"]["end_text"] == "气血耗尽", str(data["verdict"]))
-    check("战败原因代号正确", snap["summary"]["end_reason"] == "hp_zero",
+    check("被打到 0 以下 → 被小医仙所救",
+          data["verdict"]["end_text"] == "被小医仙所救", str(data["verdict"]))
+    check("收场原因代号正确", snap["summary"]["end_reason"] == "rescued",
           str(snap["summary"].get("end_reason")))
-    check("玩家面板血量不再被写成战后值",
-          snap["player"]["hp"] == 0, str(snap["player"]["hp"]))
-    # 纯文本兜底（出图失败时用户看到的就是它）必须同时保留玩法与败因
+    check("玩家面板血量 = 回看终局（同一个数）",
+          snap["player"]["hp"] == rows["我气血"]["value"],
+          f"{snap['player']['hp']} vs {rows['我气血']['value']}")
+    # 纯文本兜底（出图失败时用户看到的就是它）必须同时保留玩法与收场
     txt = br.text(snap)
     head = txt.splitlines()[0]
-    check("文本兜底同时保留玩法与败因",
-          "遭遇" in head and "气血耗尽" in head, head)
+    check("文本兜底同时保留玩法与收场",
+          "遭遇" in head and "被小医仙所救" in head, head)
 
-    # ---- 3. 还有血却输（切磋按血量比判负）→ 说「战败」，不许冒充气血耗尽 ----
+    # ---- 3. 还有血却输（血量比判负）→ 落荒而逃，不许写「被救」 ----
     res2 = {"win": False, "rounds": 2, "taken": 300, "hp_end": 640, "mp_end": 0,
-            "foe_hp_end": 900, "foe_hp_max": 1000,
+            "foe_hp_end": 900, "foe_hp_max": 1000, "downed": False,
             "log": [{"index": 1, "round": 1, "who": "v", "move": "紫云翼",
                      "dmg": 300, "hp_after": 640, "mp_after": 0}]}
-    snap2 = core.record_last_battle(p, "切磋", res2, opponent="对手")
+    snap2 = core.record_last_battle(p, "遭遇", res2, opponent="对手")
     d2 = br.build_data(snap2)
-    check("有血判负写「战败」", d2["verdict"]["end_text"] == "战败", str(d2["verdict"]))
+    check("有血判负写「落荒而逃」", d2["verdict"]["end_text"] == "落荒而逃",
+          str(d2["verdict"]))
     check("有血判负终局血量是剩余值",
           (d2["end"]["rows"][0]["value"]) == 640, str(d2["end"]["rows"][0]))
+    # 切磋零惩罚：谈不上逃，也谈不上被救
+    snap2b = core.record_last_battle(p, "切磋", res2, opponent="对手")
+    check("切磋判负写「甘拜下风」",
+          br.build_data(snap2b)["verdict"]["end_text"] == "甘拜下风",
+          str(snap2b["summary"].get("end_text")))
 
     # ---- 4. 力竭（300 回合熔断）判胜：必须显式标注，不许冒充击杀 ----
     res3 = {"win": True, "rounds": 300, "taken": 500, "hp_end": 300, "mp_end": 10,
@@ -681,6 +692,64 @@ def test_damage_composition_and_end_state():
           str(br.build_data(old)["groups"][0]["rows"]))
 
 
+def test_defeat_keeps_five_percent_and_matches_cards():
+    """战败不归零：气血 = 上限 5%，且「fight 结算值 / 存档 / 回看终局」同一个数。
+
+    用户 2026-11-19：「回看显示 0 血量，人物卡片显示还有血量」「不要 0 血量，
+    留百分之五就行」。旧版回看用 hp_end（-287 钳 0）、人物卡用 70% 重置值，
+    同一场战斗两个数 —— 这条门禁钉死「只许有一个数」。
+    """
+    p = _player("q5")
+    hp_max = int(core.stats(p)["体力"])
+    mon = dict(core.monster_scaled(p, core.cfg.MONSTERS[-1]))
+    mon["hp"] = 10 ** 6          # 打不动
+    mon["atk"] = 10 ** 6         # 一击必倒
+    mon["def"] = 0
+    res = core.fight(p, mon, rng=random.Random(1).random, roll_aid=False)
+    floor_hp = max(1, int(hp_max * cfg.LOSE_HP_FLOOR))
+    check("这一场确实输了", res["win"] is False, str(res.get("win")))
+    check("战败气血不归零（上限 5%）", int(p["hp"]) == floor_hp,
+          f"hp={p['hp']} floor={floor_hp} max={hp_max}")
+    check("fight 结算值 = 存档值", int(res["hp_end"]) == int(p["hp"]),
+          f"{res.get('hp_end')} vs {p['hp']}")
+    check("被真打到 0 以下 → downed", res.get("downed") is True, str(res.get("downed")))
+    snap = core.record_last_battle(p, "遭遇", res, opponent=str(mon["name"]))
+    data = br.build_data(snap)
+    end_hp = (data.get("end") or {}).get("rows", [{}])[0].get("value")
+    check("回看终局 = 存档值（不再是 0）", end_hp == int(p["hp"]),
+          f"end={end_hp} hp={p['hp']}")
+    check("收场写「被小医仙所救」", data["verdict"].get("end_text") == "被小医仙所救",
+          str(data["verdict"]))
+    check("战败卡给了下一步（服丹）", "服丹" in (data.get("tip") or ""),
+          str(data.get("tip")))
+    # 逐招末行的「余血」必须与终局同一个数（旧版这里是 0、终局是保底值 → 又两处对不上）
+    bubbles = data.get("rounds") or []
+    check("逐招末行余血 = 终局余血",
+          bool(bubbles) and bubbles[-1]["hp"] == int(p["hp"]),
+          f"footer={bubbles[-1]['hp'] if bubbles else None} hp={p['hp']}")
+    check("逐招末行余血不印 0",
+          bool(bubbles) and "余血 0/" not in bubbles[-1]["foot_l"],
+          str(bubbles[-1]["foot_l"]) if bubbles else "")
+
+    # 保底常量必须与 config 同源（battle_review 零依赖，镜像了一份）
+    check("保底比例与 cfg.LOSE_HP_FLOOR 一致",
+          abs(br.LEGACY_HP_FLOOR - float(cfg.LOSE_HP_FLOOR)) < 1e-9,
+          f"{br.LEGACY_HP_FLOOR} vs {cfg.LOSE_HP_FLOOR}")
+
+    # 旧档（上一版录的战报：气血 0 + 代号 hp_zero）按新口径换算，别再显示 0 血
+    old = dict(snap)
+    old["summary"] = dict(snap["summary"], end_reason="hp_zero", end_text="气血耗尽")
+    old["player"] = dict(snap["player"], hp=0)
+    old_data = br.build_data(old)
+    old_end = (old_data.get("end") or {}).get("rows") or [{}]
+    check("旧档 0 血按新规则换算成保底值",
+          old_end[0].get("value") == max(1, int(hp_max * br.LEGACY_HP_FLOOR)),
+          str(old_end[0]))
+    check("旧档收场文案改成「被小医仙所救」",
+          old_data["verdict"]["end_text"] == "被小医仙所救",
+          str(old_data["verdict"]))
+
+
 def test_end_bar_and_comp_are_drawn():
     """卡片必须真的画出终局条与构成行（数据有了但模板不画 = 用户还是看不见）。"""
     pic = card._load_pic()
@@ -689,16 +758,17 @@ def test_end_bar_and_comp_are_drawn():
         return
     p = _player("q8")
     hp_max = int(core.stats(p)["体力"])
-    p["hp"] = int(hp_max * 0.7)
-    res = {"win": False, "rounds": 1, "taken": 5000, "hp_end": 0, "mp_end": 84,
-           "foe_hp_end": 7120, "foe_hp_max": 12000,
+    floor_hp = max(1, int(hp_max * cfg.LOSE_HP_FLOOR))
+    mp_left = max(1, int(core.mp_max(p) * 0.4))   # 必须 ≤ 上限，否则条恒满测不出比例
+    res = {"win": False, "rounds": 1, "taken": 5000, "hp_end": floor_hp,
+           "mp_end": mp_left, "foe_hp_end": 7120, "foe_hp_max": 12000, "downed": True,
            "log": [
                {"index": 1, "round": 1, "move": "铁山拳", "dmg": 1800,
-                "raw": 3000, "def_cut": 1200, "hp_after": hp_max, "mp_after": 84,
+                "raw": 3000, "def_cut": 1200, "hp_after": hp_max, "mp_after": mp_left,
                 "foe_hp_after": 7120},
                {"index": 2, "round": 1, "move": "兽击", "dmg": 5000,
                 "taken": True, "atk_raw": 7000, "def_cut": 1200,
-                "absorbed": 800, "hp_after": -287, "mp_after": 84}]}
+                "absorbed": 800, "hp_after": -287, "mp_after": mp_left}]}
     snap = core.record_last_battle(p, "遭遇", res, opponent="血战佣兵")
     data = card.build_battle_data(snap)
     boxes = []
@@ -707,15 +777,13 @@ def test_end_bar_and_comp_are_drawn():
     labels = [b[0] for b in boxes]
     check("终局三条标签都画了",
           all(("n%d_l" % i) in labels for i in range(3)), str(labels)[:120])
-    # 条宽写在盒名里（n{i}_bar{px}）：归零的气血必须是空条，否则图形在撒谎
+    # 条宽写在盒名里（n{i}_bar{px}）：几何自检只认矩形，认不出「5% 画成满条」
     bars = {x.split("_bar")[0]: int(x.split("_bar")[1])
             for x in labels if "_bar" in x and x.startswith("n")}
     check("终局气血条画了", "n0" in bars, str(bars))
-    check("气血归零 = 空条（不画任何长度）", bars.get("n0") == 0, str(bars))
-    check("有剩余就画得出长度", bars.get("n1", 0) > 0 and bars.get("n2", 0) > 0,
-          str(bars))
-    check("条长按比例（不是恒定满条）",
-          bars.get("n1", 0) < bars.get("n2", 0), str(bars))
+    check("战败也留得下一口气（条不是空的）", bars.get("n0", 0) > 0, str(bars))
+    check("5% 就是一小截（比斗气/敌血都短）",
+          0 < bars.get("n0", 0) < bars.get("n1", 0) < bars.get("n2", 0), str(bars))
     check("终局数值盒画了 3 个",
           len([x for x in labels if x.startswith("n") and x.endswith("_v")]) == 3,
           str([x for x in labels if x.startswith("n")]))
@@ -740,6 +808,25 @@ def test_end_bar_and_comp_are_drawn():
     check("补料后的卡几何 0 问题", not problems, " | ".join(problems[:5]))
     check("补料后的卡能出图", png.startswith(b"\x89PNG") and img.width == 720,
           f"size={img.size}")
+
+    # 「0 值 = 空条」这条门禁换个行继续守：击杀后敌气血归零，条必须是空的
+    p2 = _player("q7")
+    win_res = {"win": True, "rounds": 2, "taken": 500, "hp_end": 3000, "mp_end": 900,
+               "foe_hp_end": 0, "foe_hp_max": 12000,
+               "log": [{"index": 1, "round": 1, "move": "铁山拳", "dmg": 900,
+                        "raw": 1200, "def_cut": 300, "hp_after": 3000,
+                        "mp_after": 900, "foe_hp_after": 0}]}
+    snap_win = core.record_last_battle(p2, "遭遇", win_res, opponent="X")
+    boxes2 = []
+    png2 = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                           width=720, data=card.build_battle_data(snap_win),
+                           boxes=boxes2)
+    bars2 = {x.split("_bar")[0]: int(x.split("_bar")[1])
+             for x in [b[0] for b in boxes2] if "_bar" in x and x.startswith("n")}
+    check("击杀后敌气血 0 = 空条（不画长度）", bars2.get("n2") == 0, str(bars2))
+    check("胜场收场写「击杀对手」",
+          br.build_data(snap_win)["verdict"]["end_text"] == "击杀对手",
+          str(br.build_data(snap_win)["verdict"]))
 
 
 def test_battle_review_text_after_roundtrip():

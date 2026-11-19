@@ -29,6 +29,16 @@ from __future__ import annotations
 BEAT_LIMIT = 5
 #: 逐招明细里每条最多带几个词条（再多就该做减法）。
 TAG_LIMIT = 4
+#: 战败保底气血比例——必须等于 ``cfg.LOSE_HP_FLOOR``。
+#: 本模块是零依赖纯数据层（不 import config），所以在这里镜像一份常量；
+#: 门禁 ``test_battle_review.py::test_defeat_keeps_five_percent_and_matches_cards``
+#: 断言两者相等，改配置不改这里会直接红。
+LEGACY_HP_FLOOR = 0.05
+#: 旧档（2026-11-19 之前录的战报）收场代号 → 新文案。
+#: 旧版战败把气血写成 0 且记 ``hp_zero``；新规则是「保底 5% + 被小医仙所救」，
+#: 展示时按新口径换算，避免玩家点开旧战报又看到「0 血 / 气血耗尽」。
+_LEGACY_END = {"hp_zero": ("rescued", "被小医仙所救"),
+               "lose": ("fled", "落荒而逃")}
 
 
 def _i(v, default=0) -> int:
@@ -145,8 +155,19 @@ def totals(battle: dict) -> dict:
     }
 
 
+def _end_of(battle: dict) -> tuple[str, str]:
+    """(收场代号, 收场文案)。旧档按新口径换算，见 ``_LEGACY_END``。"""
+    s = battle.get("summary") or {}
+    reason = _s(s.get("end_reason"), "")
+    text = _s(s.get("end_text"), "")
+    if reason in _LEGACY_END:
+        return _LEGACY_END[reason]
+    return reason, text
+
+
 def verdict_info(battle: dict) -> dict:
     s = battle.get("summary") or {}
+    reason, end_text = _end_of(battle)
     return {
         "win": bool(battle.get("win")),
         "kind": _s(battle.get("kind"), "战斗"),
@@ -154,8 +175,8 @@ def verdict_info(battle: dict) -> dict:
         "rounds": _i(battle.get("rounds")),
         # 2026-11-19 熔断：300 回合脏数据判定，必须显式标出来，不能冒充正常取胜
         "exhausted": bool(s.get("exhausted")),
-        # 收场原因（气血耗尽 / 力竭判负 / 击杀对手…）：玩家不该靠猜
-        "end_text": _s(s.get("end_text"), ""),
+        # 收场原因（被小医仙所救 / 落荒而逃 / 击杀对手…）：玩家不该靠猜
+        "end_text": end_text,
     }
 
 
@@ -175,20 +196,23 @@ def end_state(battle: dict) -> dict:
         return {}
     hp_max = max(0, _i(pl.get("hp_max")))
     mp_max = max(0, _i(pl.get("mp_max")))
+    reason, end_text = _end_of(battle)
+    hp_val = max(0, _i(pl.get("hp")))
+    if reason == "rescued" and hp_val <= 0 and hp_max > 0:
+        # 旧档战败记的是 0 血（当时还没有保底规则）：按新口径换算成保底值，
+        # 否则玩家点开旧战报又看到「0 血」，跟新规则打架。
+        hp_val = max(1, int(hp_max * LEGACY_HP_FLOOR))
     foe_hp = s.get("foe_hp_end")
     rows = [
-        {"label": "我气血", "value": max(0, _i(pl.get("hp"))), "max": hp_max,
-         "tone": "mine"},
+        {"label": "我气血", "value": hp_val, "max": hp_max, "tone": "mine"},
         {"label": "我斗气", "value": max(0, _i(pl.get("mp"))), "max": mp_max,
          "tone": "mp"},
     ]
     if foe_hp is not None:
         rows.append({"label": "敌气血", "value": max(0, _i(foe_hp)),
                      "max": max(0, _i(s.get("foe_hp_max"))), "tone": "foe"})
-    return {"text": _s(s.get("end_text"), ""),
-            "reason": _s(s.get("end_reason"), ""),
-            "win": bool(battle.get("win")),
-            "rows": rows}
+    return {"text": end_text, "reason": reason,
+            "win": bool(battle.get("win")), "rows": rows}
 
 
 def kpi_cells(battle: dict) -> list[dict]:
@@ -492,7 +516,10 @@ def build_data(battle: dict) -> dict:
             {"name": "战况", "rows": rows},
             {"name": "逐招明细", "rows": action_rows(battle)},
         ],
-        "tip": "发「战斗评价」听一句毒舌 · 只保留最后一场战斗",
+        "tip": ("发「战斗评价」听一句毒舌 · 只保留最后一场战斗"
+                if battle.get("win") else
+                # 战败卡给下一步动作（别的游戏战败界面都会给「重来」入口）
+                "先「服丹」回血再战 · 只保留最后一场战斗"),
     }
 
 

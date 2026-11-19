@@ -146,15 +146,40 @@ def _clear_bag(p):
 
 
 def test_auto_pill_on_low_hp():
+    """低血自动服药：证据看战斗过程快照，**不许拿战后血量当判据**。
+
+    2026-11-19 口径变更（用户：「不要 0 血量，留百分之五就行」）：战败结算的
+    气血是「上限 × ``cfg.LOSE_HP_FLOOR``」，比战前 10% 残血还低 —— 这是正确
+    行为。旧断言 ``p["hp"] > hp0`` 靠的是「战败重置成上限 70%」那条已被删除的
+    规则，留着它会把用户的保底规则判成回归。
+    """
     p = _p(40, 0.10, 1.0)
     _clear_bag(p)
     core.add_item(p, "回春散", 3)
-    hp0 = p["hp"]
     mon = _mon(p, hp=10 ** 9, atk=1)
     r = core.fight(p, mon, rng=lambda: 0.9, roll_aid=False)   # 0.9：不出闪避/失误
     assert r["auto_pills"]["hp"] >= 1, r["auto_pills"]
     assert core.count_item(p, "回春散") < 3, "药没真的扣背包"
-    assert p["hp"] > hp0, "吃了药但血没涨"
+
+    # 真凭据①：log 里每条「服药」都写了实际回血量，必须 > 0
+    log = r["log"]
+    pills = [e for e in log if e.get("kind") == "服药" and e.get("pill") == "回春散"]
+    assert pills, "药扣了背包却没打服药记录"
+    for i, e in enumerate(log):
+        if e.get("kind") != "服药" or e.get("pill") != "回春散":
+            continue
+        assert int(e.get("amount") or 0) > 0, ("吃了药但一点血没回", e)
+        # 真凭据②：该条快照的余血必须高于服药前一条快照（过程内单调上涨）
+        if i:
+            assert int(e["hp_after"]) > int(log[i - 1]["hp_after"]), (
+                "服药快照余血没涨：%s → %s" % (log[i - 1]["hp_after"], e["hp_after"]))
+
+    # 真凭据③：战后血量与结算值同源（回看/人物卡读的就是这个数）
+    assert int(p["hp"]) == int(r["hp_end"]), "战后气血与结算值不是同一个数"
+    if not r["win"]:
+        floor = max(1, int(core.stats(p)["体力"] * cfg.LOSE_HP_FLOOR))
+        assert int(p["hp"]) == floor, (
+            "战败气血没走保底 5%%：%s ≠ %s" % (p["hp"], floor))
 
 
 def test_locked_pill_not_used():
