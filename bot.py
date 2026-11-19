@@ -273,5 +273,16 @@ from src.plugins.qq_bridge import register  # noqa: E402
 
 register()
 
+# DIY 硬件行情（2026-11-19）：独立 matcher，priority=5 + block=True。
+# 注册放在入口而不是 qq_bridge/__init__.py —— 那个文件已 406KB，不再增长。
+# 失败只打印，不影响主流程启动（行情卡不可用 ≠ 机器人不可用）。
+try:
+    from src.plugins.qq_bridge.hardware import register as register_hardware  # noqa: E402
+
+    register_hardware()
+except Exception as _e:  # noqa: BLE001
+    print("[qq_bridge] hardware register failed: %s: %s" % (type(_e).__name__, _e),
+          flush=True)
+
 if __name__ == "__main__":
     nonebot.run()
