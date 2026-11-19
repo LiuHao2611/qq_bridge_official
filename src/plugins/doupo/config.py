@@ -602,8 +602,10 @@ def recipe_impl(rec: dict) -> str:
     # 气血/斗气类：``pct`` 存在时必须把它写进承诺，否则玩家在高境界服下
     # 「回春散 +200」会以为是假药（2026-11-19 掉落改造，实际按上限百分比给）。
     if eff in ("hp", "mp") and float(rec.get("pct") or 0) > 0:
-        base = IMPL_BY_EFFECT[eff] % val
-        return "%s 或上限 %d%%（取高）" % (base, int(round(float(rec["pct"]) * 100)))
+        # 卡面按字符折行，"气血 +200 或上限 12%（取高）" 会被拆成「上限 1 / 2%」，
+        # 数字与百分号分家。压到最短：去空格 + 省「（取高）」（「或」已表达取高）。
+        base = (IMPL_BY_EFFECT[eff] % val).replace(" ", "")
+        return "%s/上限%d%%" % (base, int(round(float(rec["pct"]) * 100)))
     tpl = IMPL_BY_EFFECT.get(eff)
     if tpl:
         # skill 等模板没有 %d（「用于升级斗技」），不能盲目套 %
