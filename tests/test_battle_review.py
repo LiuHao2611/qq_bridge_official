@@ -466,6 +466,32 @@ def _check_boxes(bounds, boxes, min_gap: int = 2) -> list[str]:
     return problems
 
 
+def test_empty_foe_bubble_explains_kill_vs_idle():
+    """空敌方列要说人话（2026-11-19 用户「第四回合敌人无动作，是被控还是显示有问题」）：
+    击杀换敌标「击杀·换敌」；真没出手标「无动作」；被控因有敌方 log 不进此判断。"""
+    # 击杀：我方一条把对手打到 0 血，敌方列空
+    kill = {"rounds": 1, "log": [
+        {"index": 1, "round": 1, "move": "普攻", "dmg": 5389, "foe_hp_after": 0},
+    ]}
+    kb = br.round_bubbles(kill)
+    check("击杀换敌标记", kb[0].get("empty_foe") == "击杀·换敌", str(kb[0].get("empty_foe")))
+    check("击杀不改变列结构", kb[0]["foe"] == [], str(kb[0]["foe"]))
+    # 真无动作：我方出手但对手还有血，敌方列空（缺 foe_hp_after → 非 0）
+    idle = {"rounds": 1, "log": [
+        {"index": 1, "round": 1, "move": "普攻", "dmg": 100, "foe_hp_after": 500},
+    ]}
+    check("真无动作标记", br.round_bubbles(idle)[0].get("empty_foe") == "无动作",
+          str(br.round_bubbles(idle)[0].get("empty_foe")))
+    # 被控：core 会写 kind=被控 的敌方条目，列非空，不该被标成击杀
+    ctrl = {"rounds": 1, "log": [
+        {"index": 1, "round": 1, "move": "普攻", "dmg": 100, "foe_hp_after": 500},
+        {"index": 2, "round": 1, "move": "被控", "dmg": 0, "taken": True, "miss": True},
+    ]}
+    ctr = br.round_bubbles(ctrl)[0]
+    check("被控不误标击杀", ctr.get("empty_foe") == "无动作" and len(ctr["foe"]) == 1,
+          str((ctr.get("empty_foe"), ctr["foe"])))
+
+
 def test_round_bubbles_group_by_round_and_side():
     """逐招明细一回合一个气泡：按连续回合分组，左右两列分别装我方 / 敌方行为。"""
     battle = {"rounds": 4, "log": [
