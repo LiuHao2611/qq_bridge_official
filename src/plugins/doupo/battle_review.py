@@ -295,6 +295,25 @@ def action_items(battle: dict) -> list[dict]:
     return out
 
 
+def round_bubbles(battle: dict) -> list[dict]:
+    """按回合把逐招聚成气泡数据：一个回合一条，左右两列分别是双方行为。
+
+    ``action_items`` 的 ``round`` 已是多敌拉平后的连续回合号（见 display_rounds），
+    所以这里直接按它分组即可。``who='v'`` 的切磋对手写成「对方」，也归到敌方列。
+
+    结构：``[{"round": n, "mine": [action, ...], "foe": [action, ...]}, ...]``。
+    这是**纯增量字段**：``groups`` / ``actions`` / 文本兜底全部保持原样，
+    复用 doupo_battle 骨架的 doupo_ruin 看不到 rounds，继续走旧路径。
+    """
+    buckets: dict[int, dict] = {}
+    for a in action_items(battle):
+        rnd = _i(a.get("round"), 1)
+        b = buckets.setdefault(rnd, {"round": rnd, "mine": [], "foe": []})
+        # 只按阵营分列，不改 action 本身（值/词条/配色都沿用 action_items 的口径）
+        b["mine" if a.get("side") == "我方" else "foe"].append(a)
+    return [buckets[k] for k in sorted(buckets)]
+
+
 def action_rows(battle: dict) -> list[str]:
     """逐招明细的纯文本形态（``text()`` 兜底与旧分组渲染共用同一条数据源）。"""
     rows = []
@@ -334,6 +353,7 @@ def build_data(battle: dict) -> dict:
         "bars": damage_bars(battle),
         "beats": beats(battle),
         "actions": action_items(battle),
+        "rounds": round_bubbles(battle),
         "groups": [
             {"name": "战况", "rows": rows},
             {"name": "逐招明细", "rows": action_rows(battle)},

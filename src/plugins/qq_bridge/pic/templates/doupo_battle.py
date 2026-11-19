@@ -52,7 +52,15 @@ KPI_GAP = 10              # 格与格的横向间距
 KPI_AFTER = 14
 BAR_ROW = 32              # 一条占比条 + 其标签的高度
 BEAT_H = 30               # 一个关键节点的高度
-ACT_H = 28                # 一条逐招明细的高度
+ACT_H = 28                # 一条逐招明细的高度（旧平面列表兜底用）
+# ---- 回合气泡（2026-11-19 用户：一回合一个气泡，左右列出敌我行为）----
+BUBBLE_PAD = 12           # 气泡内边距
+BUBBLE_GAP = 10           # 气泡之间的间距
+BUBBLE_HEADER_H = FS_GROUP + 8    # 回合号行
+BUBBLE_SIDE_H = S.FS_LABEL + 8    # 我方 / 敌方 列头行
+BUBBLE_ROW_GAP = 8        # 同一列内相邻动作间距
+BUBBLE_TAG_H = S.FS_LABEL + 6     # 词条说明行
+BUBBLE_COL_GAP = 16       # 左右两列之间的间距（不是用空格凑）
 CAP_BEFORE = 14           # 区块标题与其上方内容的间距（标题不能贴在上一块上）
 CAP_AFTER = 8             # 区块标题与其下方内容的间距
 CHIP_MAX_FS = S.FS_LABEL  # 16，关键节点的回合/类型 chip
@@ -84,6 +92,12 @@ _DEMO = {
          "value": "2,107", "tone": "mine", "tags": "暴击·斗气-40"},
         {"idx": 2, "round": 1, "side": "敌方", "move": "兽击",
          "value": "318", "tone": "foe", "tags": "防御减伤"},
+    ],
+    "rounds": [
+        {"round": 1, "mine": [{"move": "狂狮怒罡", "value": "2,107",
+                               "tone": "mine", "tags": "暴击·斗气-40"}],
+         "foe": [{"move": "兽击", "value": "318",
+                  "tone": "foe", "tags": "防御减伤"}]},
     ],
     "groups": [
         {"name": "战况", "rows": ["战力 8,214｜境 lv37｜气血 412/1,000｜斗气 40/600",
@@ -122,7 +136,8 @@ def _rich(data: dict) -> bool:
     ``doupo_ruin`` 只传 title/subtitle/groups/tip，因此永远走旧路径 —— 这是
     「同一份骨架给两张卡复用」的兼容边界，改动这里前先看 doupo_ruin.py。
     """
-    return any(data.get(k) for k in ("verdict", "kpis", "bars", "beats", "actions"))
+    return any(data.get(k) for k in
+               ("verdict", "kpis", "bars", "beats", "actions", "rounds"))
 
 
 def _wrap(s: str, max_w: int) -> list[str]:
@@ -150,6 +165,38 @@ def _tone_grad(p: dict, tone: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------- 布局
+def _bubble_plan(rounds: list[dict], content_w: int) -> list[dict]:
+    """回合气泡的测画共用计划：先量测再定高，绘制阶段只读计划不再猜坐标。"""
+    col_w = (content_w - 2 * BUBBLE_PAD - BUBBLE_COL_GAP) // 2
+    plan: list[dict] = []
+    for r in rounds:
+        sides: dict[str, list[dict]] = {}
+        for key in ("mine", "foe"):
+            entries: list[dict] = []
+            for a in (r.get(key) or []):
+                if not isinstance(a, dict):
+                    continue
+                val = _gs(a.get("value"), "—")
+                val_w = _w(val, FS_NUM, "bold")
+                room = max(24, col_w - val_w - 8)
+                mv = _fit(_gs(a.get("move"), "出手"), room, FS_BODY, "regular")
+                tags = _fit(_gs(a.get("tags"), ""), col_w, S.FS_LABEL, "regular")
+                rh = LINE_H + (BUBBLE_TAG_H if tags else 0) + BUBBLE_ROW_GAP
+                entries.append({"move": mv, "value": val, "tags": tags,
+                                "tone": _gs(a.get("tone"), "mine"), "h": rh})
+            sides[key] = entries
+        col_h = max(
+            sum(e["h"] for e in sides["mine"]),
+            sum(e["h"] for e in sides["foe"]),
+            BUBBLE_ROW_GAP + 8,   # 空列也保留一行高度，气泡不会一边塌掉
+        )
+        plan.append({"round": _gi(r.get("round")), "sides": sides,
+                     "col_w": col_w, "col_h": col_h,
+                     "h": BUBBLE_PAD + BUBBLE_HEADER_H + BUBBLE_SIDE_H
+                          + col_h + BUBBLE_PAD})
+    return plan
+
+
 def _cap(label: str, after: int = CAP_AFTER) -> tuple:
     """区块标题。高度含**前置留白**：标题不许贴在上一块内容上（实拍卡踩过）。"""
     return ("cap", str(label), CAP_BEFORE + FS_GROUP + after)
@@ -207,7 +254,15 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
 
     acts = [a for a in (data.get("actions") or []) if isinstance(a, dict)]
     act_name = _gs(groups[-1].get("name") if groups else "逐招明细", "逐招明细")
-    if acts:
+
+    # 回合气泡优先；老数据（如缓存的旧卡参数）只有 actions 时退回平面列表。
+    bubbles = [r for r in (data.get("rounds") or []) if isinstance(r, dict)]
+    if bubbles:
+        plan = _bubble_plan(bubbles, content_w)
+        blocks.append(_cap(act_name))
+        blocks.append(("rounds", plan,
+                       sum(b["h"] for b in plan) + BUBBLE_GAP * (len(plan) - 1)))
+    elif acts:
         blocks.append(_cap(act_name))
         blocks.append(("act", acts, ACT_H * len(acts)))
     elif groups:
@@ -231,7 +286,7 @@ def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
     label = "胜" if win else "败"
     c.text((x0 + cw // 2, y + ch // 2), label, size=FS_TITLE, color=_WHITE,
            role="bold", bold=True, anchor="mm")
-    rec("verdict", label, x0 + cw // 2 - FS_TITLE // 2, y + ch // 2, FS_TITLE)
+    rec("verdict", label, x0 + cw // 2 - FS_TITLE // 2, y + ch // 2, FS_TITLE, role="bold")
 
     tx = x0 + cw + 18
     max_w = x0 + content_w - tx
@@ -239,7 +294,7 @@ def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
     head = _fit(head, max_w, S.FS_KEY, "bold")
     c.text((tx, y + 18), head, size=S.FS_KEY, color=p["text_color"],
            role="bold", bold=True, anchor="lm")
-    rec("vhead", head, tx, y + 18, S.FS_KEY)
+    rec("vhead", head, tx, y + 18, S.FS_KEY, role="bold")
 
     sub = "对手 " + _gs(v.get("opponent"), "未知对手")
     sub = _fit(sub, max_w, FS_BODY, "regular")
@@ -274,7 +329,7 @@ def _draw_kpi(c: Canvas, kpis: list, x0: int, y: int, content_w: int,
         c.text((cx + 14, y + 48), val, size=FS_TITLE,
                color=_tone_color(p, _gs(k.get("tone"), "plain")),
                role="bold", bold=True, anchor="lm")
-        rec("k%d_v" % i, val, cx + 14, y + 48, FS_TITLE)
+        rec("k%d_v" % i, val, cx + 14, y + 48, FS_TITLE, role="bold")
 
 
 def _draw_bars(c: Canvas, bars: list, x0: int, y: int, content_w: int,
@@ -379,7 +434,7 @@ def _draw_acts(c: Canvas, acts: list, x0: int, y: int, content_w: int,
         c.text((vx, ry + 12), val, size=FS_NUM,
                color=_tone_color(p, _gs(a.get("tone"), "mine")),
                role="bold", bold=True, anchor="rm")
-        rec("a%d_v" % i, val, vx - val_w, ry + 12, FS_NUM)
+        rec("a%d_v" % i, val, vx - val_w, ry + 12, FS_NUM, role="bold")
 
         tags = _gs(a.get("tags"), "")
         if not tags:
@@ -392,6 +447,62 @@ def _draw_acts(c: Canvas, acts: list, x0: int, y: int, content_w: int,
         c.text((tx, ry + 13), tags, size=S.FS_LABEL, color=p["dim_color"],
                role="regular", anchor="lm")
         rec("a%d_t" % i, tags, tx, ry + 13, S.FS_LABEL)
+
+
+def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
+                 content_w: int, p: dict, rec) -> None:
+    """一回合一个气泡：顶部回合号，内部左右两列分别是「我方 / 敌方」的行为。"""
+    for ri, b in enumerate(plan):
+        by = y + sum(x["h"] for x in plan[:ri]) + BUBBLE_GAP * ri
+        bh = b["h"]
+        c.rounded_rect((x0, by, x0 + content_w, by + bh), radius=12,
+                       fill=p["cell_bg"], outline=p["cell_line"], width=1)
+
+        head_txt = "回合 %d" % b["round"]
+        hx = x0 + BUBBLE_PAD
+        hy = by + BUBBLE_PAD + FS_GROUP // 2
+        c.text((hx, hy), head_txt, size=FS_GROUP, color=p["accent_color"],
+               role="regular", anchor="lm")
+        rec("r%d_h" % ri, head_txt, hx, hy, FS_GROUP)
+        line_x = hx + _w(head_txt, FS_GROUP, "regular") + 10
+        if line_x < x0 + content_w - BUBBLE_PAD - 8:
+            c.line((line_x, hy, x0 + content_w - BUBBLE_PAD, hy),
+                   fill=p["line_color"], width=1)
+
+        col_w = b["col_w"]
+        col_x = {
+            "mine": x0 + BUBBLE_PAD,
+            "foe": x0 + BUBBLE_PAD + col_w + BUBBLE_COL_GAP,
+        }
+        side_y = by + BUBBLE_PAD + BUBBLE_HEADER_H + S.FS_LABEL // 2
+        for key, label, tone in (("mine", "我方", "mine"), ("foe", "敌方", "foe")):
+            cx = col_x[key]
+            c.text((cx, side_y), label, size=S.FS_LABEL,
+                   color=_tone_color(p, tone), role="regular", anchor="lm")
+            rec("r%d_%s_s" % (ri, key), label, cx, side_y, S.FS_LABEL)
+
+        body_y = by + BUBBLE_PAD + BUBBLE_HEADER_H + BUBBLE_SIDE_H
+        for key in ("mine", "foe"):
+            cx = col_x[key]
+            right = cx + col_w
+            ey = body_y
+            for ei, e in enumerate(b["sides"][key]):
+                cy = ey + LINE_H // 2
+                c.text((cx, cy), e["move"], size=FS_BODY, color=p["text_color"],
+                       role="regular", anchor="lm")
+                rec("r%d_%s%d_m" % (ri, key, ei), e["move"], cx, cy, FS_BODY)
+                vw = _w(e["value"], FS_NUM, "bold")
+                c.text((right, cy), e["value"], size=FS_NUM,
+                       color=_tone_color(p, e["tone"]), role="bold", bold=True,
+                       anchor="rm")
+                rec("r%d_%s%d_v" % (ri, key, ei), e["value"], right - vw, cy,
+                    FS_NUM, role="bold")
+                if e["tags"]:
+                    ty = ey + LINE_H + BUBBLE_TAG_H // 2
+                    c.text((cx, ty), e["tags"], size=S.FS_LABEL,
+                           color=p["dim_color"], role="regular", anchor="lm")
+                    rec("r%d_%s%d_t" % (ri, key, ei), e["tags"], cx, ty, S.FS_LABEL)
+                ey += e["h"]
 
 
 def _sword_glyph(c: Canvas, cx: int, cy: int, color: str) -> None:
@@ -421,10 +532,11 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                    fill=p["card_color"], outline=p["border_color"], width=1,
                    fill_alpha=_card_alpha(t) * 255 // 100)
 
-    def rec(label, txt, x, y, size, anchor="lm"):
+    def rec(label, txt, x, y, size, anchor="lm", role="regular"):
         if boxes is None:
             return
-        w = _w(txt, size, "regular") if txt else 0
+        # 度量必须与绘制同 role：粗体数值用 regular 量会低估宽度，check_boxes 假通过
+        w = _w(txt, size, role) if txt else 0
         hh = int(size)
         if anchor == "lm":
             bb = (x, y - hh // 2, x + w, y + hh // 2)
@@ -472,6 +584,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             _draw_fact(c, payload, x0, y, content_w, p, rec)
         elif kind == "act":
             _draw_acts(c, payload, x0, y, content_w, p, rec)
+        elif kind == "rounds":
+            _draw_rounds(c, payload, x0, y, content_w, p, rec)
         elif kind == "cap":
             cy = y + CAP_BEFORE + FS_GROUP // 2
             c.rounded_rect((x0 + 1, cy - FS_GROUP // 2 + 3, x0 + 5,
