@@ -86,12 +86,32 @@ MUTATIONS = [
     ("终局退回读战后重置血量", CORE,
      '    hp_show = int(_hp_end) if _hp_end is not None else int(p.get("hp") or 0)',
      '    hp_show = int(p.get("hp") or 0)'),
-    # 败因不判气血归零 → 统一写「战败」，用户还得自己猜
-    ("败因不判气血耗尽", CORE,
-     '    elif int(hp_show) <= 0:\n'
-     '        end_reason, end_text = "hp_zero", "气血耗尽"',
+    # 败因不判 downed → 被打到 0 以下也写成「落荒而逃」（少了被救的收场）
+    ("败因不判 downed", CORE,
+     '    elif downed:\n'
+     '        end_reason, end_text = "rescued", "被小医仙所救"',
      '    elif False:\n'
-     '        end_reason, end_text = "hp_zero", "气血耗尽"'),
+     '        end_reason, end_text = "rescued", "被小医仙所救"'),
+    # 战败气血退回归零（用户 2026-11-19 明确否掉的那个显示）
+    ("战败气血归零", CORE,
+     '    hp_end = max(1, int(hp)) if win else floor_hp',
+     '    hp_end = max(0, int(hp))'),
+    # 战败后又用「上限×0.7」回血 → 回看与人物卡两个数（用户报的正是这个）
+    ("战败偷偷回血到 70%", CORE,
+     '    p["hp"] = hp_end\n    p["mp"] = mp',
+     '    p["hp"] = int(st["体力"] * 0.7)\n    p["mp"] = mp'),
+    # 不回填致死那几条 log 的气血快照 → 逐招末行写 0、终局写 5%（又两处对不上）
+    ("逐招末行余血不回填", CORE,
+     '            e["hp_after"] = hp_end',
+     '            e["hp_after"] = 0'),
+    # 旧档（气血 0 + hp_zero）不做新口径换算 → 点开旧战报又看到「0 血」
+    ("旧档 0 血不换算", BR,
+     '    if reason == "rescued" and hp_val <= 0 and hp_max > 0:',
+     '    if False:'),
+    # 保底常量与 config 脱钩（镜像常量漂移）
+    ("保底常量漂移", BR,
+     'LEGACY_HP_FLOOR = 0.05',
+     'LEGACY_HP_FLOOR = 0.06'),
     # 每回合不统计「我受」→ 抬头只剩敌受，看不出自己掉了多少
     ("每回合不算我受伤害", BR,
      '        if side == "foe":\n'

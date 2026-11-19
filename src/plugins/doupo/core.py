@@ -1285,14 +1285,28 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         ratio_m = m_hp / max(1, int(mon["hp"]))
         win = ratio_p > ratio_m
         exhausted = True
-    # 回看卡「终局」：先留住**战斗结束时**的真实血/斗气，再改写存档
-    # （战败会把 p["hp"] 重置成上限×0.7，回看若读 p 就显示成「还有大半管血却判负」，
-    # 2026-11-19 用户实拍质疑「明明还有血量怎么算失败」正是这个假象）。
-    hp_end = max(0, int(hp))
+    # 回看卡「终局」：先留住**战斗结束时**的真实血/斗气，再改写存档。
+    # 2026-11-19 用户：「回看显示 0 血量，人物卡片显示还有血量」—— 旧版回看读
+    # hp_end（真值，可能 -287），人物卡读战败重置的 70%，两处对不上。现在统一：
+    # 战败**不归零**，结算就是「上限 × LOSE_HP_FLOOR（5%）」，回看卡与人物卡
+    # 用同一个数；`downed` 只用来挑收场文案（被打到 0 以下 = 差点没命 = 被救）。
+    downed = int(hp) <= 0
+    floor_hp = max(1, int(st["体力"] * cfg.LOSE_HP_FLOOR))
+    hp_end = max(1, int(hp)) if win else floor_hp
     mp_end = max(0, int(mp))
     foe_hp_end = max(0, int(m_hp))
-    p["hp"] = max(0 if not win else 1, hp)
+    p["hp"] = hp_end
     p["mp"] = mp   # 斗气结转：写回本场消耗后的剩余值，不再强制回满
+    if downed:
+        # 战败收尾：把「被打到 0 以下」那几条 log 的气血快照统一成保底值。
+        # 不改就是逐招末行写「余血 0」、终局块写「余血 832」——正是用户 2026-11-19
+        # 报的「两处对不上」。保底规则下，那一刻的真实剩余就是这 5%。
+        for e in reversed(dmg_log):
+            if e.get("hp_after") is None:
+                break
+            if int(e["hp_after"]) > 0:
+                break
+            e["hp_after"] = hp_end
 
     # 贵人相助：毫发无伤、1 回合速胜，胜负结算照常走下方 win 分支。
     shown_rounds = max(1, rounds)
@@ -1306,6 +1320,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 终局快照：战斗结束那一刻的真实血/斗气（不是战后重置值），回看卡据此
         # 显示「气血归零而败」而不是误导性的战后血量。
         "hp_end": hp_end, "mp_end": mp_end, "foe_hp_end": foe_hp_end,
+        # downed：这一场有没有被真打到气血 0 以下（判负的直接原因）。
+        # 只影响收场文案（被小医仙所救 / 落荒而逃），不参与任何数值结算。
+        "downed": bool(downed),
         # 对手血量上限：回看卡「终局」条要按比例画条，没有分母就画不出形变
         "foe_hp_max": max(0, int(mon.get("hp") or 0)),
         "exhausted": bool(exhausted),
@@ -1324,7 +1341,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         res.update(exp=exp, gold=gold, drops=_roll_drops(p, rng, mon))
     else:
         p["losses"] = int(p.get("losses", 0)) + 1
-        p["hp"] = int(st["体力"] * (1 - cfg.LOSE_HP_ON_DEFEAT))
+        # 气血已在上面统一成「上限 × LOSE_HP_FLOOR」，这里不再二次改写：
+        # 回看卡的终局条与人物卡必须是同一个数（2026-11-19 用户指出两处不一致）。
         res["hp_after"] = p["hp"]
     return res
 
@@ -1469,6 +1487,7 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
         "hp_end": _last.get("hp_end"), "mp_end": _last.get("mp_end"),
         "foe_hp_end": _last.get("foe_hp_end"),
         "foe_hp_max": int((_last.get("mon") or {}).get("hp") or 0),
+        "downed": bool(_last.get("downed")),
         "exhausted": bool(_last.get("exhausted")),
         "fortune": bool(_last.get("fortune")),
         # 2026-11-19：整场夺取的火能（仅胜利累加）+ 自动服药总数（供文案）
@@ -1524,19 +1543,27 @@ def record_last_battle(p: dict, kind: str, res: dict, opponent: str = "",
     mp_show = int(_mp_end) if _mp_end is not None else int(p.get("mp") or 0)
     foe_hp_end = res.get("foe_hp_end")
 
-    # 败因（回看卡顶部必须直说，不许让玩家猜）：
+    # 收场原因（回看卡顶部直写，不许让玩家自己猜）。
+    # 2026-11-19 用户：「不要 0 血量…战斗结尾就显示落荒而逃或者被小医仙所救就行」。
+    # 战败不再有「气血耗尽」这一说（气血保底 5%，人没死），改用世界观内的收场：
+    #   * downed（真被打到 0 以下）→ 被小医仙所救（她把你从鬼门关拉回来）
+    #   * 还有血却判负（血量比判负 / 力竭 / 切磋）→ 落荒而逃
     win = bool(res.get("win"))
     exhausted = bool(res.get("exhausted"))
+    downed = bool(res.get("downed"))
     if win and exhausted:
         end_reason, end_text = "exhausted_win", "力竭判胜"
     elif win:
         end_reason, end_text = "kill", "击杀对手"
     elif exhausted:
         end_reason, end_text = "exhausted_lose", "力竭判负"
-    elif int(hp_show) <= 0:
-        end_reason, end_text = "hp_zero", "气血耗尽"
+    elif str(kind or "") == "切磋":
+        # 切磋是零惩罚比武，谈不上「逃」，也谈不上被救
+        end_reason, end_text = "outmatched", "甘拜下风"
+    elif downed:
+        end_reason, end_text = "rescued", "被小医仙所救"
     else:
-        end_reason, end_text = "lose", "战败"
+        end_reason, end_text = "fled", "落荒而逃"
 
     snap = {
         "version": 1,
