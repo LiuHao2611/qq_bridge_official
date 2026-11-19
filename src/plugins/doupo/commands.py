@@ -558,8 +558,9 @@ async def cmd_break(store, qq, rng=None) -> str:
     if not core.can_level(p):
         need = cfg.exp_need(lv) - int(p["exp"])
         return f"修为不足，距下一星还差 {_fmt(need)}。去「战斗」或「修炼」。"
-    # 2026-11-20 九星突破 BOSS 战重做（用户「别写快照玩法」「BOSS 登场要有引言台词」）：
+    # 2026-11-20 九星突破 BOSS 战重做（用户「BOSS 登场要有引言台词」）：
     # 跨大境界须先战胜一名原著反派（药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝）。
+    # 战力快照只在 core 内部锁难度，**这里绝不渲染快照战力数字**（用户明确要求）。
     if core.is_nine_star_breakthrough(p):
         locked = await store.item_locks(str(qq))
         br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked)
@@ -579,7 +580,7 @@ async def cmd_break(store, qq, rng=None) -> str:
                 "　修为未散，调息再来——「突破」可再战此劫。",
             ]
             return "\n".join(head + tail)
-        # 战胜：挑一条原著台词作收尾（不用快照战力那种干巴巴的战力数字）。
+        # 战胜：挑一条原著台词作收尾（不渲染内部战力快照数字）。
         _quotes = tuple(_ch.get("quotes") or ())
         _end_quote = ("　「%s」——话音未落，强敌已溃。" % _quotes[-1]) if _quotes else ""
         lines = head + [

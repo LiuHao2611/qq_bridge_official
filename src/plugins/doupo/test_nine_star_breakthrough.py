@@ -80,7 +80,7 @@ def main():
     p93 = nine_player(lv=93)   # 半圣高阶→斗圣
     check("半圣 lv93 跨境界也算", core.is_nine_star_breakthrough(p93), "")
 
-    # ---- 3. 原著 BOSS（2026-11-20 去快照）：有名有姓 + 引言/台词/技能/机制 ----
+    # ---- 3. 原著 BOSS（2026-11-20）：内部快照锁难度 + 有名有姓 + 引言/台词/技能/机制 ----
     boss = core.make_breakthrough_boss(p9)
     species = {"name": "测试基准", "lv": 9, "hard": 1.0,
                "exp_mul": 1.0, "gold_mul": 1.0, "kind": cfg.BOSS_BREAK_KIND}
@@ -90,7 +90,9 @@ def main():
     check("BOSS 攻击高于同阶基准", boss["atk"] > baseline["atk"],
           "%d > %d" % (boss["atk"], baseline["atk"]))
     check("BOSS 标记 is_boss", boss["is_boss"] is True, "")
-    check("已去掉快照战力字段", "snapshot_power" not in boss, str(sorted(boss.keys())))
+    # 用户澄清：快照要有（内部锁难度），只是不要发出来（对外文案零露出）
+    check("内部保留 snapshot_power", int(boss.get("snapshot_power", 0)) == core.power(p9),
+          str(boss.get("snapshot_power")))
     check("BOSS 走魂殿 kind（复用 tier4 掉落）",
           boss["kind"] == cfg.BOSS_BREAK_KIND, boss["kind"])
     ch = boss.get("character") or {}
