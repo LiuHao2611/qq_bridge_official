@@ -246,6 +246,33 @@ def test_command_path_sets_baseline_on_new_player():
         assert got["hp"] == hp0 and asyncio.run(s.regen_last("Q_REGEN")) > 0
 
 
+def test_direct_get_player_heals_like_buttons():
+    """按钮/卡片入口直接 ``store.get_player()`` 也必须触发调息（2026-11-19 事故）。
+
+    用户原话「我的斗气和血量没有自动恢复」：当时调息挂在 `commands._player`，
+    只有文本口令走那条路；按钮点击、人物卡/战报渲染全是直接 `get_player()`。
+    生产库里一上午只写了一次 regen_clock —— 就是被绕过的铁证。
+    """
+    with tempfile.TemporaryDirectory(prefix="regen_direct_") as d:
+        s = _mk_store(d)
+        asyncio.run(s.load())
+        p = _p(40, 0.2, 0.2)
+        asyncio.run(s.put_player(p))
+        hp0, mp0 = p["hp"], p["mp"]
+        asyncio.run(s.set_regen_last("Q_REGEN", time.time() - TICK * 2))
+
+        # 模拟按钮 dispatch：完全不经过 commands._player
+        got = asyncio.run(s.get_player("Q_REGEN"))
+        assert got is p and got["hp"] > hp0 and got["mp"] > mp0, \
+            ("直接 get_player 没触发调息（按钮玩家永远看不到恢复）", got["hp"], hp0)
+
+        # 新实例重读：恢复真的落盘
+        r2 = _mk_store(d)
+        asyncio.run(r2.load())
+        again = asyncio.run(r2.get_player("Q_REGEN"))
+        assert (again["hp"], again["mp"]) == (got["hp"], got["mp"])
+
+
 def test_panel_shows_regen_rates():
     """人物卡必须写清速率与「离线也累计」（否则玩家只会觉得「血莫名涨了」）。"""
     with tempfile.TemporaryDirectory(prefix="regen_panel_") as d:

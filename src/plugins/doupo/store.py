@@ -113,6 +113,13 @@ class StoreError(RuntimeError):
     """存档库读写失败。**必须**向上抛：不许静默当成功（会谎报"已保存"）。"""
 
 
+#: 最近一次调息的实际恢复量（旁路缓存，**绝不写进玩家存档**）。
+#: 由 Store.get_player() 填入，commands._regen_line() 读取展示。
+#: 为什么不挂在玩家 dict 上：那是 store 里的活字典，任何临时字段都会被
+#: put_player() 序列化进 players.data（最高声明：玩家数据只走真实列）。
+REGEN_NOTICE: dict[str, dict] = {}
+
+
 def _dumps(p: Dict[str, Any]) -> str:
     """压缩序列化（稳定输出：同一份内容永远同一串，用于 diff 判等）。"""
     return json.dumps(p, ensure_ascii=False, separators=(",", ":"))
@@ -397,8 +404,46 @@ class Store:
 
     # ---- 玩家 ----
     async def get_player(self, qq: str) -> Optional[dict]:
+        """取玩家存档（**所有读玩家数据的唯一底层入口**）。
+
+        2026-11-19 事故：自动调息最初挂在 `commands._player()`，但按钮点击、
+        人物卡/战报渲染等大量入口直接调 `store.get_player()` —— 用户点了一上午
+        卡片，调息时钟一动不动。修法是把结算下沉到这里：不管口令还是按钮，
+        只要读玩家存档，就先结算一次调息。
+
+        ⚠️ 必须**先出锁再调 `_maybe_regen`**：后者要拿同一把锁写 regen_clock /
+        put_player，asyncio.Lock 不可重入，在持锁状态下调用会死锁。
+        """
+        key = str(qq)
         async with self._lock:
-            return self._data["players"].get(str(qq))
+            p = self._data["players"].get(key)
+        if p is not None:
+            await self._maybe_regen(key, p)
+        return p
+
+    async def _maybe_regen(self, qq: str, p: dict) -> None:
+        """按 regen_clock 结算一次气血/斗气恢复（失败只记日志，不拦任何读取）。"""
+        try:
+            now = time.time()
+            last = await self.regen_last(qq)
+            if last <= 0:
+                # 首次见到（含老档迁移）：只落基准，不按「从 1970 年算起」补历史。
+                await self.set_regen_last(qq, now)
+                return
+            # 延迟 import：core 不依赖 store，运行时无环；用 importlib 避开
+            # __init__.py 把包属性 `store` 替换成 STORE 实例的同名遮蔽坑。
+            import importlib
+            core = importlib.import_module(__package__ + ".core")
+            res = core.regen(p, now - last)
+            if not res["consumed"]:
+                return
+            await self.set_regen_last(qq, last + float(res["consumed"]))
+            if res["touched"]:
+                REGEN_NOTICE[qq] = res
+                await self.put_player(p)
+        except Exception as e:  # noqa: BLE001
+            # 调息是附加能力，失败不许拦任何口令/按钮；但必须留痕，不能静默。
+            _log("warning", "调息结算失败（%s）：%s" % (type(e).__name__, str(e)[:160]))
 
     async def put_player(self, p: dict) -> None:
         async with self._lock:
