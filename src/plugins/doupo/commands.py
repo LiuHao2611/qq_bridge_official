@@ -307,7 +307,7 @@ MENU_GROUPS = (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
         ("买 血灵草 2", "买 2 份血灵草"),
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
-        ("炼制 回灵丹", "开炉炼丹，成功率看炼药师品阶，失败得药渣"),
+        ("炼制 回灵丹", "开炉炼丹；「炼制 回灵丹 5次」连炼5炉，失败得药渣"),
         ("服丹 回灵丹", "服用丹药"),
         ("背包", "包裹（24 格）；锁定的物品带 🔒，战斗不会自动服用"),
         ("锁定 回灵丹", "锁定物品：只拦「战斗自动服药」，手动服丹照旧"),
@@ -370,6 +370,8 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("炼药", (
         "成丹把握看炼药师品阶与丹药品阶：四品炼一品九成、炼四品七成（十拿九稳）",
         "高品阶炼低阶每低1档加成；越1档骤降勉强、越2档以上几无可能",
+        "连炼：发「炼制 回灵丹 5次」一次开5炉，各炉独立成败，整批只占一次冷却",
+        "连炼耗斗气、按实有药材收炉；低阶丹经验递减，七品以上须实战历练升灵魂境界",
         "失败给药渣，药渣喂异火；丹名前〔回斗气〕〔回血〕为功效标签",
     )),
     ("异火", (
@@ -1402,6 +1404,25 @@ async def cmd_recipes(store, qq, page=1) -> str:
     return "\n".join(out)
 
 
+def _parse_craft_count(arg: str) -> tuple[str, int]:
+    """从「炼制」参数里拆出 (丹名片段, 炉数)。
+
+    只认明确的批量写法，避免误伤丹名里的数字：
+      * 「回灵丹 5次」/「回灵丹5炉」/「回灵丹 5」→ 5
+      * 「回灵丹×5」/「回灵丹x5」/「回灵丹*5」→ 5
+      * 其余（含「炼制 回灵丹」）→ 炉数 1
+    """
+    import re
+    s = (arg or "").strip()
+    m = re.search(r"[×xX*]\s*(\d+)\s*$", s)
+    if m:
+        return s[:m.start()].strip(), max(1, int(m.group(1)))
+    m = re.search(r"\s+(\d+)\s*(?:次|炉|个|副)?\s*$", s)
+    if m and int(m.group(1)) > 1:
+        return s[:m.start()].strip(), max(1, min(int(m.group(1)), cfg.CRAFT_BATCH_MAX))
+    return s, 1
+
+
 async def cmd_craft(store, qq, name) -> str:
     p = await _player(store, qq)
     if not p:
@@ -1409,6 +1430,11 @@ async def cmd_craft(store, qq, name) -> str:
     name = (name or "").strip()
     if not name:
         return "用法：炼制 回灵丹（发「炼药」看全部丹方）"
+    name, n_furnace = _parse_craft_count(name)
+    if not name:
+        return "用法：炼制 回灵丹 5次（一次连炼5炉）／炼制 回灵丹（单炉）"
+    if n_furnace > 1:
+        return await _cmd_craft_batch(store, qq, p, name, n_furnace)
     hit = next((n for n in cfg.RECIPE_NAMES if name in n or n in name), None)
     if not hit:
         return "无此丹方。发「炼药」看全部。"
@@ -1444,6 +1470,47 @@ async def cmd_craft(store, qq, name) -> str:
     if res.get("alch_up"):
         msg += f"\n　炼药经验积累，晋为【{res['alch_up']}炼药师】！"
     out = [msg]
+    out.extend(_chance_lines(chance, qq))
+    return "\n".join(out)
+
+
+async def _cmd_craft_batch(store, qq, p, name, n) -> str:
+    """批量连炼回包（一条消息，纯中文成数）。
+
+    一处输出=一条消息：成败、经验、斗气、晋阶全并进这段文本，不拆两条。
+    """
+    hit = next((nm for nm in cfg.RECIPE_NAMES if name in nm or nm in name), None)
+    if not hit:
+        return "无此丹方。发「炼药」看全部。"
+    res = core.craft_batch(p, hit, n)
+    if res.get("reason") == "buyonly":
+        return f"【{hit}】原著未载药方，无法炼制——去「宝库」或「买 {hit}」。"
+    if res.get("reason") == "cd":
+        await store.put_player(p)
+        return f"丹炉尚温，需再候 {res['left']} 秒。"
+    if not res.get("ok"):
+        why = {"mat": "药材不足，去「宝库」买药", "mp": "斗气不济，先调息回气"}.get(
+            res.get("reason"), "开炉失败")
+        return f"❌ 未能开炉：{why}。"
+
+    # 任务推进按实际成功炉数（一炉一丹，成功才算练手）
+    chance = core.advance_task(p, "craft", int(res["n_ok"])) if res["n_ok"] else None
+    await store.put_player(p)
+
+    lines = [f"⚗️ 连炼【{hit}】{res['n_done']}炉　成{res['n_ok']}·败{res['n_fail']}"
+             f"（{cfg.rate_cn(res['rate'])}把握/炉）"]
+    detail = f"　丹 +{res['n_ok']}　药渣 +{res['dross']}　炼药经验 +{res['exp']}"
+    if res.get("exp_factor", 1.0) < 1.0:
+        detail += f"（低阶丹，经验{cfg.rate_cn(res['exp_factor'])}计）"
+    lines.append(detail)
+    lines.append(f"　斗气 -{res['mp_used']}（余{res['mp_left']}）")
+    if res.get("limited") == "mat":
+        lines.append("　⚠ 药材见底，余炉未炼")
+    elif res.get("limited") == "mp":
+        lines.append("　⚠ 斗气耗尽，提前收炉")
+    if res.get("alch_up"):
+        lines.append(f"　炼药经验积累，晋为【{res['alch_up']}炼药师】！")
+    out = ["\n".join(lines)]
     out.extend(_chance_lines(chance, qq))
     return "\n".join(out)
 
