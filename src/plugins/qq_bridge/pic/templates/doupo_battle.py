@@ -184,6 +184,12 @@ def _bubble_plan(rounds: list[dict], content_w: int) -> list[dict]:
                 rh = LINE_H + (BUBBLE_TAG_H if tags else 0) + BUBBLE_ROW_GAP
                 entries.append({"move": mv, "value": val, "tags": tags,
                                 "tone": _gs(a.get("tone"), "mine"), "h": rh})
+            if not entries:
+                # 空列（敌人已死 / 本回合真没动作）给一个淡色占位，
+                # 否则气泡半边纯空白，玩家以为卡坏了（2026-11-19 实拍反馈）。
+                entries = [{"move": "无动作", "value": "", "tags": "",
+                            "tone": "dim", "h": LINE_H + BUBBLE_ROW_GAP,
+                            "placeholder": True}]
             sides[key] = entries
         col_h = max(
             sum(e["h"] for e in sides["mine"]),
@@ -488,6 +494,13 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
             ey = body_y
             for ei, e in enumerate(b["sides"][key]):
                 cy = ey + LINE_H // 2
+                if e.get("placeholder"):
+                    # 空列占位只画淡色提示，不画数值盒（否则污染右锚定自检）
+                    c.text((cx, cy), e["move"], size=S.FS_LABEL,
+                           color=p["dim_color"], role="regular", anchor="lm")
+                    rec("r%d_%s%d_ph" % (ri, key, ei), e["move"], cx, cy, S.FS_LABEL)
+                    ey += e["h"]
+                    continue
                 c.text((cx, cy), e["move"], size=FS_BODY, color=p["text_color"],
                        role="regular", anchor="lm")
                 rec("r%d_%s%d_m" % (ri, key, ei), e["move"], cx, cy, FS_BODY)
