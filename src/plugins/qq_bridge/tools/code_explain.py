@@ -69,7 +69,7 @@ _MAX_CANDIDATES = 8        # 候选清单最多列几个模块（模型从中自
 # ---- 三段预算（合计必须 < AI_TOOL_RESULT_MAX_CHARS=6000）----
 #: 总预算。tools.registry 会在 6000 字硬截断，一旦截在函数中间就是"半截代码"，
 #: 比不给更糟（模型会把半截当全部）。所以本模块自己先算账，永远不靠上层截断。
-_MAX_TOTAL_CHARS = 5300
+_MAX_TOTAL_CHARS = 5800
 _MAX_DOC_CHARS = 700       # 模块设计说明（docstring）上限
 _MAX_OUTLINE_CHARS = 1600  # ① 概览上限，超了提示还有多少符号
 _MAX_CODE_CHARS = 2800     # ② 代码段上限（按分数整段装，装不下整个跳过）
@@ -398,22 +398,21 @@ class _FileIndex:
             return "\n".join(out)
 
         # ---- 紧凑续列：只有名字，保证可点名 ----
+        # ⚠️ 这里**不按字符预算截断**：名字是 hard requirement（模型必须能点名）。
+        # 2026-11-19 config.py 新增战斗/塔修常量后，PUPPET_* 六个常量被挤出屏幕，
+        # 模型就永远问不到它们。名字本身很短（每行 ≈20 字），100 个名字也就 2K，
+        # 用 _OUTLINE_MAX_SYMS 控总量即可，别再拿字符预算切尾巴。
         rest = self.syms[i:]
         if compact_budget > 0:
             out.append("  ⋮  （以下只列符号名，细节用 symbol 参数点名）")
-            used = 0
             for k, s in enumerate(rest):
                 if i + k >= _OUTLINE_MAX_SYMS:
                     out.append("  ⋮（还有 %d 个符号未列出）"
                                % (len(self.syms) - i - k))
                     break
-                line = "%sL%-5d %s" % ("  " * s.depth, s.start, s.name)
-                if used + len(line) > compact_budget:
-                    out.append("  ⋮（还有 %d 个符号未列出，可用 file 参数分次读）"
-                               % (len(self.syms) - i - k))
-                    break
-                out.append(line)
-                used += len(line) + 1
+                # 紧凑段**只留名字**（不带行号）：模块符号一多，行号会把整段撑爆，
+                # 而点名用的是名字不是行号。180 个符号时这能省下 1000+ 字。
+                out.append("%s%s" % ("  " * s.depth, s.name))
         else:
             out.append("  ⋮（还有 %d 个符号未列出，可用 symbol 参数直接点名）" % len(rest))
         return "\n".join(out)

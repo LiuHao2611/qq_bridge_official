@@ -30,12 +30,19 @@ def _actor(it: dict) -> str:
         return "对方"
     if who == "p":
         return "我方"
+    # PVE 的 fight() 不写 who：怪打人那条带 taken=True，必须显示成「敌方」，
+    # 否则战报会写成「我方·赤炎狼 兽击 700」，读起来像自己打自己
+    # （2026-11-19 实拍卡确认）。
+    if it.get("taken"):
+        return "敌方"
     return "我方"
 
 
 def _move(it: dict) -> str:
     if it.get("aid"):
         return "贵人相助"
+    if it.get("pill"):
+        return "服用" + _s(it.get("pill"), "丹药")
     return _s(it.get("move") or it.get("kind") or
               ("普攻" if not it.get("skill") else "斗技"), "出手")
 
@@ -43,6 +50,15 @@ def _move(it: dict) -> str:
 def _via(it: dict) -> str:
     if it.get("aid"):
         return "机缘"
+    # 2026-11-19 新战斗事件：不另建渲染路径，只在归因列给出正确来源。
+    if it.get("pill"):
+        return "丹药·自动"
+    if it.get("mishap"):
+        return "天赋·踉跄"
+    if it.get("kind") == "心火共鸣":
+        return "心火·气机"
+    if it.get("kind") == "中毒":
+        return "天赋·中毒"
     if it.get("miss"):
         return "斗技·控场" if _s(it.get("kind")) == "被控" else "敏捷·闪避"
     if it.get("dot"):
@@ -76,7 +92,10 @@ def action_rows(battle: dict) -> list[str]:
             continue
         rnd = _i(it.get("round"), i)
         scope = f"{_actor(it)}·{_s(it.get('foe') or '敌手')}"
-        dmg = _i(it.get("dmg"))
+        if it.get("pill"):
+            dmg = "+%d" % _i(it.get("amount"))
+        else:
+            dmg = _i(it.get("dmg"))
         line1 = (f"{i:02d}｜{scope}·回合{rnd}｜{_move(it)} {dmg}"
                  f"（{_via(it)}）")
         parts = []

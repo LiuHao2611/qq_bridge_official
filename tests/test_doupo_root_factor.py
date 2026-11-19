@@ -166,23 +166,32 @@ def test_hit_output_damage_penalized():
 
 
 def test_pve_speculator_takes_more_damage():
-    """同一只怪、同一 rng：投机者的出手伤害更低、承伤更高。"""
+    """同一只怪、同一 rng：投机者的出手伤害更低、承伤更高、打完剩血更少。
+
+    ⚠️ 2026-11-19 取消 15 回合上限后，怪物血量必须选「两边都能打赢」的档位
+    （这里 30000，实测正常 11 回合、投机 19 回合，都胜）。原来写 100000 时
+    投机者会被打死，而**战败盘 hp 会被重置成「上限 × (1-LOSE_HP_ON_DEFEAT)」**
+    （10400 × 0.7 = 7279），比胜者的残血还高 —— 跨胜负比 hp 是在比两种不同的
+    口径，必然假红。承伤用 ``taken`` 比、剩余血只在「同胜负」前提下比。
+    """
     lv = 30
     need = cfg.cum_exp_need(lv)
     normal = _p(lv=lv, pill=0)
     spec = _p(lv=lv, pill=need)          # 100% 靠丹药堆到同级
     # 同等级同斗技（都用默认已领悟的技能），只差根基
-    mon = {"name": "测试魔兽", "lv": lv, "hp": 100000, "atk": 800,
+    mon = {"name": "测试魔兽", "lv": lv, "hp": 30000, "atk": 800,
            "def": 400, "exp": 0, "gold": 0}
-    rng = _fix_rng([0.5] * 200)
     rn = core.fight(normal, dict(mon), rng=_fix_rng([0.5] * 200), roll_aid=False)
     rs = core.fight(spec, dict(mon), rng=_fix_rng([0.5] * 200), roll_aid=False)
+    # 前提：两边都打赢了，剩余血量才可比
+    assert rn["win"] and rs["win"], ("两边没都赢，hp 口径不可比",
+                                     rn["win"], rs["win"])
     # 投机者对同一怪造成伤害更低（打掉的血更少）
     assert rn["mon_hp_left"] <= rs["mon_hp_left"], (rn["mon_hp_left"], rs["mon_hp_left"])
     # 承伤更高（总承伤 taken 与剩余血两个角度都守）
     assert rs["taken"] > rn["taken"], \
         "投机者防御打折应承受更多伤害——守 PVE 承伤侧注入：%s" % ((rn["taken"], rs["taken"]),)
-    assert normal["hp"] >= spec["hp"], (normal["hp"], spec["hp"])
+    assert normal["hp"] > spec["hp"], (normal["hp"], spec["hp"])
 
 
 # ---------------------------------------------------------------------------

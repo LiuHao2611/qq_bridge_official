@@ -63,14 +63,35 @@ def check(name, cond, detail=""):
 
 
 class MemStore:
+    """最小存档桩。真实 Store 有 item_locks / tower_state（2026-11-19 新增），
+    这里按同一签名补上，否则 cmd_fight 会在取锁定时 AttributeError。"""
+
     def __init__(self, p):
         self.p = p
+        self.locks: set[str] = set()
+        self.tower: dict = {}
 
     async def get_player(self, qq):
         return self.p
 
     async def put_player(self, p):
         self.p = p
+
+    async def item_locks(self, qq):
+        return set(self.locks)
+
+    async def set_item_lock(self, qq, name, locked):
+        (self.locks.add if locked else self.locks.discard)(str(name))
+        return True
+
+    async def tower_state(self, qq):
+        return dict(self.tower) or {"card_tier": 0, "fire_energy": 0,
+                                    "fire_poison": 0, "last_ts": 0.0,
+                                    "free_day": "", "enters": 0, "magma": 0,
+                                    "in_tower": 0}
+
+    async def set_tower_state(self, qq, st):
+        self.tower = dict(st)
 
 
 def _p(lv=10, luck=1):

@@ -266,6 +266,10 @@ MENU_GROUPS = (
     )),
     ("修炼 · 涨修为升境界", (
         ("修炼", "结算离线修为（每分钟自动 +6，陨落心炎每级 +50%）"),
+        ("入塔", "进天焚炼气塔借心火修炼：按火晶卡成倍涨修为，同时累积火毒"),
+        ("出塔", "离开炼气塔，开始消解火毒（每分钟 -2）"),
+        ("火能", "看聚火壶状态：火晶卡 / 火能 / 火毒 / 心火倍率 / 岩浆世界"),
+        ("换卡", "升一档火晶卡（黑→蓝→青→赤→紫，消耗火能，解锁更深塔层）"),
         ("突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
         ("战斗回看", "查看最后一次战斗完整过程：逐招、气血/斗气、词条（出卡片）"),
@@ -303,7 +307,9 @@ MENU_GROUPS = (
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
         ("炼制 回灵丹", "开炉炼丹，成功率看炼药师品阶，失败得药渣"),
         ("服丹 回灵丹", "服用丹药"),
-        ("背包", "包裹（24 格）"),
+        ("背包", "包裹（24 格）；锁定的物品带 🔒，战斗不会自动服用"),
+        ("锁定 回灵丹", "锁定物品：只拦「战斗自动服药」，手动服丹照旧"),
+        ("解锁 回灵丹", "解除锁定，恢复自动服用"),
     )),
     ("任务 · 江湖", (
         ("任务", "看主线进度与当前支线；途中概率触发机遇"),
@@ -518,6 +524,11 @@ async def cmd_cultivate(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
+    # 2026-11-19：塔中不静修。同一段时间不能被「修炼」和「入塔」各领一次。
+    tst = await store.tower_state(str(qq))
+    if int(tst.get("in_tower") or 0):
+        return ("🔥 你正在天焚炼气塔中心火淬体，此时静修是白费。\n"
+                "　发「入塔」结算塔修，或发「出塔」离开。")
     res = core.settle(p)
     await store.put_player(p)
     lv = int(p["lv"])
@@ -525,7 +536,8 @@ async def cmd_cultivate(store, qq) -> str:
     tip = "，可发送「突破」晋升" if core.can_level(p) else ""
     head = f"🧘 静修 {res['minutes']} 分钟，得修为 +{res['gain']}。" if res["gain"] else "🧘 你刚静修过，气机未动。"
     return (f"{head}\n修为 {_fmt(p['exp'])}/{_fmt(need) if need else '—'}{tip}\n"
-            f"当前：{cfg.full_realm(lv)}")
+            f"当前：{cfg.full_realm(lv)}\n"
+            f"（想快些可发「入塔」借心火成倍修炼，需火能与火晶卡）")
 
 
 async def cmd_break(store, qq) -> str:
@@ -581,7 +593,9 @@ async def cmd_fight(store, qq) -> str:
     # 一场遭遇 1~5 个敌人（魔兽 / 悍匪 / 原著反派），逐个调用单敌内核 fight。
     # 难度仍按玩家等级反解，不会出现越级秒杀；斗气跨战结转（见底转普攻）、
     # 气血结转+小幅回复。回满斗气只能靠突破/升级。
-    res = core.encounter(p)
+    # 2026-11-19 自动服药：锁定物品绝不参与（用户硬要求）。
+    locked = await store.item_locks(str(qq))
+    res = core.encounter(p, locked=locked)
     # 2026-11-17：统一「战斗结束」落盘点。普通回包仍只给高光，完整 log 只落盘，
     # 玩家主动「战斗回看」时才展开，绝不把 1~5 敌的中间回合塞进普通回包。
     core.record_last_battle(
@@ -599,7 +613,13 @@ async def cmd_fight(store, qq) -> str:
         chance = core.advance_task(p, kinds)
     await store.put_player(p)
 
-    # ---- 战报展示：固定骨架结算面板（2026-11-16 二次优化）----
+    # 2026-11-19 原著「战斗中夺取火能」：胜利的火能进 alchemy_tower 真实列。
+    # 只增不减，失败不给；数值由 core 按怪物等级算好（lv//TOWER_ENERGY_PER_LV）。
+    fire_gain = int(res.get("fire_energy_gain") or 0)
+    if fire_gain > 0:
+        tst = await store.tower_state(str(qq))
+        core.tower_add_energy(tst, fire_gain)
+        await store.set_tower_state(str(qq), tst)
     # 用户硬要求：敌人 1~5 随机，但字数/行数不能随敌人数膨胀；中间回合全折叠。
     # 故不再「每敌一节」，而是整场只取 1 条最强高光 + 固定几行结算数据。
     # 1 敌与 5 敌的骨架完全相同，只有「代表名等N名」处差几个字。
@@ -1312,6 +1332,7 @@ async def cmd_bag(store, qq) -> str:
     if not p:
         return NOT_ENTERED
     items = core.bag_slots(p)
+    locked = await store.item_locks(str(qq))
     out = [f"🎒 包裹（{len(items)}/24 格）　💰 {p['gold']}"]
     # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
     known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
@@ -1319,12 +1340,191 @@ async def cmd_bag(store, qq) -> str:
     if not items:
         out.append("　空空如也。")
     for i, (name, n) in enumerate(items[:24]):
-        out.append(f"　[{i + 1}] {name} ×{n}")
+        mark = "🔒" if name in locked else ""
+        out.append(f"　[{i + 1}] {mark}{name} ×{n}")
         if name in known:
             out.append(f"　　　{known[name]}")
     out.append("")
-    out.append("　用法：服丹 回灵丹")
+    out.append("　用法：服丹 回灵丹　｜　锁定 回灵丹 / 解锁 回灵丹（锁定后战斗不会自动服用）")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# 背包锁定（2026-11-19 用户「背包加上锁定物品功能，锁定的物品不会被自动使用」）
+# ---------------------------------------------------------------------------
+def _match_item_name(name: str) -> str:
+    """把玩家输入对到真实物品名：先精确，再包含匹配（防子串抢先）。"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    pool = (list(cfg.RECIPE_NAMES) + list(cfg.MATERIAL_NAMES)
+            + list(cfg.HERB_NAMES) + ["炎星石"])
+    if name in pool:
+        return name
+    hits = [x for x in pool if x in name or name in x]
+    return sorted(hits, key=len)[0] if hits else ""
+
+
+async def cmd_lock(store, qq, name, on: bool = True) -> str:
+    """锁定 / 解锁一件物品。锁定只拦「战斗自动服药」，手动服丹照旧可以。"""
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    hit = _match_item_name(name)
+    if not hit:
+        return "用法：锁定 回灵丹　/　解锁 回灵丹"
+    if core.count_item(p, hit) <= 0:
+        return f"包裹里没有【{hit}】。"
+    changed = await store.set_item_lock(str(qq), hit, bool(on))
+    locks = await store.item_locks(str(qq))
+    verb = "已锁定" if on else "已解锁"
+    head = (f"🔒 {verb}【{hit}】：战斗中不会自动服用，手动「服丹 {hit}」不受影响。"
+            if on else f"🔓 {verb}【{hit}】：恢复自动服用。")
+    if not changed:
+        head = f"（{hit} 本来就是{'锁定' if on else '未锁定'}状态）" + head
+    row = "、".join(sorted(locks)) if locks else "无"
+    return f"{head}\n当前锁定：{row}"
+
+
+# ---------------------------------------------------------------------------
+# 后期天焚炼气塔（聚火壶）——2026-11-19 修炼大改
+# ---------------------------------------------------------------------------
+def _tower_head(st: dict) -> str:
+    tier = core.tower_tier(st.get("card_tier", 0))
+    name = cfg.FACTION_CARD_NAMES[tier]
+    return (f"🔥 天焚炼气塔 · {name}"
+            f"（可入第 1~{core.tower_max_floor(tier)} 层）"
+            f"　心火 ×{core.tower_mult(tier, bool(st.get('magma'))):.1f}")
+
+
+async def cmd_furnace_status(store, qq) -> str:
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = await store.tower_state(str(qq))
+    got = core.tower_daily_energy(st, date.today().isoformat())
+    # 不在塔中时按离塔时间自然消解火毒（只读展示也要如实结算）
+    if not int(st.get("in_tower") or 0):
+        core.alchemy_settle(p, st, entering=False)
+    await store.set_tower_state(str(qq), st)
+    tier = core.tower_tier(st.get("card_tier", 0))
+    lv = int(p.get("lv", 1))
+    cap = int(cfg.TOWER_POISON_CAP)
+    poison = int(st.get("fire_poison", 0))
+    magma = bool(st.get("magma"))
+    lines = [_tower_head(st), ""]
+    lines.append(f"　火能 {int(st.get('fire_energy', 0))}"
+                 f"（1 点 = {int(cfg.TOWER_MINUTES_PER_ENERGY)} 分钟塔修）")
+    lines.append(f"　火毒 {poison}/{cap}（每分钟 +{core.tower_poison_rate(tier, lv, magma):.1f}"
+                 f"；离塔每分钟 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}）")
+    if poison >= cap:
+        lines.append("　⚠️ 火毒已满，经脉如焚 —— 必须先离塔冷却，硬练会废掉根基。")
+    lines.append("　状态：" + ("塔中修炼中" if int(st.get("in_tower") or 0) else "塔外"))
+    lines.append(f"　今日免费火能：{'已领 +%d' % got if got else '已领过'}"
+                 f"　｜　累计入塔 {int(st.get('enters', 0))} 次")
+    nxt = tier + 1
+    if nxt < len(cfg.FACTION_CARD_NAMES):
+        lines.append(f"　换卡：{cfg.FACTION_CARD_NAMES[tier]} → "
+                     f"{cfg.FACTION_CARD_NAMES[nxt]} 需 "
+                     f"{int(cfg.FACTION_CARD_UPGRADE_COST[tier])} 火能（发「换卡」）")
+    else:
+        lines.append("　已持紫火晶卡，再无可换。")
+    if core.tower_magma_open(p, tier):
+        lines.append("　🌋 塔底岩浆世界已开启：心火 ×%.1f，火毒也 ×%.1f（自动生效）"
+                     % (float(cfg.TOWER_MAGMA_MULT), float(cfg.TOWER_MAGMA_POISON_MULT)))
+    elif tier >= len(cfg.FACTION_CARD_MULT) - 1:
+        lines.append(f"　🌋 岩浆世界需斗灵（lv{int(cfg.TOWER_DOU_LING_LV)}）才扛得住。")
+    else:
+        lines.append("　🌋 塔底岩浆世界：紫火晶卡 + 斗灵方可入。")
+    return "\n".join(lines)
+
+
+async def cmd_furnace_enter(store, qq) -> str:
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = await store.tower_state(str(qq))
+    got = core.tower_daily_energy(st, date.today().isoformat())
+    was_in = bool(int(st.get("in_tower") or 0))
+    res = core.alchemy_settle(p, st, entering=True)
+    await store.set_tower_state(str(qq), st)
+    await store.put_player(p)
+    head = _tower_head(st)
+    daily = f"（今日免费火能 +{got}）" if got else ""
+    if res["mode"] == "enter":
+        cool = f"，火毒消解 -{res['cooled']}" if res.get("cooled") else ""
+        return (f"{head}\n🚪 你踏入塔中，心火扑面{cool}{daily}。\n"
+                f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}\n"
+                f"　再发一次「入塔」即可结算这段时间的修炼；发「出塔」离开。")
+    if res["mode"] == "wait":
+        return (f"{head}\n🔥 你正在塔中，心火淬体。\n"
+                f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
+                f"{daily}\n　（不足 1 分钟，稍后再发「入塔」）")
+    if res["mode"] == "no_energy":
+        return (f"{head}\n⚠️ 火能耗尽，心火渐弱 —— 你被请出塔外。\n"
+                f"　火能 0（战斗胜利可夺取火能，每日也有免费额度）"
+                f"{daily}\n　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}")
+    # settle / capped
+    lines = [head,
+             f"🧘 塔中修炼 {res['minutes']} 分钟，修为 +{res['gain']}"
+             f"（心火 ×{res['mult']:.1f}）" + (f"，消耗火能 {res['energy_spent']}" if res["energy_spent"] else ""),
+             f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
+             f"（本次 +{res['poison_add']}）"]
+    if res.get("leftover_min"):
+        lines.append(f"　火能不足，剩余 {res['leftover_min']} 分钟未能化开心火。")
+    if res["capped"]:
+        lines.append("　⚠️ 火毒触顶，你被强行送出塔外 —— 必须冷却后才能再入"
+                     f"（每分钟 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}）。")
+    lv = int(p.get("lv", 1))
+    if core.can_level(p):
+        lines.append("修为已满，可发「突破」晋升。")
+    return "\n".join(lines)
+
+
+async def cmd_furnace_exit(store, qq) -> str:
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = await store.tower_state(str(qq))
+    if not int(st.get("in_tower") or 0):
+        # 已在塔外：冷却按时间自然进行，这里只做一次如实结算并展示
+        res = core.alchemy_settle(p, st, entering=False)
+        await store.set_tower_state(str(qq), st)
+        await store.put_player(p)
+        cool = f"，火毒消解 -{res['cooled']}" if res.get("cooled") else ""
+        return (f"{_tower_head(st)}\n你已在塔外{cool}。\n"
+                f"　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
+                f"　火能 {res['energy']}")
+    res = core.alchemy_settle(p, st, entering=False)
+    await store.set_tower_state(str(qq), st)
+    await store.put_player(p)
+    lines = [_tower_head(st),
+             f"🚪 你退出天焚炼气塔（本次 {res['minutes']} 分钟，修为 +{res['gain']}）",
+             f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
+             f"（本次修炼 +{res['poison_add']}）",
+             f"　离开后每分钟火毒 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}，"
+             f"冷却完再来（原著：修炼半天，休息一夜）。"]
+    return "\n".join(lines)
+
+
+async def cmd_furnace_upgrade(store, qq) -> str:
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    st = await store.tower_state(str(qq))
+    res = core.tower_upgrade_card(st)
+    if not res["ok"]:
+        if res.get("reason") == "max":
+            return (f"🔥 你已持有最高档【{res['name']}】，"
+                    f"塔中再无可换（发「火能」看状态）。")
+        return (f"🔥 换卡需 {res['need']} 火能，你只有 {res['have']}。\n"
+                f"　{res['name']} → {res['next']}（战斗胜利可夺火能，每日也有免费额度）")
+    await store.set_tower_state(str(qq), st)
+    tier = int(res["tier"])
+    return (f"🔥 换卡成功：【{res['name']}】→【{res['next']}】"
+            f"（-{res['cost']} 火能，余 {res['energy']}）\n"
+            f"　可入第 1~{core.tower_max_floor(tier)} 层，心火 ×"
+            f"{core.tower_mult(tier, bool(core.tower_magma_open(p, tier))):.1f}")
 
 
 async def cmd_use(store, qq, name) -> str:

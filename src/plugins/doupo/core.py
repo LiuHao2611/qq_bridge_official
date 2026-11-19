@@ -243,6 +243,201 @@ def settle(p, now_ts=None) -> dict:
     return {"gain": gain, "minutes": int(elapsed // 60)}
 
 
+# ---------------------------------------------------------------------------
+# 后期天焚炼气塔（聚火壶）——2026-11-19 修炼大改
+#
+# 原著依据（详见 docs/战斗与修炼大改_2026-11-19.md）：
+#   「第百五十章 一劳永逸」聚火壶注入本源陨落心炎 + 持续灌注斗气 → 源源不断产生心火；
+#   「第百十三章 情报」改为幼生体，「依旧能够令得天焚炼气塔再次焕发作用」；
+#   「第百十四章 商议」心火覆盖全塔 →「修炼速度，起码能够成倍翻长」；
+#   「第百五十七章 奖励」火晶卡黑蓝青赤紫五档，决定可入层数；
+#   「第四百十六章 闭关」每下一层，所需火能递增；
+#   「第四百七十四章 中级修炼室」心火会掺入火焰狂暴之力（火毒），
+#        「最好修炼半天，再休息一夜」；斗灵可一次修四五天；
+#   「第四百七十六章 第二层」火毒累积会出大事，必须坚持第一层一周。
+#
+# 本作的抽象：火能 = 灌注斗气的凭证（1 点 = 10 分钟塔修），火毒 = 硬性代价。
+# 所有状态都在 ``alchemy_tower`` 真实列里（最高声明：玩家数据不进 JSON）。
+# ---------------------------------------------------------------------------
+def tower_tier(card_tier) -> int:
+    """卡档夹取到 0~4（黑蓝青赤紫）。脏数据不该让倍率表越界。"""
+    return max(0, min(int(card_tier or 0), len(cfg.FACTION_CARD_MULT) - 1))
+
+
+def tower_mult(card_tier, magma: bool = False) -> float:
+    """心火修炼倍率。原著「成倍翻长」，故最低档也有 1.5×。"""
+    m = float(cfg.FACTION_CARD_MULT[tower_tier(card_tier)])
+    if magma:
+        m *= float(cfg.TOWER_MAGMA_MULT)
+    return m
+
+
+def tower_poison_rate(card_tier, lv: int = 1, magma: bool = False) -> float:
+    """每分钟火毒累积速率。斗灵（lv37）起减半 —— 原著「能一次修四五天」。"""
+    r = float(cfg.TOWER_POISON_PER_MIN[tower_tier(card_tier)])
+    if magma:
+        r *= float(cfg.TOWER_MAGMA_POISON_MULT)
+    if int(lv) >= int(cfg.TOWER_DOU_LING_LV):
+        r *= 0.5
+    return r
+
+
+def tower_max_floor(card_tier) -> int:
+    """该卡可进入的最高塔层（原著黑卡一二层、蓝卡三四层……）。"""
+    return int(cfg.FACTION_CARD_MAX_FLOOR[tower_tier(card_tier)])
+
+
+def tower_magma_open(p, card_tier) -> bool:
+    """塔底岩浆世界：紫卡 + 斗灵（lv37）才可入。"""
+    return (tower_tier(card_tier) >= len(cfg.FACTION_CARD_MULT) - 1
+            and int(p.get("lv", 1)) >= int(cfg.TOWER_DOU_LING_LV))
+
+
+def tower_daily_energy(st: dict, today: str) -> int:
+    """每日免费火能（原地改 st）。返回本次实际发放量。"""
+    if str(st.get("free_day") or "") == str(today):
+        return 0
+    st["free_day"] = str(today)
+    st["fire_energy"] = int(st.get("fire_energy", 0)) + int(cfg.TOWER_FREE_ENERGY)
+    return int(cfg.TOWER_FREE_ENERGY)
+
+
+def tower_add_energy(st: dict, n: int) -> int:
+    """战斗胜利夺取火能（原著「战斗中夺取火能」）。返回实际入账值。"""
+    n = max(0, int(n))
+    if n:
+        st["fire_energy"] = int(st.get("fire_energy", 0)) + n
+    return n
+
+
+def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
+    """进塔 / 续修 / 出塔的一次结算（原地改 ``st``，返回给玩家的账）。
+
+    ``entering=True``（「入塔」）：
+      * 不在塔中 → 先按离塔时间消解火毒，再标记入塔（本次不计修为）；
+      * 已在塔中 → 结算塔修：火能按 1 点 = 10 分钟扣减，修为按心火倍率算，
+        火毒按卡档累积；火毒触顶立刻强制出塔（``capped=True``）。
+    ``entering=False``（「出塔」）：结算塔修后把 ``in_tower`` 归零，开始冷却。
+
+    时间源由调用方给（``now_ts``），纯函数可测；**不写任何持久层**。
+    """
+    now = time.time() if now_ts is None else float(now_ts)
+    tier = tower_tier(st.get("card_tier", 0))
+    lv = int(p.get("lv", 1))
+    magma = bool(tower_magma_open(p, tier))
+    st["magma"] = 1 if magma else 0
+    res = {
+        "ok": True, "mode": "enter", "minutes": 0, "gain": 0,
+        "energy_spent": 0, "energy": int(st.get("fire_energy", 0)),
+        "poison": int(st.get("fire_poison", 0)), "poison_add": 0, "cooled": 0,
+        "tier": tier, "magma": magma, "mult": tower_mult(tier, magma),
+        "capped": False, "max_floor": tower_max_floor(tier),
+        "in_tower": bool(st.get("in_tower")),
+    }
+    last = float(st.get("last_ts") or 0)
+
+    # ---- 不在塔中：先冷却，再入塔 ----
+    if not int(st.get("in_tower") or 0):
+        if last > 0:
+            outside_min = max(0.0, (now - last) / 60.0)
+            cool = int(outside_min * float(cfg.TOWER_POISON_COOL_PER_MIN))
+            if cool:
+                before = int(st.get("fire_poison", 0))
+                st["fire_poison"] = max(0, before - cool)
+                res["cooled"] = before - int(st["fire_poison"])
+        if not entering:
+            res["mode"] = "outside"
+            res["poison"] = int(st.get("fire_poison", 0))
+            res["energy"] = int(st.get("fire_energy", 0))
+            return res
+        st["in_tower"] = 1
+        st["last_ts"] = now
+        st["enters"] = int(st.get("enters", 0)) + 1
+        res["mode"] = "enter"
+        res["in_tower"] = True
+        res["poison"] = int(st.get("fire_poison", 0))
+        res["energy"] = int(st.get("fire_energy", 0))
+        return res
+
+    # ---- 已在塔中：结算塔修 ----
+    elapsed_min = max(0.0, (now - last) / 60.0)
+    minutes = min(int(elapsed_min), int(cfg.TOWER_MAX_MINUTES))
+    energy = int(st.get("fire_energy", 0))
+    per = int(cfg.TOWER_MINUTES_PER_ENERGY)
+    can_min = energy * per
+    if minutes <= 0:
+        res["mode"] = "wait"
+        res["in_tower"] = True
+        return res
+    if can_min <= 0:
+        # 火能耗尽：留在塔里只会空耗时间，直接按出塔处理（不静默吞时间）
+        st["in_tower"] = 0
+        st["last_ts"] = now
+        res.update({"mode": "no_energy", "in_tower": False,
+                    "energy": energy, "poison": int(st.get("fire_poison", 0))})
+        return res
+
+    minutes = min(minutes, can_min)
+    # 火能是整数「块」：1 点 = TOWER_MINUTES_PER_ENERGY 分钟。只结算整块，
+    # 零头时间**留在时间戳里**（否则 3 分钟的短修会被白送修为却不扣火能）。
+    per = max(1, per)
+    blocks = minutes // per
+    if blocks <= 0:
+        res["mode"] = "wait"
+        res["in_tower"] = True
+        res["energy"] = energy
+        res["poison"] = int(st.get("fire_poison", 0))
+        return res
+    billable = blocks * per
+    gain = int(billable * float(cfg.CULTIVATE_PER_MIN) * tower_mult(tier, magma)
+               * flame_exp_mult(p))
+    p["exp"] = int(p.get("exp", 0)) + gain
+    # 塔中时间不算静修时间（同一段时间不能被「修炼」再领一次）
+    p["last_settle"] = now
+
+    st["fire_energy"] = max(0, energy - blocks)
+    poison_add = int(billable * tower_poison_rate(tier, lv, magma))
+    st["fire_poison"] = int(st.get("fire_poison", 0)) + poison_add
+    capped = int(st["fire_poison"]) >= int(cfg.TOWER_POISON_CAP)
+    if capped:
+        st["fire_poison"] = int(cfg.TOWER_POISON_CAP)
+        st["in_tower"] = 0     # 火毒触顶：强制出塔，必须冷却
+    # 只推进「已结算」的时间；零头留给下一次（不吞时间也不白送修为）
+    st["last_ts"] = last + billable * 60.0
+    if not entering:
+        st["in_tower"] = 0
+        st["last_ts"] = now    # 主动出塔：零头不再挂钟，避免冷却被多算
+
+    res.update({
+        "mode": "settle" if not capped else "capped",
+        "minutes": billable, "gain": gain, "energy_spent": blocks,
+        "energy": int(st.get("fire_energy", 0)),
+        "poison": int(st.get("fire_poison", 0)), "poison_add": poison_add,
+        "capped": capped, "in_tower": bool(st.get("in_tower")),
+        "leftover_min": max(0, int(elapsed_min) - billable),
+    })
+    return res
+
+
+def tower_upgrade_card(st: dict) -> dict:
+    """升一档火晶卡（原地改 st）。原著「黑换蓝缴纳一百天火能」。"""
+    tier = tower_tier(st.get("card_tier", 0))
+    names = cfg.FACTION_CARD_NAMES
+    if tier >= len(names) - 1:
+        return {"ok": False, "reason": "max", "tier": tier,
+                "name": names[tier]}
+    cost = int(cfg.FACTION_CARD_UPGRADE_COST[tier])
+    have = int(st.get("fire_energy", 0))
+    if have < cost:
+        return {"ok": False, "reason": "energy", "tier": tier, "need": cost,
+                "have": have, "name": names[tier], "next": names[tier + 1]}
+    st["fire_energy"] = have - cost
+    st["card_tier"] = tier + 1
+    return {"ok": True, "tier": tier + 1, "cost": cost,
+            "name": names[tier], "next": names[tier + 1],
+            "energy": int(st["fire_energy"])}
+
+
 def regen(p, elapsed: float) -> dict:
     """按经过时间结算气血/斗气的自动恢复（纯函数，时间源由调用方给）。
 
@@ -441,16 +636,25 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     m_atk = int(st["体力"] / m_rounds / mitigation(st["防御"]))
     exp = int(cfg.exp_need(lv) / cfg.EXP_FIGHTS_PER_LV * float(mon.get("exp_mul", 1.0)))
     gold = int(exp * 0.25 * float(mon.get("gold_mul", 1.0)))
-    # kind/is_boss 纯增量透传（2026-11-18 天材地宝分级掉落）：默认空/False 时
+    #     kind/is_boss 纯增量透传（2026-11-18 天材地宝分级掉落）：默认空/False 时
     # 既有调用与测试逐字节不变；遭遇战反派(魂殿/黑盟/魔炎谷)与塔/周本 boss 层据此
     # 解锁 tier4 专属掉落。掉落层只认这两个字段，不反推战斗数值。
     _kind = str(mon.get("kind") or "")
     _is_boss = any(tok in _kind for tok in cfg.BOSS_KIND_TOKENS)
+    # 2026-11-19 怪物技能：纯透传，不参与任何数值反解（难度仍只由战力/层号决定）。
+    # species 自带 skill（塔/周本虚拟怪）→ 用它；否则按怪名查表，再按 kind 兜底。
+    _skill = mon.get("skill") or cfg.MONSTER_SKILLS.get(mon["name"])
+    if not _skill:
+        for _tok, _sk in cfg.SKILL_BY_KIND.items():
+            if _tok in _kind:
+                _skill = _sk
+                break
     return {
         "name": mon["name"], "lv": int(mon["lv"]),
         "hp": max(1, m_hp), "atk": max(1, m_atk), "def": m_def,
         "exp": max(1, exp), "gold": max(1, gold),
         "kind": _kind, "is_boss": _is_boss,
+        "skill": dict(_skill) if _skill else None,
     }
 
 
@@ -742,8 +946,33 @@ def roll_hero_aid(p, rng=random.random) -> dict | None:
     return {"name": name, "rate": rate, "luck": max(0, int(p.get("luck", 0)))}
 
 
+def auto_pill_candidates(p, effect: str, locked: set[str] | None = None) -> list[tuple[int, str]]:
+    """背包里所有可用的「回血/回气」丹药，按恢复量从小到大排（先省小药）。
+
+    2026-11-19 自动服药：锁定的物品（``locked``）直接跳过 —— 这是玩家给
+    「留着卖 / 留着冲关」的药上的护栏，自动逻辑绝不碰。
+    只认 effect=hp/mp 的配方或天材地宝，与 ``use_item`` 同一套解析口径。
+    """
+    locked = locked or set()
+    out: list[tuple[int, str]] = []
+    cap = int(stats(p)["体力"]) if effect == "hp" else mp_max(p)
+    for name, n in bag(p).items():
+        if int(n) <= 0 or name in locked:
+            continue
+        rec = cfg.RECIPE_BY_NAME.get(name) or cfg.MATERIAL_BY_NAME.get(name)
+        if not rec or str(rec.get("effect") or "") != effect:
+            continue
+        gain = max(int(rec.get("value") or 0),
+                   int(cap * float(rec.get("pct") or 0)))
+        if gain > 0:
+            out.append((gain, str(name)))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
+
+
 def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
-          puppet=None, formation_n=0) -> dict:
+          puppet=None, formation_n=0, locked=None, auto_pill=True,
+          pill_budget=None) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
 
     ``puppet`` / ``formation_n``（2026-11-18 傀儡）：出战傀儡真实列 dict 与同场
@@ -770,6 +999,19 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     :param roll_aid: 是否在开场自己掷机缘。**默认 True**——单敌直接调用
       （PVP / 平衡脚本 / 既有测试）语义完全不变；多敌 ``encounter`` 传 False，
       把掷骰权上收到整场一次，避免每敌各掷导致累积概率突破 2% 硬顶。
+    :param locked: 背包里被玩家锁定的物品名集合。自动服药**绝不碰**这些药
+      （2026-11-19 用户「锁定的物品不会被自动使用」）。
+    :param auto_pill: 是否允许自动服药。爬塔/周本打在深副本上，传 False
+      ——它们有专属三选一补给，不能消耗真实背包。
+
+    2026-11-19 战斗过程丰富化（用户要求）：
+      * **不控制回合**：删掉 15 回合硬上限（双方每回合至少 1 点伤害，必分胜负）；
+        只留 ``HARD_ROUND_CAP=300`` 作异常熔断，触发时按血量比例判胜。
+      * **自动服药**：气血 <35% / 斗气 <20% 时从背包取最小可用疗伤丹，
+        各限 2 枚，锁定物品跳过。
+      * **怪物技能**：每个怪按表概率施放 burst / poison / drain，战报可查。
+      * **战斗意外**：怪物小概率崴脚/自乱阵脚（本回合不攻击）；
+        玩家小概率「心火共鸣」1~2 回合增伤减伤（原著依据见设计文档）。
     """
     st = stats(p)
     root = cfg.root_factor(p)   # 根基裁定（隐形）：PVE 承伤侧打折；输出侧在 _hit 内
@@ -788,6 +1030,44 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             m_def = max(0, int(m_def * float(tm["def_mult"])))
 
     rounds, dmg_log, taken = 0, [], 0
+    # 2026-11-19 战斗事件状态（全是本场局部变量，绝不写回存档）
+    locked_set = set(locked or ())
+    #: 自动服药计数。多敌遭遇战由 encounter 传**同一份**预算进来，
+    #: 否则 5 连战会每战各嗑 2 枚、一场吃掉 10 枚家底。
+    pill_used = pill_budget if pill_budget is not None else {"hp": 0, "mp": 0}
+    pill_cap = int(pill_used.get("cap") or cfg.AUTO_PILL_MAX_PER_FIGHT)
+    fortune_left = 0
+    fortune_seen = False
+    fortune_round = 0       # 福利发放的回合号（当回合不递减，否则 1 回合福利只剩半程）
+    poison_turns, poison_dmg = 0, 0
+    exhausted = False
+    _kind = str(mon.get("kind") or "")
+
+    def _try_auto_pill(kind: str) -> None:
+        """血/蓝低于阈值时自动服一枚最小可用疗伤丹（锁定物品跳过）。"""
+        nonlocal hp, mp
+        if not auto_pill or pill_used.get(kind, 0) >= pill_cap:
+            return
+        cap = int(st["体力"]) if kind == "hp" else mp_max(p)
+        cur = hp if kind == "hp" else mp
+        ratio = (cfg.AUTO_PILL_HP_RATIO if kind == "hp"
+                 else cfg.AUTO_PILL_MP_RATIO)
+        if cap <= 0 or cur >= cap * float(ratio):
+            return
+        for _gain, _name in auto_pill_candidates(p, kind, locked_set):
+            if not take_item(p, _name, 1):
+                continue
+            actual = min(cap, cur + _gain) - cur
+            if kind == "hp":
+                hp += actual
+            else:
+                mp += actual
+            pill_used[kind] += 1
+            dmg_log.append(_mark({"dmg": 0, "kind": "服药", "pill": _name,
+                                  "amount": int(actual), "move": "服药",
+                                  "auto": True}))
+            return
+
     dodge = min(95, dodge_rate(p) + float(tm.get("evade_add", 0)))
     crit_add = float(tm.get("crit_add", 0))
     lifesteal = 0.02 * int((p.get("flames") or {}).get("三千焱炎火", 0))
@@ -822,13 +1102,31 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                               "helper": aid["name"], "aid": True, "skill": False,
                               "move": "贵人相助"}, m_hp))
 
-    while not aid and rounds < 15 and m_hp > 0 and hp > 0:
+    while not aid and rounds < int(cfg.HARD_ROUND_CAP) and m_hp > 0 and hp > 0:
         rounds += 1
         hp_before, mp_before, foe_hp_before = hp, mp, m_hp
+        # 怪物毒技能：每回合开始扣血（最多 2 回合），不写任何持久状态。
+        if poison_turns > 0:
+            hp -= poison_dmg
+            taken += poison_dmg
+            poison_turns -= 1
+            dmg_log.append(_mark({"dmg": poison_dmg, "kind": "中毒", "taken": True,
+                                  "dot": True, "move": "中毒"}))
+            if hp <= 0:
+                break
+        # 自动服药：先补给再出手（血低时先吃药是当前玩家的直觉操作）
+        _try_auto_pill("hp")
+        _try_auto_pill("mp")
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
                    crit_add=crit_add, extra_effects=self_effects)
+        # 心火共鸣：玩家 1~2 回合增伤（承伤减免在怪击那段）
+        # 注意**不在这里递减**：递减放在本回合双方都行动完之后，否则 1 回合的
+        # 共鸣只有增伤吃到、减伤吃不到（怪行动时计数已经归零）。
+        if fortune_left > 0:
+            hit["dmg"] = max(1, int(hit["dmg"] * float(cfg.FORTUNE_DMG_MULT)))
+            hit["fortune"] = True
         if entry is not None:
             mp -= cost
         m_hp -= hit["dmg"]
@@ -876,7 +1174,18 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             break
         # 怪反击（被眩晕/定身则跳过）
         if not start["skip"]:
-            if rng() * 100 < dodge:
+            # 怪物失误：原著「脚掌一崴，一屁股坐在地上」（第191章）/
+            # 「手忙脚乱，自乱阵脚」（第601章）。本回合怪不攻击。
+            mishap = float(cfg.MISHAP_CHANCE)
+            if mon.get("is_boss") or "精英" in _kind:
+                mishap *= float(cfg.MISHAP_BOSS_FACTOR)
+            if rng() < mishap:
+                _why = ("脚掌一崴，一屁股坐在地上" if "魔兽" in _kind
+                        else "手忙脚乱，自乱阵脚")
+                # move 只放短标签（战报一行要读得下去），完整描写进 notes
+                dmg_log.append(_mark({"dmg": 0, "kind": "失误", "mishap": True,
+                                      "move": "踉跄", "notes": [_why]}))
+            elif rng() * 100 < dodge:
                 dmg_log.append(_mark({"dmg": 0, "kind": "闪避", "miss": True,
                                       "move": "闪避"}))
             else:
@@ -884,14 +1193,50 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 # 根基裁定（隐形）：虚浮者防御同样打折 → 同怪受到更多伤害。
                 # PVE 玩家承伤处；root=1（适量/正常修炼）时逐字节不变。
                 dealt = max(1, int(m_atk * mitigation(st["防御"] * root) * roll))
+                # 怪物技能（2026-11-19）：概率施放，只作用于本回合，不改面板。
+                # 效果一律并入「兽击」那一条 log 的 notes —— 不额外插 dmg=0 的条目，
+                # 否则回看卡会把一次攻击渲染成两行、并把总量算重。
+                sk_note, sk_name = [], ""
+                sk = mon.get("skill")
+                if sk:
+                    _sc = float(sk.get("chance") or cfg.MONSTER_SKILL_BASE_CHANCE)
+                    if mon.get("is_boss"):
+                        _sc *= 2.0
+                    elif "精英" in _kind:
+                        _sc *= 1.5
+                    if rng() < _sc:
+                        _se, _sm = str(sk.get("effect") or ""), float(sk.get("mult") or 0)
+                        sk_name = str(sk.get("name") or "怪技")
+                        if _se == "burst":
+                            dealt = max(1, int(dealt * _sm))
+                            sk_note.append("%s！伤害×%.1f" % (sk_name, _sm))
+                        elif _se == "drain":
+                            _drain = max(1, int(mp_max(p) * _sm))
+                            mp = max(0, mp - _drain)
+                            sk_note.append("%s！斗气被夺 -%d" % (sk_name, _drain))
+                        elif _se == "poison":
+                            poison_turns, poison_dmg = 2, max(1, int(dealt * _sm))
+                            sk_note.append("%s！中毒 %d×2 回合" % (sk_name, poison_dmg))
+                        else:
+                            dealt = max(1, int(dealt * max(1.0, _sm)))
+                            sk_note.append(sk_name)
+                # 心火共鸣：承伤减免（原著「短暂晕眩足以令战局顷刻间转变」）
+                if fortune_left > 0:
+                    dealt = max(1, int(dealt * float(cfg.FORTUNE_TAKEN_MULT)))
+                    sk_note.append("心火护体，伤害减轻")
                 # 玩家侧减伤/闪避/反伤（卸力水镜/雷蝠天翼/燕返击）
                 inc = fx.on_incoming(p_fx, dealt, rng)
                 hp -= inc["final"]
                 taken += inc["final"]
                 log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True,
                              "move": "兽击"}
-                if inc["notes"]:
-                    log_entry["notes"] = inc["notes"]
+                notes = list(sk_note) + list(inc["notes"] or [])
+                if notes:
+                    log_entry["notes"] = notes
+                if sk_name:
+                    log_entry["monster_skill"] = sk_name
+                if fortune_left > 0:
+                    log_entry["fortune_guard"] = True
                 dmg_log.append(_mark(log_entry, m_hp))
                 if inc["reflect"]:
                     m_hp -= inc["reflect"]
@@ -900,10 +1245,28 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         else:
             dmg_log.append(_mark({"dmg": 0, "kind": "被控", "miss": True,
                                   "move": "被控"}))
+        # 玩家福利：每场最多一次，1~2 回合的短时气机顺畅（不是永久 buff）
+        if not fortune_seen and rng() < float(cfg.FORTUNE_CHANCE):
+            lo, hi = cfg.FORTUNE_ROUNDS
+            fortune_left = int(rng() * (int(hi) - int(lo) + 1)) + int(lo)
+            fortune_seen = True
+            fortune_round = rounds      # 本回合刚开始生效，不许当回合就递减
+            dmg_log.append(_mark({"dmg": 0, "kind": "心火共鸣", "fortune": True,
+                                  "move": "心火共鸣",
+                                  "notes": ["气机顺畅，接下来 %d 回合增伤减伤" % fortune_left]}))
+        # 本回合双方都行动完才递减（且发放当回合不递减），保证增伤与减伤同进同出
+        if fortune_left > 0 and rounds > fortune_round:
+            fortune_left -= 1
         fx.expire_turn(p_fx)
         fx.expire_turn(m_fx)
 
     win = m_hp <= 0
+    if rounds >= int(cfg.HARD_ROUND_CAP) and m_hp > 0 and hp > 0:
+        # 异常熔断（不是玩法回合上限）：按剩余血量比例判胜，绝不静默判负。
+        ratio_p = hp / max(1, int(st["体力"]))
+        ratio_m = m_hp / max(1, int(mon["hp"]))
+        win = ratio_p > ratio_m
+        exhausted = True
     p["hp"] = max(0 if not win else 1, hp)
     p["mp"] = mp   # 斗气结转：写回本场消耗后的剩余值，不再强制回满
 
@@ -915,6 +1278,13 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         "hero_aid": aid,  # None 或 {name,rate,luck}，文案层据此标注机缘因果
         "puppet": (str(puppet.get("name") or "傀儡") if puppet else None),
         "formation": int(formation_n or 0),
+        # 2026-11-19 战斗事件（供战报/回看卡渲染；数值层不消费）
+        "exhausted": bool(exhausted),
+        "auto_pills": {"hp": int(pill_used.get("hp", 0)),
+                       "mp": int(pill_used.get("mp", 0))},
+        "fortune": bool(fortune_seen),
+        # 原著「战斗中夺取火能」：由命令层写进 alchemy_tower 表（真实列）。
+        "fire_energy_gain": max(1, int(mon.get("lv", 1)) // int(cfg.TOWER_ENERGY_PER_LV)),
     }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1
@@ -984,7 +1354,7 @@ def pick_encounter(p, n, rng=random.random) -> list[dict]:
     return out[:n]
 
 
-def encounter(p, rng=random.random) -> dict:
+def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
     """一场遭遇战：连续打 1~5 个敌人，逐个调用 ``fight``（单敌内核零改动）。
 
     设计要点（守既有纪律）：
@@ -1016,9 +1386,13 @@ def encounter(p, rng=random.random) -> dict:
 
     detail: list[dict] = []
     total_rounds = total_taken = total_exp = total_gold = 0
+    fire_gain = 0
     all_drops: list[tuple[str, int]] = []
     win = True
     hero_aid = whole_aid
+    # 自动服药预算整场共享：多敌连战按敌数放宽，但仍有硬顶（见 config 注释）。
+    pill_budget = {"hp": 0, "mp": 0,
+                   "cap": min(6, int(cfg.AUTO_PILL_MAX_PER_FIGHT) * max(1, len(specs)))}
     for i, spec in enumerate(specs):
         mon = dict(monster_scaled(p, spec))
         # 连战第 i 敌削弱（首敌不削），只缩放 hp/atk，def 与产出不动
@@ -1031,11 +1405,14 @@ def encounter(p, rng=random.random) -> dict:
             p["hp"] = min(int(st["体力"]),
                           int(p.get("hp") or 0) + int(st["体力"] * heal))
         # 整场机缘已预掷：传 aid + roll_aid=False，禁止每敌重复掷骰。
-        r = fight(p, mon, rng=rng, aid=whole_aid, roll_aid=False)
+        r = fight(p, mon, rng=rng, aid=whole_aid, roll_aid=False,
+                  pill_budget=pill_budget, locked=locked, auto_pill=auto_pill)
         total_rounds += int(r["rounds"])
         total_taken += int(r["taken"])
         total_exp += int(r.get("exp") or 0)
         total_gold += int(r.get("gold") or 0)
+        if r["win"]:
+            fire_gain += int(r.get("fire_energy_gain") or 0)
         for name, cnt in (r.get("drops") or []):
             all_drops.append((name, int(cnt)))
         detail.append({
@@ -1057,6 +1434,10 @@ def encounter(p, rng=random.random) -> dict:
         "drops": list(merged.items()), "log": [d for x in detail for d in x["log"]],
         "detail": detail, "enemies": [x["name"] for x in detail],
         "enemy_count": len(detail), "hero_aid": hero_aid,
+        # 2026-11-19：整场夺取的火能（仅胜利累加）+ 自动服药总数（供文案）
+        "fire_energy_gain": int(fire_gain),
+        "auto_pills": {"hp": int(pill_budget.get("hp", 0)),
+                       "mp": int(pill_budget.get("mp", 0))},
     }
 
 
@@ -1269,7 +1650,9 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     diff = td.floor_difficulty(floor)
     mod["atk_mult"] = float(mod.get("atk_mult", 1.0)) * atk_tier * diff["atk_mult"]
     mod["hp_mult"] = float(mod.get("hp_mult", 1.0)) * diff["hp_mult"]
-    r = fight(fp, mon, rng=rng, tower_mod=mod)
+    # 深副本战斗不自动嗑药（fp 是 deepcopy，真实背包不会减少；
+    # 打了「服药」日志却不扣药 = 文案与数据两张皮）。塔/周本有各自的三选一补给。
+    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False)
 
     # 层间回血：胜利后回一口，写进返回 hp（由调用方写回会话），避免连爬必死。
     # 战斗副本 fp 的 hp 已被 fight 写为剩余；这里只在胜利时加成。
@@ -1436,7 +1819,9 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random) -> dict:
     elif wdim == "speed":
         mod["crit_add"] += wv * 50
 
-    r = fight(fp, mon, rng=rng, tower_mod=mod)
+    # 深副本战斗不自动嗑药（fp 是 deepcopy，真实背包不会减少；
+    # 打了「服药」日志却不扣药 = 文案与数据两张皮）。塔/周本有各自的三选一补给。
+    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False)
     hp_after = int(fp.get("hp", 0))
     rest = 0
     if r["win"]:
@@ -1546,7 +1931,10 @@ def duel(p, vic, rng=random.random) -> dict:
             entry["foe_hp_after"] = max(0, int(foe_hp))
         return entry
 
-    while rounds < 15 and hp_p > 0 and hp_v > 0:
+    # 2026-11-19「不要控制回合」：PVP 同样去掉 15 回合硬上限。
+    # 双方每回合至少 1 点伤害，数学上必分胜负；HARD_ROUND_CAP 只作脏数据熔断，
+    # 触发时按剩余血量比例判定（与 fight 同口径）。
+    while rounds < int(cfg.HARD_ROUND_CAP) and hp_p > 0 and hp_v > 0:
         rounds += 1
         # p 出手
         hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
@@ -1607,8 +1995,12 @@ def duel(p, vic, rng=random.random) -> dict:
         fx.expire_turn(p_fx)
         fx.expire_turn(v_fx)
     win = hp_v <= 0 and hp_p > 0
+    if rounds >= int(cfg.HARD_ROUND_CAP) and hp_v > 0 and hp_p > 0:
+        # 异常熔断（不是玩法回合上限）：按剩余血量比例判胜，绝不静默判负。
+        win = (hp_p / hp_p0) > (hp_v / hp_v0)
     return {"win": win, "rounds": rounds, "log": log,
-            "hp_p": max(0, hp_p), "hp_v": max(0, hp_v)}
+            "hp_p": max(0, hp_p), "hp_v": max(0, hp_v),
+            "exhausted": rounds >= int(cfg.HARD_ROUND_CAP)}
 
 
 def _roll_drops(p, rng, mon=None) -> list:

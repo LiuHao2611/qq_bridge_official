@@ -747,7 +747,8 @@ async def _(event: Event):
     try:
         p = await store.get_player(qq)
         if p:
-            png = await card.render_bag(p)
+            # 锁定集合进卡面（🔒 前缀），与 cmd_bag 同一数据源
+            png = await card.render_bag(p, await store.item_locks(qq))
     except Exception as e:  # noqa: BLE001
         logger.warning("斗破背包卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:
@@ -951,6 +952,70 @@ async def _(event: Event):
     await puppet_cmd.finish("⚠️ 傀儡卡渲染失败，请稍后重试（未用纯文字代替图片）。")
 
 
+# ---------------------------------------------------------------------------
+# 背包锁定（2026-11-19）：锁定后战斗不自动服用，手动服丹照旧。
+# ---------------------------------------------------------------------------
+item_lock = on_regex(_pat(r"(?:锁定|解锁)\s*\S"), priority=PRI, block=True,
+                     rule=_mode_is("doupo"))
+
+
+@item_lock.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, item_lock)
+    raw = _plain(event)
+    m = re.search(r"(锁定|解锁)\s*(.+)$", raw)
+    on = bool(m) and m.group(1) == "锁定"
+    name = (m.group(2) if m else "").strip()
+    await item_lock.finish(
+        await commands.cmd_lock(store, str(event.user_id), name, on))
+
+
+# ---------------------------------------------------------------------------
+# 后期天焚炼气塔（聚火壶）——2026-11-19 修炼大改
+# 「入塔」进塔并结算塔修；「出塔」离开并开始冷却；「火能」看状态；「换卡」升火晶卡。
+# ---------------------------------------------------------------------------
+tower_in = on_regex(_pat(r"入塔"), priority=PRI, block=True, rule=_mode_is("doupo"))
+
+
+@tower_in.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_in)
+    await tower_in.finish(await commands.cmd_furnace_enter(store, str(event.user_id)))
+
+
+tower_out = on_regex(_pat(r"出塔"), priority=PRI, block=True, rule=_mode_is("doupo"))
+
+
+@tower_out.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_out)
+    await tower_out.finish(await commands.cmd_furnace_exit(store, str(event.user_id)))
+
+
+tower_fire = on_regex(_pat(r"(?:火能|聚火壶)"), priority=PRI, block=True,
+                      rule=_mode_is("doupo"))
+
+
+@tower_fire.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_fire)
+    await tower_fire.finish(await commands.cmd_furnace_status(store, str(event.user_id)))
+
+
+tower_card = on_regex(_pat(r"换卡"), priority=PRI, block=True, rule=_mode_is("doupo"))
+
+
+@tower_card.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, tower_card)
+    await tower_card.finish(await commands.cmd_furnace_upgrade(store, str(event.user_id)))
+
+
 give = on_regex(_pat(r"(?:送|赠送)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
 
@@ -1067,4 +1132,11 @@ register_keywords("doupo", [
     "炼制傀儡",
     "傀儡",
     "傀儡遗迹",
+    "锁定",
+    "解锁",
+    "入塔",
+    "出塔",
+    "火能",
+    "聚火壶",
+    "换卡",
 ])

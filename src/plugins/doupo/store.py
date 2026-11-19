@@ -91,6 +91,27 @@ CREATE TABLE IF NOT EXISTS regen_clock (
     qq      TEXT PRIMARY KEY,
     last_at REAL NOT NULL DEFAULT 0
 );
+-- 2026-11-19 背包锁定：锁定物品不参与「战斗中自动服药」。
+-- 这是玩家数据，按最高声明必须进真实列，不能塞进 players.data 的 bag JSON。
+CREATE TABLE IF NOT EXISTS item_lock (
+    qq        TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    locked_at REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (qq, name)
+);
+-- 2026-11-19 后期天焚炼气塔（聚火壶）：火晶卡档位 / 火能 / 火毒 / 结算时刻。
+-- 同理，全部真实列，不进 players.data。
+CREATE TABLE IF NOT EXISTS alchemy_tower (
+    qq          TEXT PRIMARY KEY,
+    card_tier   INTEGER NOT NULL DEFAULT 0,
+    fire_energy INTEGER NOT NULL DEFAULT 0,
+    fire_poison INTEGER NOT NULL DEFAULT 0,
+    last_ts     REAL    NOT NULL DEFAULT 0,
+    free_day    TEXT    NOT NULL DEFAULT '',
+    enters      INTEGER NOT NULL DEFAULT 0,
+    magma       INTEGER NOT NULL DEFAULT 0,
+    in_tower    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -519,6 +540,92 @@ class Store:
                 raise StoreError("丹药记录写入失败（%s）：%s"
                                  % (type(e).__name__, str(e)[:200])) from e
         return int(row[0]) if row else 0
+
+    # ---- 背包锁定（战斗自动服药的护栏）----
+    async def item_locks(self, qq: str) -> set[str]:
+        """该玩家锁定的物品名集合；空集合表示全部可被自动使用。"""
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    rows = con.execute(
+                        "SELECT name FROM item_lock WHERE qq=?", (str(qq),)).fetchall()
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("背包锁定读取失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return {str(r[0]) for r in rows}
+
+    async def set_item_lock(self, qq: str, name: str, locked: bool) -> bool:
+        """锁定/解锁一件物品，返回本次是否真的改变了状态。"""
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    had = con.execute(
+                        "SELECT 1 FROM item_lock WHERE qq=? AND name=?",
+                        (str(qq), str(name))).fetchone()
+                    if locked and not had:
+                        con.execute(
+                            "INSERT INTO item_lock(qq, name, locked_at) VALUES(?,?,?)",
+                            (str(qq), str(name), time.time()))
+                    elif not locked and had:
+                        con.execute(
+                            "DELETE FROM item_lock WHERE qq=? AND name=?",
+                            (str(qq), str(name)))
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("背包锁定写入失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return bool(locked) != bool(had)
+
+    # ---- 后期天焚炼气塔（聚火壶）----
+    async def tower_state(self, qq: str) -> dict:
+        """塔修状态；没有记录时返回全 0 的默认状态（不写库，读透明）。"""
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    row = con.execute(
+                        "SELECT card_tier, fire_energy, fire_poison, last_ts,"
+                        " free_day, enters, magma, in_tower FROM alchemy_tower WHERE qq=?",
+                        (str(qq),)).fetchone()
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("塔修状态读取失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        if not row:
+            return {"card_tier": 0, "fire_energy": 0, "fire_poison": 0,
+                    "last_ts": 0.0, "free_day": "", "enters": 0, "magma": 0,
+                    "in_tower": 0}
+        return {"card_tier": int(row[0]), "fire_energy": int(row[1]),
+                "fire_poison": int(row[2]), "last_ts": float(row[3]),
+                "free_day": str(row[4] or ""), "enters": int(row[5]),
+                "magma": int(row[6]), "in_tower": int(row[7])}
+
+    async def set_tower_state(self, qq: str, st: dict) -> None:
+        """整行 UPSERT。字段缺失按默认值，避免半截状态。"""
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    con.execute(
+                        "INSERT INTO alchemy_tower(qq, card_tier, fire_energy,"
+                        " fire_poison, last_ts, free_day, enters, magma, in_tower)"
+                        " VALUES(?,?,?,?,?,?,?,?,?)"
+                        " ON CONFLICT(qq) DO UPDATE SET"
+                        " card_tier=excluded.card_tier,"
+                        " fire_energy=excluded.fire_energy,"
+                        " fire_poison=excluded.fire_poison,"
+                        " last_ts=excluded.last_ts,"
+                        " free_day=excluded.free_day,"
+                        " enters=excluded.enters,"
+                        " magma=excluded.magma,"
+                        " in_tower=excluded.in_tower",
+                        (str(qq), int(st.get("card_tier", 0)),
+                         int(st.get("fire_energy", 0)),
+                         int(st.get("fire_poison", 0)),
+                         float(st.get("last_ts", 0)),
+                         str(st.get("free_day", "")),
+                         int(st.get("enters", 0)),
+                         int(st.get("magma", 0)),
+                         int(st.get("in_tower", 0))))
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("塔修状态写入失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
 
     # ---- 自动调息的时间基准 ----
     async def regen_last(self, qq: str) -> float:
