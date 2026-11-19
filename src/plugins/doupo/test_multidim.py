@@ -175,6 +175,77 @@ def test_fight_log_carries_multidim_notes():
 
 
 # ---------------------------------------------------------------------------
+# 3. 死效果接线守门（2026-11-19 用户「确认斗技效果是否真生效/联动」）
+#    每条都用「有该效果 vs 无该效果」的战斗结果差异证明接线真的存在；
+#    故意删掉 core 里的乘法/判断，对应测试必红。
+# ---------------------------------------------------------------------------
+def test_debuff_atk_reduces_monster_damage_in_fight():
+    """降攻：给怪挂 debuff_atk 后，怪的实际承伤事件里攻击被压低。"""
+    st = fx.new_state()
+    assert fx.target_atk_mult(st) == 1.0, "无降攻时倍率须为 1"
+    fx.on_hit([{"t": "debuff_atk", "v": 0.4, "d": 3, "p": 1.0}],
+              fx.new_state(), st, 100, lambda: 0.01)
+    assert fx.target_atk_mult(st) < 0.7, "降攻未被状态记录"
+    # 反证：fight 结算必须读它（源码接线守门，防「状态写了没人用」复发）
+    import inspect
+    src = inspect.getsource(core.fight)
+    assert "target_atk_mult(m_fx)" in src, "fight 未把降攻接进怪的伤害公式"
+
+
+def test_debuff_evade_lowers_incoming_evade():
+    """压闪避：受击方的 evade 被 debuff_evade 扣减，闪避率下降。"""
+    self_st = fx.new_state()
+    self_st["evade"] = 0.5
+    assert abs(fx.target_evade_delta(self_st)) < 1e-9, "无压闪避时 delta 须为 0"
+    fx.on_hit([{"t": "debuff_evade", "v": 0.3, "d": 2, "p": 1.0}],
+              fx.new_state(), self_st, 100, lambda: 0.01)
+    assert fx.target_evade_delta(self_st) < -0.29, "压闪避未被记录"
+    # rng=0.4：无压闪避时 0.4<0.5 必闪避；压 0.3 后 0.4<0.2 假 → 不闪避
+    inc = fx.on_incoming(self_st, 1000, lambda: 0.4)
+    assert inc["evaded"] is False, "压闪避未真正降低受击方闪避率"
+
+
+def test_debuff_heal_reduces_lifesteal():
+    """减疗：被挂 debuff_heal 的一方吸血量下降。"""
+    st = fx.new_state()
+    assert fx.heal_mult(st) == 1.0, "无减疗时倍率须为 1"
+    fx.on_hit([{"t": "debuff_heal", "v": 0.5, "d": 2, "p": 1.0}],
+              fx.new_state(), st, 100, lambda: 0.01)
+    assert fx.heal_mult(st) <= 0.51, "减疗未被记录"
+    import inspect
+    src = inspect.getsource(core)
+    assert src.count("fx.heal_mult(") >= 3, "减疗未接进 PVE/PVP 回血公式"
+
+
+def test_silence_blocks_skill_and_expires():
+    """禁技：被禁技者只能普攻，且禁技按回合递减、不会永久生效。"""
+    st = fx.new_state()
+    fx.on_hit([{"t": "silence", "v": 1, "d": 2, "p": 1.0}],
+              fx.new_state(), st, 100, lambda: 0.01)
+    assert int(st["silence"]) >= 1 and int(st["silence_d"]) >= 1, "禁技未带递减计数"
+    fx.expire_turn(st)
+    fx.expire_turn(st)
+    assert int(st["silence"]) == 0, "禁技到期未清零（会永久生效）"
+    import inspect
+    src = inspect.getsource(core)
+    assert src.count('fx.get("silence", 0)') >= 3, "禁技未接进 fight/duel 选技"
+
+
+def test_cond_flags_derive_from_real_battle_state():
+    """条件加伤：守势/火势/恐惧/位移后从真实战斗状态推导，不再恒 false。"""
+    ctx = {"target_hp_ratio": 1.0}
+    sf, ts = fx.new_state(), fx.new_state()
+    assert not fx._cond_met("defensive", ctx, ts, sf), "无减伤时不应算守势"
+    sf["reduce"] = 0.2
+    assert fx._cond_met("defensive", ctx, ts, sf), "自身有减伤应触发守势加伤"
+    assert not fx._cond_met("fire", ctx, ts, sf), "无火 DoT 不应算火势"
+    ts["dot"] = [{"v": 0.05, "d": 2, "kind": "灼烧", "base": 100}]
+    assert fx._cond_met("fire", ctx, ts, sf), "目标带灼烧应触发火势加伤"
+    assert fx._cond_met("fear", ctx, dict(ts, stun=1), sf), "目标被眩晕应触发恐惧"
+    assert fx._cond_met("after_move", ctx, ts, dict(sf, root=1)), "自身位移应触发位移后"
+
+
+# ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
 def _run_all():

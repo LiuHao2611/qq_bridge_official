@@ -232,7 +232,7 @@ def new_state() -> dict:
         "debuff_evade": 0.0, "debuff_evade_d": 0,
         "debuff_heal": 0.0, "debuff_heal_d": 0,
         "def_shred": 0.0, "def_shred_d": 0,
-        "stun": 0, "silence": 0, "root": 0,
+        "stun": 0, "silence": 0, "silence_d": 0, "root": 0,
         # 自身（增益）
         "reduce": 0.0, "reduce_d": 0, "reduce_vs_heavy": 0.0,
         "evade": 0.0, "evade_d": 0,
@@ -242,20 +242,36 @@ def new_state() -> dict:
     }
 
 
-def _cond_met(cond, ctx: dict, target_state: dict) -> bool:
-    """条件加伤是否满足。未知/未模拟的条件一律 False（保守，不加伤）。"""
+def _cond_met(cond, ctx: dict, target_state: dict, self_state: dict | None = None) -> bool:
+    """条件加伤是否满足。
+
+    2026-11-19 修：原先只读 ctx 里从头到尾没人填的 self_flags/target_flags，
+    导致除 low_hp 外的 8 个条件技**恒不触发**（词条印着「条件+15%」却是死效果）。
+    改为从真实战斗状态推导，兼容外部注入的显式 flags（老调用不受影响）：
+      * defensive 守势 —— 自身有减伤（reduce>0）或显式 defensive flag；
+      * fire      火势 —— 目标挂着「灼烧/火焰」DoT，或显式 fire flag；
+      * fear      恐惧 —— 目标被眩晕/定身，或显式 fear flag；
+      * after_move 位移后 —— 自身用过击退/定身（root>0）或显式 moved flag；
+      * low_hp    残血 —— 目标血量比例 <35%（原本就生效）。
+    未知条件保守 False。
+    """
     if not cond:
         return False
     flags = set(ctx.get("self_flags") or ())
     tflags = set(ctx.get("target_flags") or ())
+    sf = self_state or {}
+    ts = target_state or {}
     if cond == "after_move":
-        return "moved" in flags
+        return "moved" in flags or int(sf.get("root", 0)) > 0
     if cond == "fear":
-        return "fear" in tflags
+        return "fear" in tflags or int(ts.get("stun", 0)) > 0 or int(ts.get("root", 0)) > 0
     if cond == "defensive":
-        return "defensive" in tflags
+        return "defensive" in tflags or "defensive" in flags or float(sf.get("reduce", 0)) > 0
     if cond == "fire":
-        return "fire" in tflags or "fire" in flags
+        if "fire" in tflags or "fire" in flags:
+            return True
+        return any("火" in str(d.get("kind") or "") or "灼" in str(d.get("kind") or "")
+                   for d in (ts.get("dot") or []))
     if cond == "low_hp":
         return float(ctx.get("target_hp_ratio", 1.0)) < 0.35
     return False
@@ -324,6 +340,7 @@ def on_hit(effects, self_state: dict, target_state: dict, dmg: int, rng,
 
         elif t == "silence":
             target_state["silence"] = max(target_state["silence"], max(1, d))
+            target_state["silence_d"] = max(target_state["silence_d"], max(1, d))
             notes.append("禁技")
 
         elif t == "root":
@@ -363,7 +380,7 @@ def on_hit(effects, self_state: dict, target_state: dict, dmg: int, rng,
                 notes.append(f"{n}连击+{_pct(v)}")
 
         elif t == "cond":
-            if _cond_met(e.get("cond"), ctx, target_state):
+            if _cond_met(e.get("cond"), ctx, target_state, self_state):
                 res["bonus"] += v
                 notes.append(f"条件{_pct(v)}")
 
@@ -385,6 +402,11 @@ def target_def_mult(state: dict) -> float:
 def target_evade_delta(state: dict) -> float:
     """目标闪避率改变量（压闪避为负）。"""
     return -min(0.9, float(state.get("debuff_evade", 0)))
+
+
+def heal_mult(state: dict) -> float:
+    """自身回血倍率（对手挂来的减疗压低）。无减疗时恒 1.0。"""
+    return 1.0 - min(0.9, float(state.get("debuff_heal", 0)))
 
 
 def on_turn_start(target_state: dict, rng) -> dict:
@@ -420,10 +442,12 @@ def on_incoming(self_state: dict, dmg: int, rng, ctx: dict | None = None) -> dic
     ctx = ctx or {}
     st = self_state
     notes: list[str] = []
-    evade = float(st.get("evade", 0))
+    # 压闪避（2026-11-19 修）：对手挂来的 debuff_evade 记在自己 state 上，
+    # 受击时按 target_evade_delta 扣减自身闪避率。无压闪避时 delta=0，逐字节不变。
+    evade = float(st.get("evade", 0)) + target_evade_delta(st)
     if evade > 0 and rng() < evade:
         return {"final": 0, "reflect": 0, "evaded": True,
-                "notes": [f"闪避{_pct(evade)}"]}
+                "notes": [f"闪避{_pct(max(0.0, float(st.get('evade', 0))))}"]}
     reduce = float(st.get("reduce", 0))
     if ctx.get("heavy"):
         reduce = min(0.9, reduce + float(st.get("reduce_vs_heavy", 0)))
@@ -445,6 +469,7 @@ def expire_turn(state: dict) -> None:
         ("debuff_heal_d", "debuff_heal"), ("def_shred_d", "def_shred"),
         ("reduce_d", "reduce"), ("evade_d", "evade"),
         ("reflect_d", "reflect"), ("empower_d", "empower"),
+        ("silence_d", "silence"),  # 禁技（2026-11-19 修）：原本写了不递减，永久生效
     )
     for dk, vk in pairs:
         if int(state.get(dk, 0)) > 0:

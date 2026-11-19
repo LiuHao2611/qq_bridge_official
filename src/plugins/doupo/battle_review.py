@@ -344,6 +344,9 @@ def action_items(battle: dict) -> list[dict]:
             tags.append("闪避")
         if it.get("reflect"):
             tags.append("反伤")
+        # 降攻联动（2026-11-19 修）：怪的原始攻击被玩家降攻技压低，回看可见
+        if _i(it.get("atk_debuff")) > 0:
+            tags.append("降攻")
         if it.get("dot"):
             tags.append("持续")
         if it.get("aid"):
@@ -374,6 +377,11 @@ def action_items(battle: dict) -> list[dict]:
         raw = _i(it.get("raw")) or _i(it.get("atk_raw"))
         cut = _i(it.get("def_cut"))
         absorbed = _i(it.get("absorbed"))
+        debuff = _i(it.get("atk_debuff"))
+        comp = _comp_text(raw, max(0, cut), max(0, absorbed))
+        # 降攻联动：把「原始攻击被压低多少」并进伤害构成行（纯展示）
+        if debuff > 0:
+            comp = ("降攻 -" + _num(debuff) + (" · " + comp if comp else ""))
         out.append({
             "idx": _i(it.get("index"), i),
             "round": rmap[i - 1] if (i - 1) < len(rmap) else i,
@@ -383,11 +391,12 @@ def action_items(battle: dict) -> list[dict]:
             "tone": tone,
             "tags": "·".join(tags[:TAG_LIMIT]),
             # 伤害构成 + 该条动作发生后的血/斗气快照（回看卡画「战损」用）
-            "comp": _comp_text(raw, max(0, cut), max(0, absorbed)),
+            "comp": comp,
             "dmg": _i(it.get("dmg")),
             "raw": raw,
             "cut": max(0, cut),
             "absorbed": max(0, absorbed),
+            "atk_debuff": debuff,
             "hp_after": _i(it.get("hp_after")),
             "mp_after": _i(it.get("mp_after")),
             "foe_hp_after": (int(it["foe_hp_after"])

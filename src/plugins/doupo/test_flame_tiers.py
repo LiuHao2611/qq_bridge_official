@@ -60,6 +60,17 @@ def main() -> int:
     check("OWNED_FLAME_NAMES 无重复",
           len(cfg.OWNED_FLAME_NAMES) == len(set(cfg.OWNED_FLAME_NAMES)), "")
 
+    # ---- 1b. 异火描述不写章节（2026-11-19 用户「有些异火描述有章节说明，不要这个」）----
+    # 语义判据：desc 里不得出现「第X章」形式的原著引用；数值/设定说明照留。
+    # 这是展示契约（card.build_flames_data 把 desc 直接拼进卡面 sub 行），不是考据删除。
+    import re as _re
+    _chap = _re.compile(r"第[一二三四五六七八九十百零两千万0-9]+章")
+    _all_flames = list(cfg.FLAMES) + list(cfg.BONUS_FLAMES) + list(cfg.OTHER_FLAMES)
+    _with_chap = [f["name"] for f in _all_flames if _chap.search(str(f.get("desc") or ""))]
+    check("异火 desc 无章节引用", not _with_chap, str(_with_chap))
+    check("异火 desc 非空且带数值口径",
+          all(f.get("desc") and ("+" in f["desc"] or "每级" in f["desc"]) for f in _all_flames), "")
+
     # ---- 2. 入道 starter：任何宗门都发 B 线火，且无 S/A ----
     p = core.create_player("30001", "新号", 900000077)
     owned = {n: v for n, v in p["flames"].items() if v > 0}
