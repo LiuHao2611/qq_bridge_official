@@ -91,7 +91,12 @@ def build(t: Theme, groups=None, title: str = "指令菜单", subtitle: str = ""
         return (n + 1) // 2
 
     header_block = 100
-    footer_block = 40
+    # 页脚留白 40→64：末组「口令+说明」两行会被 40 挤到压住页脚
+    # （2026-11-19 补硬件行情分组时实拍抓到：正文底 h-47 vs 页脚 h-44 = 重叠）。
+    # ⚠️ 但这个值**治不了**「右下角贴纸压字」——贴纸顶 = h-205、正文底 = h-F-7，
+    # 两者都随 h 走，加大 F 等于是等价平移，永远差同一段距离（实测要把 F 加到 246 才够，
+    # 代价是 200+px 空白带）。贴纸压字只能靠缩短文案解决，别再来调这个参数。
+    footer_block = 64
     body_h = sum(28 + rowcount(len(g["items"])) * CELL_H for g in groups)
     h = pad + header_block + body_h + footer_block + pad
 

@@ -68,6 +68,12 @@ _backup_*/
 # （自制资产，build 不覆盖，见同目录 README.md），不是调试截图；缺图 gate(strict) 会硬拦。
 !src/plugins/qq_bridge/pic/templates/assets/checkin_gold/*.png
 
+# ===== DIY 硬件行情：上游 frocloud 数据集 CSV 是源码资产，随代码交付 =====
+# 顶层 `data/` 通配会误伤 vendored_frocloud/data/*.csv；dataset.py 运行时直接
+# 读这 7 张表，漏推则容器内行情功能即崩。上游 .gitignore 也明确要求跟踪。
+!src/plugins/qq_bridge/hardware/vendored_frocloud/data/
+!src/plugins/qq_bridge/hardware/vendored_frocloud/data/*.csv
+
 # ============================================================================
 # 独立仓库 qq_bridge_official（2026-11-16）——只提交源码/配置/文档/测试
 # 仓库红线：单文件 >200KB 禁止上传；运行态数据/大资产/缓存一律不入库
