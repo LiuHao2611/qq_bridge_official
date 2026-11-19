@@ -181,6 +181,14 @@ def stats(p) -> dict:
     for k, v in (p.get("bonus") or {}).items():
         out[k] = out.get(k, 0) + int(v)
 
+    # 其他火焰（兽火/天然/人造/融合火）的比例加成：atk→力量、hp→体力。
+    # 与 flame_bonus 同源；只有已收服才生效，新号无这些火 → 逐字节不变。
+    _ofr = _flame_bonus.other_flame_ratio(p)
+    if _ofr.get("atk"):
+        out["力量"] = int(out.get("力量", 0) * (1.0 + float(_ofr["atk"])))
+    if _ofr.get("hp"):
+        out["体力"] = int(out.get("体力", 0) * (1.0 + float(_ofr["hp"])))
+
     if p.get("diyan"):
         for k in out:
             out[k] = int(out[k] * 1.2)
@@ -520,6 +528,113 @@ def level_up(p, rng=random.random) -> dict:
     p["lv"] = lv + 1
     _refill(p)
     return {"ok": True, "lv": p["lv"], "name": cfg.full_realm(p["lv"])}
+
+
+def is_nine_star_breakthrough(p) -> bool:
+    """当前是否「九星突破点」：经验已满、且这一级突破会跨入下一个大境界。
+
+    lv9→10(斗之气九段→斗者)、lv18→19(斗者九星→斗师) … lv102→103(斗圣九星→斗帝)
+    都算。半圣只有 3 阶（lv91-93），lv93→94 也归入。普通升级（一星升二星）不算。
+    """
+    lv = int(p.get("lv", 1))
+    if lv >= cfg.MAX_LV or not can_level(p):
+        return False
+    return cfg.realm_index(lv) != cfg.realm_index(lv + 1)
+
+
+def make_breakthrough_boss(p, rng=random.random) -> dict:
+    """用**战力快照**造一只「比快照强一点」的九星突破 BOSS（不写 p）。
+
+    战力快照 = 触发瞬间深拷贝的 p；用放大后的快照反解怪物数值，保证 BOSS 比玩家强：
+      * 血量：以放大输出反解 → 玩家打它需要更多回合（更耐打）；
+      * 攻击：放大体力反解 → 每回合更疼（难度来源）。
+    kind 走 cfg.BOSS_BREAK_KIND（魂殿）→ 复用既有 Boss 掉落（tier4 天材地宝+补血丹）。
+    """
+    snap = copy.deepcopy(p)   # 战力快照：触发瞬间锁定，战斗过程不再变化
+    species = {
+        "name": "心魔劫影", "lv": int(snap["lv"]),
+        "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
+        "kind": cfg.BOSS_BREAK_KIND,
+    }
+    # 基准怪与快照玩家「势均力敌」（TTK_PLAYER=4.5）。在其上温和放大血/攻，
+    # 做出「比快照强一点、拖得更久」的感觉。⚠️ 不放大快照属性本身：早先那样做
+    # 会让低等级怪攻击反解畸高（等级基数小）→ 低等级九星突破几乎必败，卡死新手。
+    # 难度主要来自更耐打（回合变长→斗气耗尽转普攻）+ 略高的攻击，而非必杀。
+    mon = monster_scaled(snap, species)
+    mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
+    mon["atk"] = max(1, int(mon["atk"] * float(cfg.BOSS_BREAK_ATK_MULT)))
+    mon["is_boss"] = True
+    mon["breakthrough_boss"] = True
+    mon["snapshot_power"] = power(p)   # 快照战力，仅展示/校验，不影响数值
+    return mon
+
+
+def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
+    """九星突破 BOSS 战完整流程（命令层调用；core 只做逻辑不改存档持久化）。
+
+    前置必须由调用方先用 ``is_nine_star_breakthrough(p)`` 判定。本函数：
+      1. 战力快照 → 造比快照强的 BOSS（make_breakthrough_boss）；
+      2. 用既有的 ``fight()`` 打这一场（自动服药/锁定物品口径与普通战斗一致）；
+      3. 胜利 → 掉火焰（roll_breakthrough_flame）→ level_up 完成突破；
+         失败 → 保留战斗损耗（掉血/耗药），经验不扣，可再次挑战。
+    返回 dict 给命令层渲染文案；``p`` 就地被修改（胜负都由 fight / level_up 写）。
+    """
+    mon = make_breakthrough_boss(p, rng)
+    res = fight(p, mon, rng=rng, locked=locked or set(), auto_pill=True)
+    out = {
+        "boss": mon, "win": bool(res.get("win")),
+        "rounds": int(res.get("rounds", 0)),
+        "taken": int(res.get("taken", 0)),
+        "hp_end": int(p.get("hp", 0)),
+        "snapshot_power": int(mon.get("snapshot_power", 0)),
+    }
+    if not res.get("win"):
+        out["leveled"] = False
+        out["flame"] = None
+        return out
+    # 胜利：先掉火焰再突破（level_up 会回满 hp/mp）。
+    out["flame"] = roll_breakthrough_flame(p, rng)
+    lvres = level_up(p, rng=rng)
+    out["leveled"] = bool(lvres.get("ok"))
+    out["tiandi"] = bool(lvres.get("tiandi"))
+    out["tiandi_fail"] = lvres.get("reason") == "tiandi_fail"
+    out["rate"] = lvres.get("rate")
+    out["new_lv"] = int(p.get("lv", 0))
+    return out
+
+
+def roll_breakthrough_flame(p, rng=random.random) -> dict:
+    """九星 BOSS 战胜利后的火焰掉落。兽火/其他火焰概率高于异火（用户口径）。
+
+    只掉 B 线数值异火与其他火焰；A 线隐藏彩蛋 / S 线门槛火 / 帝炎不进池
+    （保护已拍板的三层设计：它们的获取方式各自独立）。
+    写入 p["flames"][name] = 1（单一真值，与收服/支线同源）；已有则折算成药渣补偿。
+    """
+    r = int(rng() * 1000)
+    kind, name = "", ""
+    if r < int(getattr(cfg, "BOSS_FLAME_DROP_OTHER", 0)):
+        # 其他火焰池：融合新生火权重更低（更稀有）
+        pool = []
+        for f in cfg.OTHER_FLAMES:
+            w = (cfg.BOSS_FUSION_RARE_WEIGHT if f["kind"] == "fusion"
+                 else cfg.BOSS_FUSION_WEIGHT)
+            pool.extend([f["name"]] * max(1, int(w * 100)))
+        name = rng_choice(pool, rng) if pool else ""
+        kind = "other"
+    elif r < int(getattr(cfg, "BOSS_FLAME_DROP_OTHER", 0)) + int(
+            getattr(cfg, "BOSS_FLAME_DROP_BONUS", 0)):
+        name = rng_choice(cfg.BONUS_FLAME_NAMES, rng) if cfg.BONUS_FLAME_NAMES else ""
+        kind = "bonus"
+    if not name:
+        return {"ok": False, "name": "", "kind": ""}
+
+    fl = p.setdefault("flames", {})
+    if int(fl.get(name, 0)) > 0:
+        # 已持有 → 折算药渣（不重复给 1 级，避免刷数值）
+        add_item(p, "药渣", 30)
+        return {"ok": True, "name": name, "kind": kind, "duplicate": True, "dross": 30}
+    fl[name] = 1
+    return {"ok": True, "name": name, "kind": kind, "duplicate": False}
 
 
 def _refill(p) -> None:

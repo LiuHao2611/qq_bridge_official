@@ -10,6 +10,7 @@ __init__.py 的 matcher 只负责取参数 → 调 cmd_* → finish(文字)。
 
 from __future__ import annotations
 
+import random
 import re
 import time
 from datetime import date
@@ -270,7 +271,7 @@ MENU_GROUPS = (
         ("出塔", "离开炼气塔，开始消解火毒（每分钟 -2）"),
         ("火能", "看聚火壶状态：火晶卡 / 火能 / 火毒 / 心火倍率 / 岩浆世界"),
         ("换卡", "升一档火晶卡（黑→蓝→青→赤→紫，消耗火能，解锁更深塔层）"),
-        ("突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"),
+        ("突破", "修为满时晋升一星；九星跨境界须先战心魔劫影（胜则概率掉兽火/异火）；斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
         ("战斗回看", "查看最后一次战斗完整过程：逐招、气血/斗气、词条（出卡片）"),
         ("战斗评价", "根据最后一场战斗的真实数据，给一句/一段毒舌评语"),
@@ -374,6 +375,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("异火", (
         "青莲地心火 斗气槽+25%/级；陨落心炎 经验+50%/级；",
         "三千焱炎火 吸血+2%/级；净莲妖火 暴击闪避+10%/级；帝炎 斗帝专属",
+        "九星跨境界突破须先战心魔劫影：胜则概率掉兽火/异火（兽火概率更高），入「异火」查看",
     )),
     ("斗帝", (
         "102 级九星斗圣冲 103 级：成功率 = 30% + 机缘/2000，帝炎 100%",
@@ -541,7 +543,8 @@ async def cmd_cultivate(store, qq) -> str:
             f"（想快些可发「入塔」借心火成倍修炼，需火能与火晶卡）")
 
 
-async def cmd_break(store, qq) -> str:
+async def cmd_break(store, qq, rng=None) -> str:
+    """突破口令。rng 可选注入（测试用必胜/必败随机源；线上 None=random.random）。"""
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
@@ -553,6 +556,39 @@ async def cmd_break(store, qq) -> str:
     if not core.can_level(p):
         need = cfg.exp_need(lv) - int(p["exp"])
         return f"修为不足，距下一星还差 {_fmt(need)}。去「战斗」或「修炼」。"
+    # 2026-11-19 九星突破 BOSS 战：跨大境界的那一次突破须先战胜心魔劫影。
+    if core.is_nine_star_breakthrough(p):
+        locked = await store.item_locks(str(qq))
+        br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked)
+        await store.put_player(p)
+        if not br["win"]:
+            return (
+                f"🌩️ 突破【{cfg.full_realm(lv)}】之际，心魔劫影骤然现身！\n"
+                f"　你以快照战力 {_fmt(br['snapshot_power'])} 迎战，鏖战 {br['rounds']} 回合，"
+                f"终因火候不足而败（余血 {_fmt(br['hp_end'])}）。\n"
+                "　修为未散，调息再来——「突破」可再战此劫。"
+            )
+        # 战胜：先报火焰掉落，再报突破结果。
+        lines = [f"🌩️ 心魔劫影被你一击击溃（快照战力 {_fmt(br['snapshot_power'])}，"
+                 f"鏖战 {br['rounds']} 回合）！"]
+        fl = br.get("flame") or {}
+        if fl.get("ok"):
+            if fl.get("duplicate"):
+                lines.append(f"　劫影散去，落下的一缕【{fl['name']}】你早已拥有，"
+                             f"化作药渣 ×{fl.get('dross', 30)}。")
+            else:
+                _kind = "兽火/其他火焰" if fl.get("kind") == "other" else "异火"
+                lines.append(f"　劫影溃散处遗下一缕【{fl['name']}】（{_kind}），已收入囊中——"
+                             "「养火」可喂药渣升级。")
+        if br.get("tiandi"):
+            lines.append("🔥 你踏碎最后一层壁障，成就【斗帝】！帝炎自燃，机缘全满。")
+            return "\n".join(lines)
+        if br.get("tiandi_fail"):
+            lines.append(f"💥 冲击斗帝未成（成功率 {int((br.get('rate') or 0) * 100)}%），"
+                         "修为折损，多积机缘再来。")
+            return "\n".join(lines)
+        lines.append(f"✨ 境界突破！由【{cfg.full_realm(lv)}】晋入【{cfg.full_realm(br['new_lv'])}】。")
+        return "\n".join(lines)
     res = core.level_up(p)
     await store.put_player(p)
     if res.get("tiandi"):
@@ -1170,6 +1206,20 @@ async def cmd_flames(store, qq) -> str:
             kind = "炼药" if f["kind"] == "alchemy" else "傀儡"
             out.append(f"　　{f['icon']} {name}　{lv}/{cfg.FLAME_MAX_LV} 级"
                        f"　{kind}+{int(round(float(f['value']) * 100))}%/级")
+    # 其他火焰（兽火/天然/人造/融合火）：九星突破 BOSS 掉落，只列已收服。
+    o_owned = [f for f in getattr(cfg, "OTHER_FLAMES", [])
+               if int(fl.get(f["name"], 0)) > 0]
+    if o_owned:
+        out.append("　兽火 / 其他火焰（九星突破劫影掉落，按等级给加成）：")
+        for f in o_owned:
+            name = f["name"]
+            lv = int(fl.get(name, 0))
+            kind = {"beast": "兽火", "nature": "天然火", "art": "人造火",
+                    "fusion": "融合火"}.get(f["kind"], "火")
+            stat = {"alchemy": "炼药", "atk": "攻击", "hp": "气血"}.get(
+                f["bonus"], "数值")
+            out.append(f"　　{f['icon']} {name}（{kind}）　{lv}/{cfg.FLAME_MAX_LV} 级"
+                       f"　{stat}+{int(round(float(f['value']) * 100))}%/级")
     out.append("")
     out.append("　收服后主动技可用「上阵 <技名>」放进四槽，「斗技详情 <技名>」看全文与出处")
     out.append("　" + flame_usage_hint(p))

@@ -179,15 +179,17 @@ async def main():
     check("突破后等级 =2", int(p["lv"]) == 2, f"lv={p['lv']}")
     check("突破后回满血", p["hp"] == core.stats(p)["体力"])
 
-    # 跨大境界的文案（2026-11-14 用户实测反馈：跨境界时星数归零容易看成掉级）：
-    # 九星制下 九星斗者(9) → 一星斗师(10)，文案必须把「由哪 → 到哪」写清楚。
+    # 跨大境界（2026-11-19 起须先战心魔劫影）：九星斗师(27) → 一星大斗师(28)。
+    # 用必胜 rng 注入，验证 BOSS 战触发 + 胜利后突破 + 文案含起终点。
     p = await store.get_player(A)
     p["lv"] = 27                      # 九星斗师（斗师境最后一星）
     p["exp"] = cfg.exp_need(27) + 10
+    core._refill(p)
     await store.put_player(p)
-    r = await commands.cmd_break(store, A)
-    check("跨境界 文案含起终点", "九星斗师" in r and "一星大斗师" in r, r[:80])
-    check("跨境界 用境界突破措辞", "境界突破" in r, r[:40])
+    r = await commands.cmd_break(store, A, rng=lambda: 0.01)
+    check("九星跨境界 必遇心魔劫影", "心魔劫影" in r, r[:80])
+    check("跨境界 文案含起终点", "九星斗师" in r and "一星大斗师" in r, r[:120])
+    check("跨境界 用境界突破措辞", "境界突破" in r, r[:120])
     p = await store.get_player(A)
     check("跨境界 等级 =28", int(p["lv"]) == 28, f"lv={p['lv']}")
     # 境界内晋升：三星斗师(12) → 四星斗师(13)，这才是用户要的顺序

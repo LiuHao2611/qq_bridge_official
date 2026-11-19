@@ -589,6 +589,25 @@ def build_flames_data(p: dict) -> dict:
             note = "" if lv >= cfg.FLAME_MAX_LV else \
                 f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
             rows.append({"title": name, "right": state, "sub": sub, "note": note})
+    # 其他火焰（兽火等，九星突破 BOSS 掉落）：只列已收服，加成聚合与文本层同源。
+    o_owned = [f for f in getattr(cfg, "OTHER_FLAMES", [])
+               if int(fl.get(f["name"], 0)) > 0]
+    if o_owned:
+        rows.append({"title": "兽火 / 其他火焰", "right": "",
+                     "sub": "九星突破战心魔劫影所得，按等级给加成；可喂药渣升级。", "note": ""})
+        for f in o_owned:
+            name = f["name"]
+            lv = int(fl.get(name, 0))
+            state = f"{lv}/{cfg.FLAME_MAX_LV} 级（圆满）" if lv >= cfg.FLAME_MAX_LV \
+                else f"{lv}/{cfg.FLAME_MAX_LV} 级"
+            kind = {"beast": "兽火", "nature": "天然火", "art": "人造火",
+                    "fusion": "融合火"}.get(f["kind"], "火")
+            stat = {"alchemy": "炼药", "atk": "攻击", "hp": "气血"}.get(
+                f["bonus"], "数值")
+            sub = f"{kind}·{stat}每级 +{int(round(float(f['value']) * 100))}%　{f['desc']}"
+            note = "" if lv >= cfg.FLAME_MAX_LV else \
+                f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
+            rows.append({"title": name, "right": state, "sub": sub, "note": note})
     return {
         "icon": "star", "title": "异火",
         "subtitle": f"药渣 ×{dross}",

@@ -23,12 +23,37 @@ def _owned_level(p: dict, name: str) -> int:
 
 
 def alchemy_rate_bonus(p: dict) -> float:
-    """已收服 B 线炼药火的合成成功率加成（小数，未封顶）。"""
+    """已收服 B 线炼药火的合成成功率加成（小数，未封顶）。
+
+    2026-11-19 其他火焰（兽火等）的 alchemy 型也并入：与 B 线同源聚合，
+    卡面与实战成功率永远一致。
+    """
     total = 0.0
     for f in cfg.BONUS_FLAMES:
         if f["kind"] == "alchemy":
             total += float(f["value"]) * _owned_level(p, f["name"])
+    for f in getattr(cfg, "OTHER_FLAMES", []):
+        if f["bonus"] == "alchemy":
+            total += float(f["value"]) * _owned_level(p, f["name"])
     return total
+
+
+def other_flame_ratio(p: dict) -> dict:
+    """其他火焰（兽火/天然/人造/融合火）给六维的**比例**加成，供 stats() 单一源消费。
+
+    返回 ``{"atk": x, "hp": y}``（小数，如 0.05 = +5%）。atk 作用于力量（攻击主
+    属性），hp 作用于体力上限。alchemy 型不在此（走 alchemy_rate_bonus）。
+    只有已收服（flames[name]>0）才计；等级 = 加成级数。
+    """
+    out = {"atk": 0.0, "hp": 0.0}
+    for f in getattr(cfg, "OTHER_FLAMES", []):
+        lv = _owned_level(p, f["name"])
+        if lv <= 0:
+            continue
+        key = "atk" if f["bonus"] == "atk" else ("hp" if f["bonus"] == "hp" else "")
+        if key:
+            out[key] += float(f["value"]) * lv
+    return out
 
 
 def puppet_atk_bonus(p: dict) -> float:
