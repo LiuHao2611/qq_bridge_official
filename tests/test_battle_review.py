@@ -137,9 +137,26 @@ def test_review_rows_include_resources_and_effects():
     rows = br.action_rows(battle)
     check("回看逐行非空", bool(rows) and rows[0] != "（本场没有逐招记录）", str(rows[:2]))
     check("回看含招式", any("回合" in r and "｜" in r for r in rows), str(rows[:1]))
-    # 2026-11-19 改版：资源轨迹从每行两行改为「战况」一行摘要 + 逐招只留数值变化。
-    head = br.build_data(battle)["groups"][0]["rows"]
-    check("战况含气血/斗气残余", any("气血" in r and "斗气" in r for r in head), str(head))
+    # 2026-11-19：气血/斗气残余从「战况」文字移到「终局」资源条（同一组数字不印两遍）。
+    # 战况里再出现气血 = 信息重复，必须红。
+    data = br.build_data(battle)
+    head = data["groups"][0]["rows"]
+    check("战况不再重复气血/斗气（已交给终局条）",
+          not any("气血" in r for r in head), str(head))
+    end = data.get("end") or {}
+    check("终局资源条三行齐备",
+          [r.get("label") for r in (end.get("rows") or [])] ==
+          ["我气血", "我斗气", "敌气血"], str(end))
+    # 战斗结束那一刻的真实气血：取最后一条 log 的 hp_after（负数按 0 算）
+    logs = [x for x in (battle.get("log") or []) if isinstance(x, dict)]
+    last_hp = max(0, int(logs[-1].get("hp_after"))) if logs else 0
+    check("终局气血 = 战斗结束值（不是战后重置的 70%）",
+          (end.get("rows") or [{}])[0].get("value") == last_hp,
+          f"{end.get('rows')} last_hp={last_hp}")
+    check("终局条画得出比例（有分母）",
+          int((end.get("rows") or [{}])[0].get("max") or 0) > 0, str(end))
+    check("收场原因已写进 verdict", bool(data["verdict"].get("end_text")),
+          str(data["verdict"]))
     log_n = len([x for x in battle["log"] if isinstance(x, dict)])
     check("逐招一条一行（不再一条占两行）", len(rows) == log_n,
           f"rows={len(rows)} log={log_n}")
@@ -551,6 +568,173 @@ def test_empty_column_gets_placeholder():
     from PIL import Image
     img = Image.open(io.BytesIO(png))
     check("空列占位卡能出图", png.startswith(b"\x89PNG") and img.width == 720, f"size={img.size}")
+
+
+def test_round_bubbles_carry_damage_and_remainder():
+    """每回合必须有「我受多少 / 敌受多少 / 回合末余血余气」（用户 2026-11-19 要的细节）。"""
+    battle = {"rounds": 2, "player": {"hp_max": 1000, "mp_max": 600}, "log": [
+        {"index": 1, "round": 1, "move": "铁山拳", "dmg": 300,
+         "hp_after": 1000, "mp_after": 500, "foe_hp_after": 700},
+        {"index": 2, "round": 1, "move": "兽击", "dmg": 250, "taken": True,
+         "hp_after": 750, "mp_after": 500},
+        {"index": 3, "round": 1, "move": "普攻", "dmg": 120,
+         "hp_after": 750, "mp_after": 500, "foe_hp_after": 580},
+        {"index": 4, "round": 2, "move": "兽击", "dmg": 900, "taken": True,
+         "hp_after": -150, "mp_after": 500},
+    ]}
+    b = br.round_bubbles(battle)
+    check("气泡按回合分组", [x["round"] for x in b] == [1, 2], str([x["round"] for x in b]))
+    check("我受 = 敌方列伤害之和", b[0]["hurt"] == 250, str(b[0]["hurt"]))
+    check("敌受 = 我方列伤害之和", b[0]["hurt_foe"] == 420, str(b[0]["hurt_foe"]))
+    check("回合摘要两栏都在", b[0]["sum_text"] == "我受 250 · 敌受 420", b[0]["sum_text"])
+    check("回合末余血取最后一条快照", b[0]["hp"] == 750, str(b[0]["hp"]))
+    check("回合末余气取最后一条快照", b[0]["mp"] == 500, str(b[0]["mp"]))
+    check("敌方余血取我方出手那条", b[0]["foe_hp"] == 580, str(b[0]["foe_hp"]))
+    check("余量行带上限", b[0]["foot_l"] == "余血 750/1,000 · 余气 500/600", b[0]["foot_l"])
+    check("敌方余量行", b[0]["foot_r"] == "敌血 580", b[0]["foot_r"])
+    # 致死那击 core 会写负数（hp_after=-150）：卡上必须显示 0，不能印 -150
+    check("致死回合余血钳到 0（不印负数）", b[1]["hp"] == 0, str(b[1]["hp"]))
+    check("致死回合余量行仍成立", b[1]["foot_l"].startswith("余血 0/1,000"),
+          b[1]["foot_l"])
+    # 没伤害的回合不能写「我受 0 · 敌受 0」，要说人话
+    calm = br.round_bubbles({"rounds": 1, "log": [
+        {"index": 1, "round": 1, "move": "服用回气散", "pill": "回气散",
+         "amount": 100, "dmg": 0}]})
+    check("无伤害回合写明无伤", calm[0]["sum_text"] == "本回合无伤", calm[0]["sum_text"])
+
+
+def test_damage_composition_and_end_state():
+    """伤害构成（面板/防御/技能）+ 终局败因必须是真值，不能拿战后回血冒充。"""
+    # ---- 1. 真实战斗：两侧都要能给出「面板 → 防御」 ----
+    battle = _sample_battle()
+    items = br.action_items(battle)
+    mine = [a for a in items if a["side"] == "我方" and a["dmg"] > 0]
+    foe = [a for a in items if a["side"] != "我方" and a["dmg"] > 0]
+    check("我方出手带伤害构成", bool(mine) and all(a["comp"].startswith("面板 ")
+                                            for a in mine), str(mine[:1]))
+    check("敌方出手带伤害构成", bool(foe) and all(a["comp"].startswith("面板 ")
+                                           for a in foe), str(foe[:1]))
+    check("构成含防御削减", any("防御 -" in a["comp"] for a in items),
+          str([a["comp"] for a in items][:3]))
+    check("构成不重复印实收（右侧大数字已是实收）",
+          all("实收" not in a["comp"] for a in items), str(items[:1]))
+    check("面板 ≥ 实收（防御只减不增；暴击例外）",
+          all(a["raw"] == 0 or "暴击" in a["tags"] or a["raw"] >= a["dmg"] - 1
+              for a in items),
+          str([(a["raw"], a["dmg"], a["tags"]) for a in items][:3]))
+
+    # ---- 2. 战败：p["hp"] 已被重置成上限×0.7，终局必须显示 0 ----
+    p = _player("q9")
+    hp_max = int(core.stats(p)["体力"])
+    p["hp"] = int(hp_max * 0.7)   # 与 fight() 战败后的重置值一致
+    res = {"win": False, "rounds": 3, "taken": 99999, "hp_end": 0, "mp_end": 84,
+           "foe_hp_end": 7120, "foe_hp_max": 12000,
+           "log": [{"index": 1, "round": 1, "move": "兽击", "dmg": 99999,
+                    "taken": True, "hp_after": -287, "mp_after": 84}]}
+    snap = core.record_last_battle(p, "遭遇", res, opponent="血战佣兵")
+    data = br.build_data(snap)
+    rows = {r["label"]: r for r in (data.get("end") or {}).get("rows") or []}
+    check("终局气血 = 战斗结束值 0（不是战败回血的 70%）",
+          rows.get("我气血", {}).get("value") == 0, str(rows.get("我气血")))
+    check("终局斗气 = 结束值", rows.get("我斗气", {}).get("value") == 84,
+          str(rows.get("我斗气")))
+    check("终局敌方余血", rows.get("敌气血", {}).get("value") == 7120,
+          str(rows.get("敌气血")))
+    check("战败原因是气血耗尽（不是「没斗气」）",
+          data["verdict"]["end_text"] == "气血耗尽", str(data["verdict"]))
+    check("战败原因代号正确", snap["summary"]["end_reason"] == "hp_zero",
+          str(snap["summary"].get("end_reason")))
+    check("玩家面板血量不再被写成战后值",
+          snap["player"]["hp"] == 0, str(snap["player"]["hp"]))
+
+    # ---- 3. 还有血却输（切磋按血量比判负）→ 说「战败」，不许冒充气血耗尽 ----
+    res2 = {"win": False, "rounds": 2, "taken": 300, "hp_end": 640, "mp_end": 0,
+            "foe_hp_end": 900, "foe_hp_max": 1000,
+            "log": [{"index": 1, "round": 1, "who": "v", "move": "紫云翼",
+                     "dmg": 300, "hp_after": 640, "mp_after": 0}]}
+    snap2 = core.record_last_battle(p, "切磋", res2, opponent="对手")
+    d2 = br.build_data(snap2)
+    check("有血判负写「战败」", d2["verdict"]["end_text"] == "战败", str(d2["verdict"]))
+    check("有血判负终局血量是剩余值",
+          (d2["end"]["rows"][0]["value"]) == 640, str(d2["end"]["rows"][0]))
+
+    # ---- 4. 力竭（300 回合熔断）判胜：必须显式标注，不许冒充击杀 ----
+    res3 = {"win": True, "rounds": 300, "taken": 500, "hp_end": 300, "mp_end": 10,
+            "foe_hp_end": 800, "foe_hp_max": 1000, "exhausted": True, "log": []}
+    snap3 = core.record_last_battle(p, "遭遇", res3, opponent="X")
+    check("力竭判胜标注", br.build_data(snap3)["verdict"]["end_text"] == "力竭判胜",
+          str(snap3["summary"].get("end_text")))
+
+    # ---- 5. 旧档没有 end_reason → 不画终局（宁缺勿错） ----
+    old = {"win": False, "rounds": 1, "player": {"hp": 700, "hp_max": 1000,
+                                                 "mp": 10, "mp_max": 100},
+           "summary": {"taken": 1}, "log": []}
+    check("旧档不出终局条（不拿回血冒充）", br.build_data(old).get("end") == {},
+          str(br.build_data(old).get("end")))
+    check("旧档战况仍用文字兜住资源",
+          any("气血" in r for r in br.build_data(old)["groups"][0]["rows"]),
+          str(br.build_data(old)["groups"][0]["rows"]))
+
+
+def test_end_bar_and_comp_are_drawn():
+    """卡片必须真的画出终局条与构成行（数据有了但模板不画 = 用户还是看不见）。"""
+    pic = card._load_pic()
+    check("pic 可加载（终局条自检）", pic is not None)
+    if pic is None:
+        return
+    p = _player("q8")
+    hp_max = int(core.stats(p)["体力"])
+    p["hp"] = int(hp_max * 0.7)
+    res = {"win": False, "rounds": 1, "taken": 5000, "hp_end": 0, "mp_end": 84,
+           "foe_hp_end": 7120, "foe_hp_max": 12000,
+           "log": [
+               {"index": 1, "round": 1, "move": "铁山拳", "dmg": 1800,
+                "raw": 3000, "def_cut": 1200, "hp_after": hp_max, "mp_after": 84,
+                "foe_hp_after": 7120},
+               {"index": 2, "round": 1, "move": "兽击", "dmg": 5000,
+                "taken": True, "atk_raw": 7000, "def_cut": 1200,
+                "absorbed": 800, "hp_after": -287, "mp_after": 84}]}
+    snap = core.record_last_battle(p, "遭遇", res, opponent="血战佣兵")
+    data = card.build_battle_data(snap)
+    boxes = []
+    png = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                          width=720, data=data, boxes=boxes)
+    labels = [b[0] for b in boxes]
+    check("终局三条标签都画了",
+          all(("n%d_l" % i) in labels for i in range(3)), str(labels)[:120])
+    # 条宽写在盒名里（n{i}_bar{px}）：归零的气血必须是空条，否则图形在撒谎
+    bars = {x.split("_bar")[0]: int(x.split("_bar")[1])
+            for x in labels if "_bar" in x and x.startswith("n")}
+    check("终局气血条画了", "n0" in bars, str(bars))
+    check("气血归零 = 空条（不画任何长度）", bars.get("n0") == 0, str(bars))
+    check("有剩余就画得出长度", bars.get("n1", 0) > 0 and bars.get("n2", 0) > 0,
+          str(bars))
+    check("条长按比例（不是恒定满条）",
+          bars.get("n1", 0) < bars.get("n2", 0), str(bars))
+    check("终局数值盒画了 3 个",
+          len([x for x in labels if x.startswith("n") and x.endswith("_v")]) == 3,
+          str([x for x in labels if x.startswith("n")]))
+    # 构成行：两侧各一条，各一行（放得下不折行）
+    check("我方构成行画了", "r0_mine0_c0" in labels, str([x for x in labels if "_c" in x]))
+    check("敌方构成行画了", "r0_foe0_c0" in labels, str([x for x in labels if "_c" in x]))
+    comp_txt = [a["comp"] for a in br.action_items(snap) if a["comp"]]
+    check("构成数据含技能吸收", any("技能 -" in c for c in comp_txt), str(comp_txt))
+    check("构成三段加总等于实收",
+          any(c == "面板 7,000 · 防御 -1,200 · 技能 -800" for c in comp_txt),
+          str(comp_txt))
+    # 回合摘要 + 余量行（sum / fl / fr）
+    check("回合战损摘要画了", any(x.endswith("_sum") for x in labels),
+          str([x for x in labels if x.endswith("_sum")]))
+    check("余量行画了", any(x.endswith("_fl") for x in labels)
+          and any(x.endswith("_fr") for x in labels),
+          str([x for x in labels if x.endswith("_fl") or x.endswith("_fr")]))
+    from PIL import Image
+    img = Image.open(io.BytesIO(png))
+    texts = [b for b in boxes if "_bar" not in b[0]]
+    problems = _check_boxes((12, 12, img.width - 12, img.height - 12), texts)
+    check("补料后的卡几何 0 问题", not problems, " | ".join(problems[:5]))
+    check("补料后的卡能出图", png.startswith(b"\x89PNG") and img.width == 720,
+          f"size={img.size}")
 
 
 def test_battle_review_text_after_roundtrip():
