@@ -336,23 +336,43 @@ def parse_config_arg(arg: str) -> tuple[str, str, str]:
     return card, "bad", rest
 
 
+#: 引用卡片后，第二词若是这些子命令词则走旧语法（删/清空/查看），不当口令参数。
+#: 「斗技 全部」的「全部」是口令参数、不在此列 —— 这正是 2026-11-19 要支持的场景。
+_QUOTE_SUBCOMMAND_WORDS = frozenset({"清空", "查看", "看", "list", "help", "帮助"})
+
+
 def is_quick_add_arg(arg: str) -> bool:
     """判断「引用卡片后的 arg」是不是一条纯口令快捷新增（而非删/清空/查看等子命令）。
 
-    2026-11-18 修 bug：原来只判 ``\"=\" not in arg``，导致引用着卡片发
-    ``宝库 -血灵草``（删）/``宝库 清空``/``宝库``（查看）都被当成新增，加上
-    ``-血灵草`` / ``清空`` / ``宝库`` 这种垃圾按钮——用户照重名提示去删必然踩坑。
+    历史 bug 与两次修复：
+    * 2026-11-18：原来只判 ``\"=\" not in arg``，引用着卡发 ``宝库 -血灵草``（删）
+      /``宝库 清空``/``宝库``（查看）都被当新增，加上垃圾按钮。
+    * 2026-11-19（用户方案②「引用时首词是口令就按口令处理，优先于卡片名」）：
+      旧判据把「首词是卡片名」一律排除，导致 ``斗技 全部``（斗技既是口令又是
+      卡片别名）被挡掉、报「不认识这张卡」。改为**口令优先于卡片名**：首词是
+      真实口令即按口令新增，卡片名让位。但必须先挡住子命令结构，否则
+      ``宝库 -血灵草``（宝库也是口令）会被误判成新增。
 
-    判据（本质）：首词是**真实动作口令**且**不是卡片名/别名**。这样
-    ``买 血灵草 2``（快捷新增）为真，``宝库 -血灵草``（卡片名开头→旧语法）为假。
+    判据（按顺序，任一命中即非快捷新增）：
+    1. 含 ``=`` → 旧语法 add；
+    2. 首词以 ``-`` 开头 → 删；
+    3. 第二词以 ``-`` 开头，或是 ``清空/查看/看/list/help/帮助`` → 子命令；
+    4. 整句只有一个词且它是卡片名 → 查看该卡（如引用后只发「宝库」）；
+    5. 否则：首词 ∈ 真实口令 → 快捷新增（口令优先，哪怕它同时是卡片名）。
     """
-    parts = (arg or "").strip().split()
-    if not parts or "=" in (arg or ""):
+    raw = (arg or "").strip()
+    parts = raw.split()
+    if not parts or "=" in raw:
         return False
     first = parts[0]
-    # 卡片名/别名开头 → 旧语法（删/清空/查看/带卡名新增），绝不当快捷新增
-    if resolve_card(first) is not None:
+    if first.startswith("-"):
         return False
+    if len(parts) > 1:
+        second = parts[1]
+        if second.startswith("-") or second in _QUOTE_SUBCOMMAND_WORDS:
+            return False
+    if len(parts) == 1 and resolve_card(first) is not None:
+        return False  # 单发卡片名 = 查看该卡
     return first in real_commands()
 
 
