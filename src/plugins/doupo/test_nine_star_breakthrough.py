@@ -3,7 +3,7 @@
 
 口径（用户原话）：
   * 「即将突破任意九星阶段时，触发战斗必定遇到 BOSS」；
-  * 「经验足够突破九星阶段时立即快照战力，BOSS 战力比快照战力强，有点难度」；
+  * 「九星突破必遇原著 BOSS，登场有引言台词，各有专属技能与恶心机制；别写快照玩法」；
   * 「挑战成功后概率获得异火或者兽火等其他火焰，兽火其他火焰概率更高」；
   * 「原著其他火焰全部补过来」（10 朵，考据 tmp/flames_other_research.md 20 条证据）。
 
@@ -80,20 +80,30 @@ def main():
     p93 = nine_player(lv=93)   # 半圣高阶→斗圣
     check("半圣 lv93 跨境界也算", core.is_nine_star_breakthrough(p93), "")
 
-    # ---- 3. 战力快照 + BOSS 比快照强 ----
-    snap_power = core.power(p9)
+    # ---- 3. 原著 BOSS（2026-11-20 去快照）：有名有姓 + 引言/台词/技能/机制 ----
     boss = core.make_breakthrough_boss(p9)
-    species = {"name": "心魔劫影", "lv": 9, "hard": 1.0,
+    species = {"name": "测试基准", "lv": 9, "hard": 1.0,
                "exp_mul": 1.0, "gold_mul": 1.0, "kind": cfg.BOSS_BREAK_KIND}
     baseline = core.monster_scaled(p9, species)
-    check("BOSS 血量高于快照基准", boss["hp"] > baseline["hp"],
+    check("BOSS 血量高于同阶基准", boss["hp"] > baseline["hp"],
           "%d > %d" % (boss["hp"], baseline["hp"]))
-    check("BOSS 攻击高于快照基准", boss["atk"] > baseline["atk"],
+    check("BOSS 攻击高于同阶基准", boss["atk"] > baseline["atk"],
           "%d > %d" % (boss["atk"], baseline["atk"]))
     check("BOSS 标记 is_boss", boss["is_boss"] is True, "")
-    check("记录快照战力", boss["snapshot_power"] == snap_power, "")
+    check("已去掉快照战力字段", "snapshot_power" not in boss, str(sorted(boss.keys())))
     check("BOSS 走魂殿 kind（复用 tier4 掉落）",
           boss["kind"] == cfg.BOSS_BREAK_KIND, boss["kind"])
+    ch = boss.get("character") or {}
+    check("BOSS 带原著角色包", bool(ch) and bool(ch.get("source")) and bool(ch.get("intro")),
+          str(ch)[:100])
+    check("BOSS 带专属技能", bool(ch.get("skill")) and
+          ch["skill"].get("name") == boss["skill"]["name"], str(ch.get("skill")))
+    check("BOSS 带恶心机制", bool(ch.get("mech")) and
+          ch["mech"].get("t") in ("silence", "stun", "reflect", "debuff_heal", "dot"),
+          str(ch.get("mech")))
+    # 12 档逐一可取，且不同境界不同 BOSS（不是一只心魔劫影打天下）
+    names = [cfg.break_boss_for_lv(lv)["name"] for lv in (9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 93, 102)]
+    check("12 突破档配 12 个不同原著 BOSS", len(set(names)) == 12, str(names))
 
     # ---- 4. BOSS 战胜利 → level_up + 掉落落库 ----
     win = nine_player("99002")

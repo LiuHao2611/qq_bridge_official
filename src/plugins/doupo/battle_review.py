@@ -99,7 +99,23 @@ def _move(it: dict) -> str:
 
 
 def _logs(battle: dict) -> list[dict]:
-    return [it for it in (battle.get("log") or []) if isinstance(it, dict)]
+    # 2026-11-20 登场引言（intro=True）是旁白，不进逐招明细/气泡/KPI，
+    # 由 intro_text() 单独提成引言块渲染，避免"我方·登场 0"这种怪行。
+    return [it for it in (battle.get("log") or [])
+            if isinstance(it, dict) and not it.get("intro")]
+
+
+def intro_text(battle: dict) -> dict:
+    """原著 BOSS 登场引言（2026-11-20）：{speaker, title, quote}，无则 {}。"""
+    for it in (battle.get("log") or []):
+        if isinstance(it, dict) and it.get("intro"):
+            notes = it.get("notes") or []
+            return {
+                "speaker": _s(it.get("speaker"), ""),
+                "title": _s(it.get("move"), ""),
+                "quote": _s(notes[0] if notes else "", ""),
+            }
+    return {}
 
 
 def display_rounds(logs: list[dict]) -> list[int]:
@@ -354,7 +370,11 @@ def action_items(battle: dict) -> list[dict]:
         cost = _i(it.get("mp_cost"))
         if cost:
             tags.append("斗气-%d" % cost)
-        for n in (it.get("notes") or [])[:2]:
+        # 2026-11-20 原著 BOSS：技能/台词/机制三条都必须进战报。
+        # 旧版只取 2 条，第三条「九幽·锁魂（空间崩塌）！」被静默吞掉；
+        # 卡片侧的标签行已改为按实测宽度折行（见 doupo_battle._bubble_plan），
+        # 这里不再替渲染层砍内容。
+        for n in (it.get("notes") or [])[:TAG_LIMIT]:
             # 不在数据层硬切：卡片由 _fit 按实际可用宽度出省略号，硬切会切在词中间
             s = _s(n, "")
             if s and s not in tags:
@@ -520,6 +540,8 @@ def build_data(battle: dict) -> dict:
     return {
         "title": "战斗回看",
         "verdict": verdict_info(battle),
+        # 2026-11-20 原著 BOSS 登场引言（独立块；无 BOSS 时为空 dict）
+        "intro": intro_text(battle),
         # 终局资源条（战斗结束那一刻的血/斗气 + 收场原因）；旧档返回 {} 不画
         "end": end_state(battle),
         "kpis": kpi_cells(battle),
@@ -546,6 +568,10 @@ def text(battle: dict) -> str:
     out = [f"⚔️ {data['title']}｜{'胜' if v['win'] else '败'}"
            f"{'·' + v['end_text'] if v['end_text'] else ''}"
            f"｜{v['kind']}｜{v['rounds']}回合｜对手 {v['opponent']}"]
+    _intro = data.get("intro") or {}
+    if _intro.get("quote"):
+        out.append(f"【登场】{_intro['speaker']}{'·' + _intro['title'] if _intro['title'] else ''}"
+                   f"：{_intro['quote']}")
     t = totals(battle)
     out.append(f"我方输出 {_num(t['mine'])}｜敌方输出 {_num(t['foe'])}"
                f"｜每回合 {_num(t['per_round'])}")
