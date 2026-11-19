@@ -80,6 +80,10 @@ def _move(it: dict) -> str:
         return "贵人相助"
     if it.get("pill"):
         return "服用" + _s(it.get("pill"), "丹药")
+    # 「闪避」记的是玩家闪避了怪的反击（core.dodge_rate 是玩家闪避率），
+    # 它在气泡卡里归敌方列。直接写「闪避」会读成「敌人闪避了」，必须点明方向。
+    if it.get("miss") and _s(it.get("kind")) == "闪避":
+        return "被我方闪避"
     return _s(it.get("move") or it.get("kind") or
               ("普攻" if not it.get("skill") else "斗技"), "出手")
 

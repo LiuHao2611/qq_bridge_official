@@ -67,6 +67,10 @@ MUTATIONS = [
     ("闪避踉跄被控误归我方（空白回合回归）", BR,
      '    if it.get("miss") or it.get("mishap"):\n        return "敌方"',
      '    if False:\n        return "敌方"'),
+    # 闪避文案退回「闪避」→ 敌方列读成「敌人闪避了」
+    ("闪避文案不点方向", BR,
+     '    if it.get("miss") and _s(it.get("kind")) == "闪避":\n        return "被我方闪避"',
+     '    if it.get("miss") and _s(it.get("kind")) == "闪避":\n        return "闪避"'),
     # 空列占位被删 → 纯空白
     ("删掉空列占位", TPL,
      '            if not entries:\n'

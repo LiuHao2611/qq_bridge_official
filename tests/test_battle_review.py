@@ -261,6 +261,12 @@ def test_miss_and_mishap_are_enemy_actions():
     check("被控归敌方", sides[6] == "敌方", str(sides))
     check("正常攻击仍归我方", sides[1] == "我方" and sides[3] == "我方", str(sides))
     check("服药仍归我方", sides[7] == "我方", str(sides))
+    # 「闪避」是玩家闪避了怪的反击，归敌方列后文案必须点明方向，
+    # 否则读成「敌人闪避了」（用户 2026-11-19 实拍卡）。
+    moves = {a["idx"]: a["move"] for a in acts}
+    check("闪避文案点明方向", moves[4] == "被我方闪避", moves[4])
+    check("踉跄不被改写", moves[2] == "踉跄", moves[2])
+    check("被控不被改写", moves[6] == "被控", moves[6])
     # 之前这些回合的敌方列是空的；现在每回合两列都有动作
     bubbles = br.round_bubbles(battle)
     for b in bubbles:
