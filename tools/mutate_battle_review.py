@@ -120,6 +120,12 @@ MUTATIONS = [
     ("气泡抬头不写战损", TPL,
      '        if b["sum_text"]:',
      '        if False:'),
+    # 纯文本兜底用败因顶替玩法（「遭遇」被吃掉，用户看不出打的是什么）
+    ("文本兜底吃掉玩法", BR,
+     '           f"{\'·\' + v[\'end_text\'] if v[\'end_text\'] else \'\'}"\n'
+     '           f"｜{v[\'kind\']}｜{v[\'rounds\']}回合｜对手 {v[\'opponent\']}"]',
+     '           f"｜{v[\'end_text\'] or v[\'kind\']}"\n'
+     '           f"｜{v[\'rounds\']}回合｜对手 {v[\'opponent\']}"]'),
 ]
 
 

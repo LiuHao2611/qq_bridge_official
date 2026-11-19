@@ -646,6 +646,11 @@ def test_damage_composition_and_end_state():
           str(snap["summary"].get("end_reason")))
     check("玩家面板血量不再被写成战后值",
           snap["player"]["hp"] == 0, str(snap["player"]["hp"]))
+    # 纯文本兜底（出图失败时用户看到的就是它）必须同时保留玩法与败因
+    txt = br.text(snap)
+    head = txt.splitlines()[0]
+    check("文本兜底同时保留玩法与败因",
+          "遭遇" in head and "气血耗尽" in head, head)
 
     # ---- 3. 还有血却输（切磋按血量比判负）→ 说「战败」，不许冒充气血耗尽 ----
     res2 = {"win": False, "rounds": 2, "taken": 300, "hp_end": 640, "mp_end": 0,
