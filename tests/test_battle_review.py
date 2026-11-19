@@ -238,6 +238,36 @@ def test_totals_split_sides_for_duel():
     check("切磋敌方行用冷色", ae[1]["tone"] == "foe", ae[1]["tone"])
 
 
+def test_miss_and_mishap_are_enemy_actions():
+    """2026-11-19 实拍：闪避/踉跄/被控是敌人出手没打中，不是我方动作。
+
+    core.fight 写这些条目时无 who、无 taken（没造成伤害），_actor 旧判据只看
+    taken → 全归我方 → 气泡「我方」列混进敌人的闪避、「敌方」列反而空白。
+    """
+    battle = {"rounds": 4, "log": [
+        {"index": 1, "round": 1, "move": "铁山拳", "dmg": 100},
+        {"index": 2, "round": 1, "move": "踉跄", "dmg": 0, "kind": "失误", "mishap": True},
+        {"index": 3, "round": 2, "move": "普攻", "dmg": 80},
+        {"index": 4, "round": 2, "move": "闪避", "dmg": 0, "kind": "闪避", "miss": True},
+        {"index": 5, "round": 3, "move": "普攻", "dmg": 80},
+        {"index": 6, "round": 3, "move": "被控", "dmg": 0, "kind": "被控", "miss": True},
+        {"index": 7, "round": 4, "move": "服药", "pill": "回气散", "amount": 200, "dmg": 0},
+        {"index": 8, "round": 4, "move": "兽击", "dmg": 30, "taken": True},
+    ]}
+    acts = br.action_items(battle)
+    sides = {a["idx"]: a["side"] for a in acts}
+    check("踉跄归敌方", sides[2] == "敌方", str(sides))
+    check("闪避归敌方", sides[4] == "敌方", str(sides))
+    check("被控归敌方", sides[6] == "敌方", str(sides))
+    check("正常攻击仍归我方", sides[1] == "我方" and sides[3] == "我方", str(sides))
+    check("服药仍归我方", sides[7] == "我方", str(sides))
+    # 之前这些回合的敌方列是空的；现在每回合两列都有动作
+    bubbles = br.round_bubbles(battle)
+    for b in bubbles:
+        check("回合%d 我方列非空" % b["round"], bool(b["mine"]), str(b))
+        check("回合%d 敌方列非空" % b["round"], bool(b["foe"]), str(b))
+
+
 def test_multi_enemy_rounds_are_cumulative():
     """多敌遭遇战里每个对手的 fight() 都从第 1 回合重数，回看必须拉平成连续回合。"""
     battle = {"rounds": 4, "log": [
@@ -486,6 +516,35 @@ def test_round_bubble_card_layout_passes_check_boxes():
               " | ".join(problems[:5]))
         check("气泡卡 %d 宽输出 PNG" % width,
               png.startswith(b"\x89PNG") and img.width == width, f"size={img.size}")
+
+
+def test_empty_column_gets_placeholder():
+    """空列（敌人已死/本回合没动作）要给淡色「无动作」占位，不留纯空白。"""
+    pic = card._load_pic()
+    check("pic 可加载（空列占位）", pic is not None)
+    if pic is None:
+        return
+    battle = {"rounds": 2, "log": [
+        {"index": 1, "round": 1, "move": "铁山拳", "dmg": 100},
+        # 回合2 敌人已死，只有我方动作 → 敌方列空
+        {"index": 2, "round": 2, "move": "普攻", "dmg": 80},
+    ]}
+    data = card.build_battle_data(battle)
+    check("第2回合敌方列确实空", not data["rounds"][1]["foe"], str(data["rounds"][1]))
+    boxes = []
+    png = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                          width=720, data=data, boxes=boxes)
+    ph = [b for b in boxes if b[0].endswith("_ph")]
+    check("空列渲染出占位盒", len(ph) >= 1, f"ph={len(ph)}")
+    # 占位盒必须有正宽度（真的画了「无动作」文字，而不是空壳）
+    check("占位盒画了文字", all(b[3] - b[1] > 10 for b in ph),
+          str([(b[0], b[3] - b[1]) for b in ph]))
+    # 占位不能产出数值盒（否则污染右锚定 / 把空列算成有伤害）
+    check("空列无数值盒", not any("foe" in b[0] and b[0].endswith("_v") for b in ph),
+          str([b[0] for b in boxes if "_v" in b[0]][:6]))
+    from PIL import Image
+    img = Image.open(io.BytesIO(png))
+    check("空列占位卡能出图", png.startswith(b"\x89PNG") and img.width == 720, f"size={img.size}")
 
 
 def test_battle_review_text_after_roundtrip():

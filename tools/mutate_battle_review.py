@@ -61,14 +61,22 @@ MUTATIONS = [
      '    col_w = (content_w - 2 * BUBBLE_PAD - BUBBLE_COL_GAP) // 2',
      '    col_w = content_w - 2 * BUBBLE_PAD'),
     ("气泡数值不右锚定（对齐漂移）", TPL,
-     '            right = cx + col_w\n'
-     '            ey = body_y\n'
-     '            for ei, e in enumerate(b["sides"][key]):\n'
-     '                cy = ey + LINE_H // 2\n',
-     '            ey = body_y\n'
-     '            for ei, e in enumerate(b["sides"][key]):\n'
-     '                right = cx + col_w - 24 if ei % 2 else cx + col_w\n'
-     '                cy = ey + LINE_H // 2\n'),
+     '            right = cx + col_w\n',
+     '            right = cx + col_w - 24 if ri % 2 else cx + col_w\n'),
+    # 2026-11-19 空白回合修复：闪避/踉跄/被控归敌方
+    ("闪避踉跄被控误归我方（空白回合回归）", BR,
+     '    if it.get("miss") or it.get("mishap"):\n        return "敌方"',
+     '    if False:\n        return "敌方"'),
+    # 空列占位被删 → 纯空白
+    ("删掉空列占位", TPL,
+     '            if not entries:\n'
+     '                # 空列（敌人已死 / 本回合真没动作）给一个淡色占位，\n'
+     '                # 否则气泡半边纯空白，玩家以为卡坏了（2026-11-19 实拍反馈）。\n'
+     '                entries = [{"move": "无动作", "value": "", "tags": "",\n'
+     '                            "tone": "dim", "h": LINE_H + BUBBLE_ROW_GAP,\n'
+     '                            "placeholder": True}]\n',
+     '            if False:\n'
+     '                entries = []\n'),
 ]
 
 

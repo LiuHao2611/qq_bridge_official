@@ -66,6 +66,12 @@ def _actor(it: dict) -> str:
     # （2026-11-19 实拍卡确认）。
     if it.get("taken"):
         return "敌方"
+    # 敌人出手但没打中的三类也属敌方动作：闪避(miss)/敌人自己失误(mishap 踉跄)/
+    # 敌人被控(miss)。core.fight 写它们时既无 who、也无 taken（没造成伤害），
+    # 旧判据只看 taken → 全归我方 → 气泡卡「我方」列混进敌人的闪避/踉跄/被控，
+    # 而敌方列反而空白（2026-11-19 实拍：R7/R18 我方列"闪避/踉跄"、敌方列空）。
+    if it.get("miss") or it.get("mishap"):
+        return "敌方"
     return "我方"
 
 
