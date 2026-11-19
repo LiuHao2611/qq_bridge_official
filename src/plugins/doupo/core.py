@@ -2447,15 +2447,99 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
 
 
 def _alch_level_up(p) -> str:
-    idx = int(p.get("alch", cfg.ALCH_START))
+    """结算炼药师晋阶（经验够则连续升级，返回晋到的品阶名，未升返回空串）。
+
+    2026-11-19 原著门槛：晋入七品及以上须灵魂境界（实战场次）达标，否则经验
+    攒着不升——呼应第1103章「很多炼药师一辈子停留在七品，正是灵魂境界缘故」，
+    防止刷低级丹绕过灵魂境界冲满级。此闸对单发/批量两种入口统一生效。
+    """
+    start = int(p.get("alch", cfg.ALCH_START))
+    idx = start
     while idx < cfg.ALCH_MAX:
         need = cfg.ALCHEMIST[idx][1]
         if int(p.get("alch_exp", 0)) < need:
             break
+        nxt = idx + 1
+        ok, _need_battles = cfg.soul_realm_ok(p, nxt)
+        if not ok:
+            break   # 经验保留，等灵魂境界达标再升
         p["alch_exp"] = int(p["alch_exp"]) - need
-        idx += 1
+        idx = nxt
         p["alch"] = idx
-    return cfg.ALCHEMIST[idx][0] if idx != int(p.get("alch", 0)) else ""
+    return cfg.ALCHEMIST[idx][0] if idx != start else ""
+
+
+def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
+    """连续开炉 N 炉（原著「烧药得经验」的批量形态）。
+
+    与单发 ``craft()`` 的关系：**新增独立入口，不改单发语义**（单发被 test_core
+    钉死 CD/经验/药渣）。批量口径：
+      * 一次过 CD 检查，整批只占一次 CD（打完立即 ``last_craft``）；
+      * 每炉独立判定成败、独立扣药材、加丹/药渣，逐炉累加经验；
+      * 每炉额外扣斗气（原著第6章「极其消耗斗气」），耗尽则提前收炉；
+      * 药材不够则按「实际能炼几炉」收炉（不是直接拒绝整批）；
+      * 低阶丹经验按 ``low_grade_exp_factor`` 递减（防刷低级丹冲级）；
+      * 整批结束统一结算晋阶（七品以上走灵魂境界闸）。
+
+    返回 dict 含 ``ok`` / ``n_done`` / ``n_ok`` / ``n_fail`` / ``exp`` /
+    ``mp_used`` / ``alch_up`` / ``limited`` 等，供命令层组一条回包。
+    """
+    rec = cfg.RECIPE_BY_NAME.get(name)
+    if not rec:
+        return {"ok": False, "reason": "nodrug"}
+    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
+        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
+    now_ts = time.time() if now_ts is None else now_ts
+    cd = craft_cd_left(p, now_ts)
+    if cd > 0:
+        return {"ok": False, "reason": "cd", "left": cd}
+
+    n = max(1, min(int(n), cfg.CRAFT_BATCH_MAX))
+    grade_idx = cfg.alch_grade_idx(rec.get("grade", ""))
+    rate, diff = cfg.craft_rate_for(
+        p.get("alch", 0), rec.get("grade", ""),
+        flame_bonus=_flame_bonus.alchemy_rate_bonus(p))
+    exp_factor = cfg.low_grade_exp_factor(p.get("alch", 0), grade_idx)
+    mp_per = max(1, int(mp_max(p) * cfg.CRAFT_MP_PER))
+
+    n_done = n_ok = n_fail = 0
+    exp = 0
+    limited = ""
+    for _ in range(n):
+        # 药材不足 → 按实际可炼炉数收炉，整批其余不结算
+        if any(count_item(p, mat) < qty for mat, qty in rec["need"].items()):
+            limited = "mat"
+            break
+        # 斗气不足 → 提前收炉（原著：炼药极耗斗气）
+        if int(p.get("mp", 0)) < mp_per:
+            limited = "mp"
+            break
+        for mat, qty in rec["need"].items():
+            take_item(p, mat, qty)
+        p["mp"] = int(p.get("mp", 0)) - mp_per
+        n_done += 1
+        if rng() < rate:
+            add_item(p, name, 1)
+            n_ok += 1
+            exp += int(cfg.CRAFT_EXP * exp_factor)
+        else:
+            add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
+            n_fail += 1
+            exp += int(cfg.CRAFT_EXP // 2 * exp_factor)
+
+    if n_done == 0:
+        return {"ok": False, "reason": limited or "mat", "rate": rate,
+                "diff": diff, "n_done": 0}
+
+    p["alch_exp"] = int(p.get("alch_exp", 0)) + exp
+    alch_up = _alch_level_up(p)
+    p["last_craft"] = now_ts
+    return {"ok": True, "name": name, "rate": rate, "diff": diff,
+            "n": n, "n_done": n_done, "n_ok": n_ok, "n_fail": n_fail,
+            "exp": exp, "exp_factor": exp_factor, "mp_used": mp_per * n_done,
+            "mp_left": int(p.get("mp", 0)), "dross": cfg.CRAFT_FAIL_DROSS * n_fail,
+            "alch_up": alch_up, "alch": int(p.get("alch", 0)),
+            "alch_exp": int(p.get("alch_exp", 0)), "limited": limited}
 
 
 def _advance_one(p) -> int:
