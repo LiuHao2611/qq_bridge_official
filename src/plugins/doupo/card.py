@@ -594,7 +594,7 @@ def build_flames_data(p: dict) -> dict:
                if int(fl.get(f["name"], 0)) > 0]
     if o_owned:
         rows.append({"title": "兽火 / 其他火焰", "right": "",
-                     "sub": "九星突破战心魔劫影所得，按等级给加成；可喂药渣升级。", "note": ""})
+                     "sub": "九星突破战胜原著强敌所得，按等级给加成；可喂药渣升级。", "note": ""})
         for f in o_owned:
             name = f["name"]
             lv = int(fl.get(name, 0))

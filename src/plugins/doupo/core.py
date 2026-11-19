@@ -543,29 +543,33 @@ def is_nine_star_breakthrough(p) -> bool:
 
 
 def make_breakthrough_boss(p, rng=random.random) -> dict:
-    """用**战力快照**造一只「比快照强一点」的九星突破 BOSS（不写 p）。
+    """九星突破 BOSS：**原著有名有姓的反派**（2026-11-20 用户「别写快照玩法」）。
 
-    战力快照 = 触发瞬间深拷贝的 p；用放大后的快照反解怪物数值，保证 BOSS 比玩家强：
-      * 血量：以放大输出反解 → 玩家打它需要更多回合（更耐打）；
-      * 攻击：放大体力反解 → 每回合更疼（难度来源）。
-    kind 走 cfg.BOSS_BREAK_KIND（魂殿）→ 复用既有 Boss 掉落（tier4 天材地宝+补血丹）。
+    旧版用「战力快照反解」造一只「心魔劫影」——本质是打自己的镜像，没有身份、
+    没有台词、没有机制，用户评「敷衍」。本版改为按突破档从 ``cfg.BREAK_BOSSES``
+    取一名原著 BOSS（药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝…），
+    每人带登场引言、原著台词、专属技能与"恶心机制"。
+
+    数值口径**不变**（仍只由玩家等级反解，保证不卡关）：
+      * 用玩家当前等级（不深拷贝、不放大属性）走 ``monster_scaled`` 造同阶怪；
+      * 在其上乘 ``BOSS_BREAK_HP_MULT`` / ``BOSS_BREAK_ATK_MULT`` 做出突破关应有的
+        「更耐打 + 略疼」；难度真正来自该 BOSS 的机制（禁技/眩晕/反伤/减疗）。
+    ``rng`` 保留只是兼容既有调用签名，不消费（BOSS 由突破档确定，不随机）。
     """
-    snap = copy.deepcopy(p)   # 战力快照：触发瞬间锁定，战斗过程不再变化
+    ch = cfg.break_boss_for_lv(int(p.get("lv", 1)))
     species = {
-        "name": "心魔劫影", "lv": int(snap["lv"]),
+        "name": ch["name"], "lv": int(p.get("lv", 1)),
         "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": cfg.BOSS_BREAK_KIND,
+        "skill": dict(ch["skill"]),
+        "character": dict(ch),
     }
-    # 基准怪与快照玩家「势均力敌」（TTK_PLAYER=4.5）。在其上温和放大血/攻，
-    # 做出「比快照强一点、拖得更久」的感觉。⚠️ 不放大快照属性本身：早先那样做
-    # 会让低等级怪攻击反解畸高（等级基数小）→ 低等级九星突破几乎必败，卡死新手。
-    # 难度主要来自更耐打（回合变长→斗气耗尽转普攻）+ 略高的攻击，而非必杀。
-    mon = monster_scaled(snap, species)
+    mon = monster_scaled(p, species)
     mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
     mon["atk"] = max(1, int(mon["atk"] * float(cfg.BOSS_BREAK_ATK_MULT)))
     mon["is_boss"] = True
     mon["breakthrough_boss"] = True
-    mon["snapshot_power"] = power(p)   # 快照战力，仅展示/校验，不影响数值
+    mon["boss_title"] = str(ch.get("title") or "")
     return mon
 
 
@@ -573,7 +577,7 @@ def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
     """九星突破 BOSS 战完整流程（命令层调用；core 只做逻辑不改存档持久化）。
 
     前置必须由调用方先用 ``is_nine_star_breakthrough(p)`` 判定。本函数：
-      1. 战力快照 → 造比快照强的 BOSS（make_breakthrough_boss）；
+      1. 按突破档取一名原著 BOSS（make_breakthrough_boss），沿用同一套等级反解；
       2. 用既有的 ``fight()`` 打这一场（自动服药/锁定物品口径与普通战斗一致）；
       3. 胜利 → 掉火焰（roll_breakthrough_flame）→ level_up 完成突破；
          失败 → 保留战斗损耗（掉血/耗药），经验不扣，可再次挑战。
@@ -586,7 +590,11 @@ def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
         "rounds": int(res.get("rounds", 0)),
         "taken": int(res.get("taken", 0)),
         "hp_end": int(p.get("hp", 0)),
-        "snapshot_power": int(mon.get("snapshot_power", 0)),
+        # 2026-11-20 原著 BOSS 元数据（去快照）：命令层据此渲染沉浸式引言/台词。
+        "boss_name": str(mon.get("name") or ""),
+        "boss_title": str(mon.get("boss_title") or ""),
+        "character": dict(mon.get("character") or {}),
+        "log": list(res.get("log") or []),
     }
     if not res.get("win"):
         out["leveled"] = False
@@ -758,9 +766,15 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     # 解锁 tier4 专属掉落。掉落层只认这两个字段，不反推战斗数值。
     _kind = str(mon.get("kind") or "")
     _is_boss = any(tok in _kind for tok in cfg.BOSS_KIND_TOKENS)
-    # 2026-11-19 怪物技能：纯透传，不参与任何数值反解（难度仍只由战力/层号决定）。
-    # species 自带 skill（塔/周本虚拟怪）→ 用它；否则按怪名查表，再按 kind 兜底。
-    _skill = mon.get("skill") or cfg.MONSTER_SKILLS.get(mon["name"])
+    # 2026-11-20 原著角色包：species 自带 character（九星突破 BOSS）时透传，
+    # 野外/塔/周本按怪名查同一张表。供 fight() 渲染登场引言/台词、结算机制。
+    # 纯展示与效果，不进数值反解（红线：难度只由层号/战力决定）。
+    _character = mon.get("character") or cfg.monster_character(mon["name"])
+    # 怪物技能：species 自带 > 角色包专属 > 野外技能表 > kind 兜底。
+    # 角色包优先于 SKILL_BY_KIND，塔层 BOSS 才能用「血刀」「摘星手」而不是
+    # 千篇一律的「魂殿秘技」；数值口径仍沿用既有表，不重算面板。
+    _skill = (mon.get("skill") or (_character or {}).get("skill")
+              or cfg.MONSTER_SKILLS.get(mon["name"]))
     if not _skill:
         for _tok, _sk in cfg.SKILL_BY_KIND.items():
             if _tok in _kind:
@@ -772,6 +786,7 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
         "exp": max(1, exp), "gold": max(1, gold),
         "kind": _kind, "is_boss": _is_boss,
         "skill": dict(_skill) if _skill else None,
+        "character": dict(_character) if _character else None,
     }
 
 
@@ -1216,6 +1231,18 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             entry["foe_hp_after"] = max(0, int(foe_hp))
         return entry
 
+    # 2026-11-20 原著 BOSS 登场引言：沉浸式"突如其来的惊喜/惊吓"。
+    # intro 角色包只在九星突破 BOSS 上存在（monster_scaled 透传），普通怪 None。
+    # 用 intro=True 标记，round=0、dmg=0 —— 不进任何伤害/回合统计，回看卡单独提成引言块。
+    _character = mon.get("character")
+    if _character and str(_character.get("intro") or ""):
+        dmg_log.append(_mark({
+            "dmg": 0, "kind": "登场", "intro": True,
+            "move": str(_character.get("title") or "强敌"),
+            "speaker": str(_character.get("name") or mon.get("name") or "敌手"),
+            "notes": [str(_character["intro"])],
+        }))
+
     # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
     # 多敌 encounter 传 roll_aid=False + 传入整场预掷的 aid，把掷骰权上收到
     # 整场一次——修复「每敌各掷 → 累积概率突破 2% 硬顶」的 bug（2026-11-16）。
@@ -1240,12 +1267,23 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                   "dot": True, "move": "中毒"}))
             if hp <= 0:
                 break
+        # 2026-11-20 原著 BOSS 机制：玩家回合开始结算挂在自己身上的 DoT / 眩晕。
+        # 普通怪 p_fx 全空 → on_turn_start 返回全 0，既有战斗逐字节不变。
+        _pfx_start = fx.on_turn_start(p_fx, rng)
+        if _pfx_start["dot_dmg"]:
+            hp -= _pfx_start["dot_dmg"]
+            taken += _pfx_start["dot_dmg"]
+            dmg_log.append(_mark({"dmg": _pfx_start["dot_dmg"], "kind": "中毒",
+                                  "taken": True, "dot": True, "move": "中毒",
+                                  "notes": _pfx_start["notes"]}))
+            if hp <= 0:
+                break
         # 自动服药：先补给再出手（血低时先吃药是当前玩家的直觉操作）
         _try_auto_pill("hp")
         _try_auto_pill("mp")
         entry, cost = _pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
-        # 禁技（2026-11-19 修）：被怪挂 silence 时本回合只能武器普攻，斗气不扣。
-        if int(p_fx.get("silence", 0)) > 0:
+        # 禁技（2026-11-19 修）：被怪挂 silence 或眩晕时本回合只能武器普攻，斗气不扣。
+        if int(p_fx.get("silence", 0)) > 0 or _pfx_start["skip"]:
             entry, cost = None, 0
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
@@ -1361,6 +1399,32 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                         else:
                             dealt = max(1, int(dealt * max(1.0, _sm)))
                             sk_note.append(sk_name)
+                        # 2026-11-20 原著 BOSS：技能命中时滚动播一条原著台词，
+                        # 并把"恶心机制"（禁技/眩晕/反伤/减疗/降攻/毒）挂到玩家 p_fx。
+                        # mech 复用 skill_effects.on_hit，效果类型全在既有系统内，无新轮子。
+                        if _character:
+                            _quotes = tuple(_character.get("quotes") or ())
+                            if _quotes:
+                                _q = _quotes[int(rng() * len(_quotes)) % len(_quotes)]
+                                sk_note.append("「%s」" % _q)
+                            _mech = _character.get("mech")
+                            if _mech:
+                                _mn = str(_mech.get("kind") or sk_name)
+                                _mech_eff = dict(_mech)
+                                _mech_eff["t"] = _mech.get("t") or "debuff_atk"
+                                # on_hit 的 base 伤害用本击 dealt；dot 的 base 取 mech.base 或 1
+                                if _mech_eff["t"] == "dot":
+                                    _mech_eff["base"] = max(1, int(_mech.get("base") or 1))
+                                if _mech_eff["t"] == "reflect":
+                                    # 反伤要被玩家受击侧 on_incoming(p_fx) 读到：
+                                    # fx.on_hit 把 reflect 写到 self_state，故这里
+                                    # self=p_fx（反伤归玩家），不能像其他机制那样 self=m_fx。
+                                    fx.on_hit([_mech_eff], p_fx, p_fx, dealt, rng,
+                                              ctx={"target_flags": set(), "target_hp_ratio": 0.5})
+                                else:
+                                    fx.on_hit([_mech_eff], m_fx, p_fx, dealt, rng,
+                                              ctx={"target_flags": set(), "target_hp_ratio": 0.5})
+                                sk_note.append("%s！" % _mn)
                 # 心火共鸣：承伤减免（原著「短暂晕眩足以令战局顷刻间转变」）
                 if fortune_left > 0:
                     dealt = max(1, int(dealt * float(cfg.FORTUNE_TAKEN_MULT)))

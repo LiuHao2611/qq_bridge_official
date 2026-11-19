@@ -78,6 +78,9 @@ END_ROW = 26              # 一行资源条（我气血 / 我斗气 / 敌气血�
 END_LABEL_W = 78          # 「我气血」标签列宽（FS_BODY 下 3 个汉字 ≈60px，58 会截成「我气…」）
 END_VAL_W = 150           # 右侧「8,412 / 10,883」数值列宽
 END_AFTER = 8             # 与下方 KPI 的间距
+# ---- 原著 BOSS 登场引言（2026-11-20）：胜负徽标下方一条强调引文 ----
+INTRO_ROW = LINE_H        # 引言正文行高（折行按实测行数累加）
+INTRO_AFTER = 12          # 与下方"终局"块的间距（独立于 CAP_BEFORE，避免双重间距）
 
 _WHITE = "#FFFFFF"
 
@@ -167,7 +170,7 @@ def _rich(data: dict) -> bool:
     「同一份骨架给两张卡复用」的兼容边界，改动这里前先看 doupo_ruin.py。
     """
     return any(data.get(k) for k in
-               ("verdict", "end", "kpis", "bars", "beats", "actions", "rounds"))
+               ("verdict", "end", "kpis", "bars", "beats", "actions", "rounds", "intro"))
 
 
 def _wrap(s: str, max_w: int) -> list[str]:
@@ -217,15 +220,20 @@ def _bubble_plan(rounds: list[dict], content_w: int) -> list[dict]:
                 val_w = _w(val, FS_NUM, "bold")
                 room = max(24, col_w - val_w - 8)
                 mv = _fit(_gs(a.get("move"), "出手"), room, FS_BODY, "regular")
-                tags = _fit(_gs(a.get("tags"), ""), col_w, S.FS_LABEL, "regular")
+                # 2026-11-20：BOSS 的技能/原著台词/机制是三条 notes，旧版
+                # _fit 单行会把第三条直接省略。按真实列宽折行、重算高度，
+                # 保证「九幽·锁魂（空间崩塌）！」这类机制名完整可见。
+                tag_lines = S.wrap_cjk(_gs(a.get("tags"), ""), S.FS_LABEL,
+                                       "regular", col_w) if a.get("tags") else []
+                tag_lines = [ln for ln in tag_lines if ln]
                 # 伤害构成可能放不下（「面板 3,100 · 防御 -520 · 技能 -386」≈262px）：
                 # 按真实列宽折行，不截断 —— 截掉「技能 -386」等于把用户要看的稀释量切了
                 comp_lines = S.wrap_cjk(_gs(a.get("comp"), ""), S.FS_LABEL,
                                         "regular", col_w) if a.get("comp") else []
                 comp_lines = [ln for ln in comp_lines if ln][:2]
                 rh = (LINE_H + (BUBBLE_COMP_H * len(comp_lines))
-                      + (BUBBLE_TAG_H if tags else 0) + BUBBLE_ROW_GAP)
-                entries.append({"move": mv, "value": val, "tags": tags,
+                      + (BUBBLE_TAG_H * len(tag_lines)) + BUBBLE_ROW_GAP)
+                entries.append({"move": mv, "value": val, "tags": tag_lines,
                                 "comp": comp_lines,
                                 "tone": _gs(a.get("tone"), "mine"), "h": rh})
             if not entries:
@@ -411,6 +419,16 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
     if v:
         blocks.append(("verdict", v, H_VERDICT + VERDICT_GAP))
 
+    # 2026-11-20 原著 BOSS 登场引言：紧跟胜负徽标，沉浸式一句。
+    intro = data.get("intro") or {}
+    if intro.get("quote"):
+        q_lines = _wrap(str(intro["quote"]), content_w - 16)
+        speaker = str(intro.get("speaker") or "")
+        title = str(intro.get("title") or "")
+        head = "【登场】%s%s" % (speaker, ("·" + title) if title else "")
+        blocks.append(("intro", {"head": head, "lines": q_lines},
+                       FS_BODY + len(q_lines) * INTRO_ROW + INTRO_AFTER))
+
     # 终局资源条紧跟胜负徽标：先回答「为什么输」，再谈打得多狠。
     # 旧档（无 end_reason）end 为 {}，整块不出现。
     end = data.get("end") or {}
@@ -465,6 +483,27 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
 
 
 # ---------------------------------------------------------------- 各区块绘制
+def _draw_intro(c: Canvas, payload: dict, x0: int, y: int, content_w: int,
+                p: dict, rec) -> None:
+    """原著 BOSS 登场引言：左侧强调色竖条 + 「登场」头 + 引文（2026-11-20）。"""
+    head = str(payload.get("head") or "")
+    lines = list(payload.get("lines") or [])
+    c.text((x0, y + FS_BODY // 2), head, size=FS_BODY, color=p["accent_color"],
+           role="regular", anchor="lm")
+    rec("intro_head", head, x0, y, FS_BODY)
+    yy = y + FS_BODY
+    # 竖条强调引文，长度随实际行数
+    bar_h = len(lines) * INTRO_ROW
+    if bar_h > 0:
+        c.rounded_rect((x0 + 1, yy + 3, x0 + 4, yy + bar_h - 3), radius=2,
+                       fill=p["accent_color"])
+    for i, line in enumerate(lines):
+        ly = yy + i * INTRO_ROW + INTRO_ROW // 2
+        c.text((x0 + 12, ly), line, size=FS_BODY, color=p["text_color"],
+               role="regular", anchor="lm")
+        rec("intro_%d" % i, line, x0 + 12, ly - INTRO_ROW // 2, FS_BODY)
+
+
 def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
                   p: dict, rec) -> None:
     win = bool(v.get("win"))
@@ -755,11 +794,11 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                     rec("r%d_%s%d_c%d" % (ri, key, ei, li), ln, cx,
                         ny + BUBBLE_COMP_H // 2, S.FS_LABEL)
                     ny += BUBBLE_COMP_H
-                if e["tags"]:
-                    ty = ny + BUBBLE_TAG_H // 2
-                    c.text((cx, ty), e["tags"], size=S.FS_LABEL,
+                for ti, tag in enumerate(e["tags"] or []):
+                    ty = ny + BUBBLE_TAG_H * ti + BUBBLE_TAG_H // 2
+                    c.text((cx, ty), tag, size=S.FS_LABEL,
                            color=p["dim_color"], role="regular", anchor="lm")
-                    rec("r%d_%s%d_t" % (ri, key, ei), e["tags"], cx, ty, S.FS_LABEL)
+                    rec("r%d_%s%d_t%d" % (ri, key, ei, ti), tag, cx, ty, S.FS_LABEL)
                 ey += e["h"]
 
         # 气泡底部：回合末余量。左「余血/余气」右「敌血」，两端锚定便于竖扫
@@ -847,6 +886,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     for bi, (kind, payload, bh) in enumerate(blocks):
         if kind == "verdict":
             _draw_verdict(c, payload, x0, y, content_w, p, rec)
+        elif kind == "intro":
+            _draw_intro(c, payload, x0, y, content_w, p, rec)
         elif kind == "end":
             _draw_end(c, payload, x0, y, content_w, p, rec)
         elif kind == "kpi":

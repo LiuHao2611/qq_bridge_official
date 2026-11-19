@@ -179,15 +179,17 @@ async def main():
     check("突破后等级 =2", int(p["lv"]) == 2, f"lv={p['lv']}")
     check("突破后回满血", p["hp"] == core.stats(p)["体力"])
 
-    # 跨大境界（2026-11-19 起须先战心魔劫影）：九星斗师(27) → 一星大斗师(28)。
-    # 用必胜 rng 注入，验证 BOSS 战触发 + 胜利后突破 + 文案含起终点。
+    # 跨大境界（2026-11-20 起须先战原著 BOSS）：九星斗师(27) → 一星大斗师(28)。
+    # 用必胜 rng 注入，验证原著 BOSS 登场引言 + 胜利后突破 + 文案含起终点。
     p = await store.get_player(A)
     p["lv"] = 27                      # 九星斗师（斗师境最后一星）
     p["exp"] = cfg.exp_need(27) + 10
     core._refill(p)
     await store.put_player(p)
     r = await commands.cmd_break(store, A, rng=lambda: 0.01)
-    check("九星跨境界 必遇心魔劫影", "心魔劫影" in r, r[:80])
+    check("九星跨境界 必遇原著 BOSS（云棱）", "云棱" in r, r[:100])
+    check("突破文案无「快照战力」", "快照战力" not in r and "心魔劫影" not in r, r[:100])
+    check("突破文案有原著引言", "我是云岚宗的大长老，云棱" in r, r[:120])
     check("跨境界 文案含起终点", "九星斗师" in r and "一星大斗师" in r, r[:120])
     check("跨境界 用境界突破措辞", "境界突破" in r, r[:120])
     p = await store.get_player(A)
@@ -336,6 +338,18 @@ async def main():
     await store.put_player(p)
     r = await commands.cmd_buy(store, A, "炎星石 5")
     check("买 金币不足被挡", "金币不足" in r, r[:40])
+    p["gold"] = cfg.START_GOLD
+    await store.put_player(p)
+    # 2026-11-20 用户「买东西别限制 99」：给足金币买 150，必须真收到 150。
+    p = await store.get_player(A)
+    p["gold"] = 10 ** 7
+    await store.put_player(p)
+    before150 = core.count_item(p, "血灵草")
+    r = await commands.cmd_buy(store, A, "血灵草 150")
+    p = await store.get_player(A)
+    check("买 150 不被夹到 99",
+          core.count_item(p, "血灵草") - before150 == 150,
+          f"实际+{core.count_item(p, '血灵草') - before150} | {r[:50]}")
     p["gold"] = cfg.START_GOLD
     await store.put_player(p)
 

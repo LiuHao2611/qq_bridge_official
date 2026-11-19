@@ -271,7 +271,7 @@ MENU_GROUPS = (
         ("出塔", "离开炼气塔，开始消解火毒（每分钟 -2）"),
         ("火能", "看聚火壶状态：火晶卡 / 火能 / 火毒 / 心火倍率 / 岩浆世界"),
         ("换卡", "升一档火晶卡（黑→蓝→青→赤→紫，消耗火能，解锁更深塔层）"),
-        ("突破", "修为满时晋升一星；九星跨境界须先战心魔劫影（胜则概率掉兽火/异火）；斗帝看机缘"),
+        ("突破", "修为满时晋升一星；九星跨境界须先战原著强敌（胜则概率掉兽火/异火）；斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
         ("战斗回看", "查看最后一次战斗完整过程：逐招、气血/斗气、词条（出卡片）"),
         ("战斗评价", "根据最后一场战斗的真实数据，给一句/一段毒舌评语"),
@@ -377,7 +377,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("异火", (
         "青莲地心火 斗气槽+25%/级；陨落心炎 经验+50%/级；",
         "三千焱炎火 吸血+2%/级；净莲妖火 暴击闪避+10%/级；帝炎 斗帝专属",
-        "九星跨境界突破须先战心魔劫影：胜则概率掉兽火/异火（兽火概率更高），入「异火」查看",
+        "九星跨境界突破须先战原著强敌（药老/云棱/摘星老鬼/魂灭生等，各有台词与绝技）：胜则概率掉兽火/异火，入「异火」查看",
     )),
     ("斗帝", (
         "102 级九星斗圣冲 103 级：成功率 = 30% + 机缘/2000，帝炎 100%",
@@ -558,29 +558,43 @@ async def cmd_break(store, qq, rng=None) -> str:
     if not core.can_level(p):
         need = cfg.exp_need(lv) - int(p["exp"])
         return f"修为不足，距下一星还差 {_fmt(need)}。去「战斗」或「修炼」。"
-    # 2026-11-19 九星突破 BOSS 战：跨大境界的那一次突破须先战胜心魔劫影。
+    # 2026-11-20 九星突破 BOSS 战重做（用户「别写快照玩法」「BOSS 登场要有引言台词」）：
+    # 跨大境界须先战胜一名原著反派（药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝）。
     if core.is_nine_star_breakthrough(p):
         locked = await store.item_locks(str(qq))
         br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked)
         await store.put_player(p)
+        _ch = br.get("character") or {}
+        _name = br.get("boss_name") or "强敌"
+        _title = br.get("boss_title") or ""
+        _intro = str(_ch.get("intro") or "").strip()
+        # 结算四段式（用户「结算乱七八糟」）：①登场引言 ②鏖战结果 ③原著台词收尾 ④突破/掉落。
+        head = [f"⚡ 【{cfg.full_realm(lv)}】壁垒将破——"]
+        if _intro:
+            head.append(f"　{_intro}")
+        head.append(f"　【{_name}】{'·' + _title if _title else ''}拦在突破之路上！")
         if not br["win"]:
-            return (
-                f"🌩️ 突破【{cfg.full_realm(lv)}】之际，心魔劫影骤然现身！\n"
-                f"　你以快照战力 {_fmt(br['snapshot_power'])} 迎战，鏖战 {br['rounds']} 回合，"
-                f"终因火候不足而败（余血 {_fmt(br['hp_end'])}）。\n"
-                "　修为未散，调息再来——「突破」可再战此劫。"
-            )
-        # 战胜：先报火焰掉落，再报突破结果。
-        lines = [f"🌩️ 心魔劫影被你一击击溃（快照战力 {_fmt(br['snapshot_power'])}，"
-                 f"鏖战 {br['rounds']} 回合）！"]
+            tail = [
+                f"　鏖战 {br['rounds']} 回合，终因火候不足而败（余血 {_fmt(br['hp_end'])}）。",
+                "　修为未散，调息再来——「突破」可再战此劫。",
+            ]
+            return "\n".join(head + tail)
+        # 战胜：挑一条原著台词作收尾（不用快照战力那种干巴巴的战力数字）。
+        _quotes = tuple(_ch.get("quotes") or ())
+        _end_quote = ("　「%s」——话音未落，强敌已溃。" % _quotes[-1]) if _quotes else ""
+        lines = head + [
+            f"　鏖战 {br['rounds']} 回合，【{_name}】被你击溃！",
+        ]
+        if _end_quote:
+            lines.append(_end_quote)
         fl = br.get("flame") or {}
         if fl.get("ok"):
             if fl.get("duplicate"):
-                lines.append(f"　劫影散去，落下的一缕【{fl['name']}】你早已拥有，"
+                lines.append(f"　劫后余烬中遗下一缕【{fl['name']}】你早已拥有，"
                              f"化作药渣 ×{fl.get('dross', 30)}。")
             else:
                 _kind = "兽火/其他火焰" if fl.get("kind") == "other" else "异火"
-                lines.append(f"　劫影溃散处遗下一缕【{fl['name']}】（{_kind}），已收入囊中——"
+                lines.append(f"　溃散处遗下一缕【{fl['name']}】（{_kind}），已收入囊中——"
                              "「养火」可喂药渣升级。")
         if br.get("tiandi"):
             lines.append("🔥 你踏碎最后一层壁障，成就【斗帝】！帝炎自燃，机缘全满。")
@@ -687,21 +701,27 @@ async def cmd_fight(store, qq) -> str:
     killed = sum(1 for x in detail if x.get("win"))
     verdict = "大捷" if res["win"] else f"力竭·斩{killed}/{n_total}"
 
-    # 「防御」字样固定出现在代价行：属性↔战斗强关联的稳定锚点，
-    # 即使最强一击恰好是「贵人相助」（无属性括注）也不会丢掉归因。
+    # 2026-11-20 结算重排（用户「结算展示乱七八糟」）：固定三段、顺序恒定，
+    # 不再用 insert() 往中间插行打乱结构。①战果 ②代价 ③机缘（仅触发时出现）。
     lines = [
         f"⚔️ 遭遇 {n_total} 敌 · {res['rounds']}回合 · {verdict}",
         f"💥 {spot}",
-        f"🎯 斩获 {foes}",
-        f"🩸 代价 防御减伤后受伤 {_fmt(res['taken'])}　气血 {_fmt(p.get('hp') or 0)}",
-        f"💰 收益 修为 +{_fmt(res['exp'])}　金币 +{_fmt(res['gold'])}",
     ]
     if folded > 0:
-        lines.insert(2, f"⋯ 略去中间 {folded} 式常规攻防")
+        lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
+    # ① 战果（修为/金币/敌人 + 战利）
     drops = list(res.get("drops") or [])
+    gain = f"🎯 战果 斩获 {foes} · 修为 +{_fmt(res['exp'])} · 金币 +{_fmt(res['gold'])}"
     if drops:
-        lines.append("🎁 战利 " + "、".join(f"{n}×{c}" for n, c in drops[:3]))
-
+        gain += " · " + "、".join(f"{n}×{c}" for n, c in drops[:3])
+    lines.append(gain)
+    # ② 代价（「防御」字样固定出现：属性↔战斗强关联的稳定锚点）
+    auto = res.get("auto_pills") or {}
+    _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
+    cost = (f"🩸 代价 防御减伤后受伤 {_fmt(res['taken'])} · 气血 {_fmt(p.get('hp') or 0)}"
+            + (f" · 服药 {_pill}" if _pill else ""))
+    lines.append(cost)
+    # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append("🍀 机缘际会，贵人相助——此战毫发无伤")
     lv = int(p["lv"])
@@ -1330,7 +1350,7 @@ async def cmd_buy(store, qq, args) -> str:
     name = parts[0]
     n = 1
     if len(parts) > 1 and parts[1].isdigit():
-        n = max(1, min(99, int(parts[1])))
+        n = max(1, min(cfg.SHOP_BUY_MAX, int(parts[1])))
     else:
         # 支持「买 血灵草2」这种没空格的
         for it in core.shop_list():
@@ -1338,7 +1358,7 @@ async def cmd_buy(store, qq, args) -> str:
                 name = it["name"]
                 rest = args[len(it["name"]):].strip()
                 if rest.isdigit():
-                    n = max(1, min(99, int(rest)))
+                    n = max(1, min(cfg.SHOP_BUY_MAX, int(rest)))
                 break
     res = core.shop_buy(p, name, n)
     # 采办药材也算推进「药农之托」一类 herb 任务（买炎星石不算）。

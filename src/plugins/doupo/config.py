@@ -522,8 +522,9 @@ OTHER_FLAME_BY_NAME = {f["name"]: f for f in OTHER_FLAMES}
 OWNED_FLAME_NAMES = FLAME_NAMES + BONUS_FLAME_NAMES + OTHER_FLAME_NAMES
 
 # ---------------------------------------------------------------------------
-# 九星突破 BOSS 战（2026-11-19 用户：「九星阶段突破时必遇 BOSS，快照战力，
-# BOSS 比快照强一点、有难度，成功后概率掉异火/兽火，兽火概率更高」）。
+# 九星突破 BOSS 战（2026-11-20 重做：用户「别写快照玩法」「BOSS 登场要有引言台词」，
+# 改为原著有名有姓的 BOSS + 台词 + 专属技能 + 恶心机制；数值仍按等级反解保平衡。
+# 成功后概率掉异火/兽火，兽火概率更高的口径不变）。
 # ---------------------------------------------------------------------------
 #: 触发：当前 lv 处于「九星」且经验已满可突破（跨大境界那一级）。
 #: 判定用 REALM_TABLE 的星位——某大境界的最后一颗星（第 9 星 / 半圣第 3 阶）。
@@ -892,7 +893,8 @@ MONSTERS = [
     {"name": "紫晶翼狮王", "lv": 45, "hard": 0.87, "exp_mul": 1.00, "gold_mul": 1.20, "kind": "魔兽"},
     {"name": "黑焰紫云雕", "lv": 57, "hard": 0.87, "exp_mul": 1.00, "gold_mul": 1.25, "kind": "魔兽"},
     {"name": "天山雪蟒", "lv": 63, "hard": 0.86, "exp_mul": 1.00, "gold_mul": 1.30, "kind": "魔兽"},
-    {"name": "八翼黑蛇皇", "lv": 74, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.35, "kind": "魔兽"},
+    # 原著只写「翼黑蛇皇」，无「八翼」二字（语料逐字核对 2026-11-20）
+    {"name": "翼黑蛇皇", "lv": 74, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.35, "kind": "魔兽"},
     {"name": "云岚山守山兽", "lv": 81, "hard": 0.85, "exp_mul": 1.00, "gold_mul": 1.40, "kind": "魔兽"},
     {"name": "天毒蝎龙兽", "lv": 92, "hard": 0.84, "exp_mul": 1.00, "gold_mul": 1.50, "kind": "魔兽"},
     # ---- 强盗 / 佣兵（原著早期反派，黑角域与魔兽山脉）----
@@ -982,7 +984,7 @@ MONSTER_SKILLS: dict[str, dict] = {
     "紫晶翼狮王":   {"name": "紫晶幻芒", "chance": 0.18, "effect": "drain",  "mult": 0.10},
     "黑焰紫云雕":   {"name": "黑焰俯冲", "chance": 0.18, "effect": "burst",  "mult": 1.6},
     "天山雪蟒":     {"name": "寒毒缠身", "chance": 0.19, "effect": "poison", "mult": 0.10},
-    "八翼黑蛇皇":   {"name": "八翼毒瘴", "chance": 0.21, "effect": "poison", "mult": 0.12},
+    "翼黑蛇皇":     {"name": "毒瘴锁空", "chance": 0.21, "effect": "poison", "mult": 0.12},
     "云岚山守山兽": {"name": "撼山撞",   "chance": 0.18, "effect": "burst",  "mult": 1.7},
     "天毒蝎龙兽":   {"name": "蝎龙剧毒", "chance": 0.22, "effect": "poison", "mult": 0.13},
     # ---- 悍匪 / 黑盟 / 魂殿 ----
@@ -1003,6 +1005,319 @@ SKILL_BY_KIND = {
     "boss": {"name": "魂殿秘技", "chance": 0.28, "effect": "drain", "mult": 0.12},
     "elite": {"name": "凶兽扑杀", "chance": 0.22, "effect": "burst", "mult": 1.5},
 }
+
+# ---------------------------------------------------------------------------
+# 九星突破 BOSS 角色库（2026-11-20 用户「别写快照玩法」「BOSS 登场要有引言台词」）
+# ---------------------------------------------------------------------------
+#: 12 个跨境界突破档各配一名原著 BOSS。台词/招式名全部有原文出处，见
+#: docs/战斗BOSS体系重做_原著考据_2026-11-20.md（含章节号与引文）。
+#: 魔兽无本人台词者用"威压旁白"，**不代编**；语料无据的「八翼」「帝印诀」
+#: 「魂殿锁魂」「魔音」一律不用。
+#: 字段：
+#:   intro   —— 登场引言（沉浸式"突如其来的惊喜/惊吓"由它承载）
+#:   quotes  —— 技能/战败时滚动播出的原著台词
+#:   skill   —— 专属技能（沿用 effect: burst/poison/drain，不改数值反解）
+#:   mech    —— "恶心机制"：复用 skill_effects 的 t/v/d/p；skill 命中时挂到玩家
+#:   source  —— 原著章节出处（守门测试断言非空）
+BREAK_BOSSES: tuple[dict, ...] = (
+    {"name": "药老·药尘", "title": "黑袍炼药师", "source": "第九章 药老！",
+     "intro": "「就是因为没有，才能显出我这功法的独特啊！」黑袍人负手而立，笑意深不可测。",
+     "quotes": ("就是因为没有，才能显出我这功法的独特啊！",
+                "你体内的基础，早在三年前便已牢固可靠"),
+     "skill": {"name": "焚决", "chance": 0.22, "effect": "drain", "mult": 0.08},
+     "mech": {"t": "reflect", "v": 0.18, "d": 2, "p": 0.30, "kind": "焚决·焚脉"}},
+    {"name": "狼头佣兵·穆蛇", "title": "狼头佣兵团团长", "source": "原著早期·魔兽山脉",
+     "intro": "三道身影拦住去路，为首者气息沉凝——原著未载其台词，唯有三人合围的压迫。",
+     "quotes": (),  # 原著无本人台词，不代编
+     "skill": {"name": "老练突刺", "chance": 0.20, "effect": "burst", "mult": 1.5},
+     "mech": {"t": "debuff_heal", "v": 0.25, "d": 2, "p": 0.28, "kind": "断筋·封脉"}},
+    {"name": "云岚宗·云棱", "title": "云岚宗大长老", "source": "第三百三十四章 三年之约！",
+     "intro": "「我是云岚宗的大长老，云棱。」话音未落，剑气已至。",
+     "quotes": ("我是云岚宗的大长老，云棱。", "生死，各安天命。"),
+     "skill": {"name": "青木剑诀", "chance": 0.24, "effect": "burst", "mult": 1.6},
+     "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.25, "kind": "青木·封剑势"}},
+    {"name": "黑盟死士", "title": "黑盟·死士", "source": "第五百九十三章 破封！",
+     "intro": "黑袍人吐出一口血，厉喝连黑盟的人也敢动、找死不成，反手已欺身至前。",
+     "quotes": ("黑盟不会放过你们的！",),  # 前一句原文用直角引号，此处只放逐字命中句
+     "skill": {"name": "死士搏命", "chance": 0.26, "effect": "burst", "mult": 1.8},
+     "mech": {"t": "reflect", "v": 0.30, "d": 2, "p": 0.35, "kind": "搏命·反噬"}},
+    {"name": "紫晶翼狮王", "title": "六阶魔兽", "source": "第一百三十一章 神秘女人与六阶魔兽",
+     "intro": "虚空为之一颤，紫晶覆身的巨兽踏空而来——原著无本人台词，唯有铺天盖地的威压。",
+     "quotes": (),  # 魔兽无台词
+     "skill": {"name": "紫晶幻芒", "chance": 0.24, "effect": "drain", "mult": 0.10},
+     "mech": {"t": "reflect", "v": 0.25, "d": 2, "p": 0.30, "kind": "紫晶·反震"}},
+    {"name": "魂殿鹜护法", "title": "魂殿护法", "source": "第六百十四章 鹜护法 / 第六百九十二章",
+     "intro": "「桀桀，我魂殿可有的是手段收拾你。」黑雾无声漫过，笑声从四面八方响起。",
+     "quotes": ("桀桀，我魂殿可有的是手段收拾你",
+                "本护法便等着看一场好戏吧",
+                "药尘，难道你以为以我现在的实力，你还能是我对手不成？"),
+     "skill": {"name": "摄魂术", "chance": 0.24, "effect": "drain", "mult": 0.11},
+     "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.28, "kind": "摄魂·禁技"}},
+    {"name": "地魔老鬼", "title": "魔炎谷首领·斗宗", "source": "第百六十章 地魔老鬼",
+     "intro": "「他杀了我魔炎谷三大长老，这笔账，不得不算。」老鬼踏火而来，声如闷雷。",
+     "quotes": ("这笔账，不得不算", "今日老夫前来的目的，你应该也清楚"),
+     "skill": {"name": "魔焰吞噬", "chance": 0.26, "effect": "drain", "mult": 0.12},
+     "mech": {"t": "debuff_heal", "v": 0.35, "d": 2, "p": 0.32, "kind": "魔焰·灼脉"}},
+    {"name": "魂殿摘星老鬼", "title": "魂殿天尊·五星斗尊巅峰", "source": "第一千一百九十九章 摘星老鬼",
+     "intro": "「你才是大鱼……既然老夫已经露面，怎还能让你们安然离去？」笑面老者踏锁链而来。",
+     "quotes": ("你才是大鱼", "既然老夫已经露面，怎还能让你们安然离去？",
+                "在绝对的实力面前，这些都没有用", "九幽魂手！"),
+     "skill": {"name": "九幽魂手", "chance": 0.28, "effect": "drain", "mult": 0.12},
+     "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.25, "kind": "九幽·锁魂（空间崩塌）"}},
+    {"name": "魂殿殿主·魂灭生", "title": "魂殿殿主", "source": "第一千五百一十二章 萧炎vs魂殿殿主",
+     "intro": "「三局两平，有些出乎本殿的意料，不过这应该无法改变最后的结局。」殿主端坐黑雾之上。",
+     "quotes": ("三局两平，有些出乎本殿的意料", "成大事，若是在乎这些，终究是小家子气"),
+     "skill": {"name": "大天造化掌", "chance": 0.30, "effect": "burst", "mult": 1.7},
+     "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.32, "kind": "造化掌·镇身"}},
+    {"name": "魂灭生·真身", "title": "魂殿殿主·全力", "source": "第一千四百七十一章 魂殿殿主！",
+     "intro": "「你的灵魂力量很强，但可惜，本体太弱。」黑雾骤然倒卷，殿主的真身终于降临。",
+     "quotes": ("你的灵魂力量很强，但可惜，本体太弱", "成大事，若是在乎这些，终究是小家子气"),
+     "skill": {"name": "大天造化掌", "chance": 0.32, "effect": "burst", "mult": 1.8},
+     "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.30, "kind": "殿主·镇魂印"}},
+    {"name": "美杜莎女王", "title": "蛇人族女王", "source": "第两百一十五章 进化开始",
+     "intro": "「若是进化成功，今日此处的所有人类，都得永留沙漠！」七彩光芒自蛇人族女王身上冲天而起。",
+     "quotes": ("若是进化成功，今日此处的所有人类，都得永留沙漠！", "抱歉，不能。",
+                "没想到你竟然还能知道这些东西"),
+     "skill": {"name": "七彩吞天蟒", "chance": 0.30, "effect": "poison", "mult": 0.14},
+     "mech": {"t": "dot", "v": 0.18, "d": 3, "p": 0.35, "kind": "七彩毒瘴", "base": 1}},
+    {"name": "魂天帝", "title": "魂族族长·最终 BOSS", "source": "第两百一十六章 进化成功？（天地异象）",
+     "intro": "天地能量骤然暴动，乌云笼罩、银蛇乱闪——原著载传说级魔兽降生或晋级会引发天地异象。",
+     "quotes": (),  # 原著本档无可靠台词，只用天地异象旁白，不代编
+     "skill": {"name": "大天造化掌", "chance": 0.34, "effect": "burst", "mult": 1.9},
+     "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.35, "kind": "帝威·封技"}},
+)
+
+#: 12 档突破对应的 BOSS 序号 = realm_index(lv)（0=斗之气 … 11=斗圣，共 12 档）。
+#: 索引越界时钳到最后一档，保证 lv 边界不崩。
+def break_boss_for_lv(lv: int) -> dict:
+    idx = max(0, min(len(BREAK_BOSSES) - 1, realm_index(int(lv))))
+    return BREAK_BOSSES[idx]
+
+
+# ---------------------------------------------------------------------------
+# 野外 / 塔层 / 周本 精英与 BOSS 角色包（2026-11-20 用户
+# 「每一个精英怪和 BOOS 都要有各自的技能……有机制的」）
+# ---------------------------------------------------------------------------
+#: 九星突破的 12 档已由 BREAK_BOSSES 覆盖；这里补齐**其余所有会遇到的怪**。
+#: 铁律同 BREAK_BOSSES：
+#:   * quotes 只放逐字核对过原文的连续短句，语料没有的一律空元组，不代编；
+#:     「游戏原创」怪（魂殿执事/黑盟死士/塔灵等）明确标 source，不冒充原著角色。
+#:   * intro 是登场旁白；普通怪 intro 留空，避免一场 5 连战刷 5 条旁白。
+#:   * mech 复用 skill_effects 的 t/v/d/p/kind；silence/stun 的 d≥2 保证下回合真生效。
+#:   * skill 只改名字/表现，数值口径与既有 MONSTER_SKILLS 一致，不重算面板。
+_CHAR_ZHAIXING = {
+    "name": "摘星老鬼", "title": "魂殿天尊·五星斗尊巅峰",
+    "source": "第一千一百九十九章 摘星老鬼", "elite": True,
+    "intro": "「呵呵，终于打算拼命了么？」黑雾漫过锁魂殿，笑面老者缓步而来。",
+    "quotes": ("呵呵，终于打算拼命了么？", "摘星手！",
+               "在绝对的实力面前，这些都没有用"),
+    "skill": {"name": "摘星手", "chance": 0.22, "effect": "burst", "mult": 1.7},
+    "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.25, "kind": "摘星·空间崩塌"},
+}
+_CHAR_DIMO = {
+    "name": "地魔老鬼", "title": "魔炎谷首领·斗宗",
+    "source": "第百六十章 地魔老鬼", "elite": True,
+    "intro": "「这笔账，不得不算。」老鬼踏火而来，声如闷雷。",
+    "quotes": ("这笔账，不得不算", "今日老夫前来的目的，你应该也清楚"),
+    "skill": {"name": "魔焰吞噬", "chance": 0.21, "effect": "drain", "mult": 0.12},
+    "mech": {"t": "debuff_heal", "v": 0.35, "d": 2, "p": 0.32, "kind": "魔焰·灼脉"},
+}
+_CHAR_HANFENG = {
+    "name": "韩枫", "title": "药皇",
+    "source": "原著·黑盟篇（语料逐字核对：韩枫其名）", "elite": True,
+    "intro": "药皇袍角翻飞，袖中火影一闪即逝——原著未载其本场台词，不代编。",
+    "quotes": (),
+    "skill": {"name": "毒蛊", "chance": 0.20, "effect": "poison", "mult": 0.12},
+    "mech": {"t": "dot", "v": 0.15, "d": 3, "p": 0.30, "kind": "药皇·蛊毒", "base": 1},
+}
+_CHAR_MUSHE = {
+    "name": "穆蛇", "title": "狼头佣兵团团长",
+    "source": "原著早期·魔兽山脉", "elite": True,
+    "intro": "三道身影拦住去路，为首者气息沉凝——原著未载其台词，唯有合围的压迫。",
+    "quotes": (),
+    "skill": {"name": "老练突刺", "chance": 0.16, "effect": "burst", "mult": 1.4},
+    "mech": {"t": "debuff_heal", "v": 0.25, "d": 2, "p": 0.28, "kind": "断筋·封脉"},
+}
+
+MONSTER_CHARACTERS: dict[str, dict] = {
+    # ---- 野外魔兽：低阶无旁白，高阶精英各有恶心机制 ----
+    "嗜血鼠": {"name": "嗜血鼠", "title": "魔兽山脉·低阶魔兽",
+               "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+               "skill": {"name": "噬咬", "chance": 0.15, "effect": "burst", "mult": 1.4},
+               "mech": None},
+    "岩蛇": {"name": "岩蛇", "title": "魔兽山脉·低阶魔兽",
+             "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+             "skill": {"name": "毒液喷射", "chance": 0.16, "effect": "poison", "mult": 0.08},
+             "mech": None},
+    "巡山妖": {"name": "巡山妖", "title": "山林巡守",
+               "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+               "skill": {"name": "乱石砸", "chance": 0.15, "effect": "burst", "mult": 1.5},
+               "mech": None},
+    "暴雪魔猿": {"name": "暴雪魔猿", "title": "魔兽山脉·中阶魔兽",
+                 "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+                 "skill": {"name": "狂暴捶击", "chance": 0.20, "effect": "burst", "mult": 1.6},
+                 "mech": None},
+    "狮翼兽": {"name": "狮翼兽", "title": "魔兽山脉·中阶魔兽",
+               "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+               "skill": {"name": "狮吼震气", "chance": 0.16, "effect": "drain", "mult": 0.08},
+               "mech": None},
+    "赤炎狼": {"name": "赤炎狼", "title": "魔兽山脉·中阶魔兽",
+               "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+               "skill": {"name": "炎牙撕咬", "chance": 0.17, "effect": "burst", "mult": 1.5},
+               "mech": None},
+    "双头火灵蛇": {"name": "双头火灵蛇", "title": "异火伴生魔兽", "elite": True,
+                   "source": "原著世界观（游戏命名，语料未见同名魔兽）",
+                   "intro": "两颗蛇首自火中探出，吐息间炎浪翻卷——原著无本人台词，不代编。",
+                   "quotes": (),
+                   "skill": {"name": "双头毒噬", "chance": 0.20, "effect": "poison", "mult": 0.10},
+                   "mech": {"t": "dot", "v": 0.12, "d": 2, "p": 0.24,
+                            "kind": "双头·炎毒", "base": 1}},
+    "紫晶翼狮王": {"name": "紫晶翼狮王", "title": "六阶魔兽", "elite": True,
+                   "source": "第一百三十一章 神秘女人与六阶魔兽",
+                   "intro": "虚空为之一颤，紫晶覆身的巨兽踏空而来——原著无本人台词，唯有威压。",
+                   "quotes": (),
+                   "skill": {"name": "紫晶幻芒", "chance": 0.18, "effect": "drain", "mult": 0.10},
+                   "mech": {"t": "reflect", "v": 0.25, "d": 2, "p": 0.30, "kind": "紫晶·反震"}},
+    "黑焰紫云雕": {"name": "黑焰紫云雕", "title": "魔兽山脉·高阶魔兽", "elite": True,
+                   "source": "原著世界观（游戏命名，语料未见同名魔兽）",
+                   "intro": "黑焰自云层压落，雕影遮天——无本人台词，只用原文式威压旁白。",
+                   "quotes": (),
+                   "skill": {"name": "黑焰俯冲", "chance": 0.18, "effect": "burst", "mult": 1.6},
+                   "mech": {"t": "dot", "v": 0.14, "d": 2, "p": 0.26,
+                            "kind": "黑焰·灼羽", "base": 1}},
+    "天山雪蟒": {"name": "天山雪蟒", "title": "天山·寒蟒（游戏命名）", "elite": True,
+                 "source": "原著世界观（游戏命名，非原著角色）",
+                 "intro": "寒气自地缝倒卷，鳞片摩擦声里毒雾漫开——游戏原创怪，不冒充原著台词。",
+                 "quotes": (),
+                 "skill": {"name": "寒毒缠身", "chance": 0.19, "effect": "poison", "mult": 0.10},
+                 "mech": {"t": "debuff_atk", "v": 0.18, "d": 2, "p": 0.26, "kind": "寒毒·僵脉"}},
+    "翼黑蛇皇": {"name": "翼黑蛇皇", "title": "蛇人族·翼黑蛇皇", "elite": True,
+                 "source": "原著·小医仙异兽（语料第4517行作「翼黑蛇皇」，无「八翼」）",
+                 "intro": "翼黑蛇皇振翼而来，毒瘴自鳞下漫开——原著无其台词，不代编。",
+                 "quotes": (),
+                 "skill": {"name": "毒瘴锁空", "chance": 0.21, "effect": "poison", "mult": 0.12},
+                 "mech": {"t": "dot", "v": 0.16, "d": 3, "p": 0.30,
+                          "kind": "黑蛇·毒瘴", "base": 1}},
+    "云岚山守山兽": {"name": "云岚山守山兽", "title": "云岚宗·守山兽（游戏命名）",
+                     "elite": True, "source": "原著世界观（游戏命名，非原著角色）",
+                     "intro": "山门石兽睁眼，云岚剑气扑面——游戏原创怪，不冒充原著台词。",
+                     "quotes": (),
+                     "skill": {"name": "撼山撞", "chance": 0.18, "effect": "burst", "mult": 1.7},
+                     "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.22, "kind": "撼山·震荡"}},
+    "天毒蝎龙兽": {"name": "天毒蝎龙兽", "title": "蝎龙族", "elite": True,
+                   "source": "原著·天墓篇（语料第4171行）",
+                   "intro": "「混蛋，本王定要将你们碎尸万段！」庞大身躯砸落，大地如地震般开裂。",
+                   "quotes": ("混蛋，本王定要将你们碎尸万段！",
+                              "我摩蝎在此以蝎龙族血脉发誓，你定会在我蝎龙族的追杀下，逃亡一生！"),
+                   "skill": {"name": "蝎龙剧毒", "chance": 0.22, "effect": "poison", "mult": 0.13},
+                   "mech": {"t": "dot", "v": 0.18, "d": 3, "p": 0.34,
+                            "kind": "蝎龙·腐蚀血雾", "base": 1}},
+    # ---- 野外人族反派 ----
+    "狼头佣兵穆蛇": dict(_CHAR_MUSHE, name="狼头佣兵穆蛇"),
+    "血战佣兵": {"name": "血战佣兵", "title": "雇佣兵（游戏命名）",
+                 "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+                 "skill": {"name": "血战狂砍", "chance": 0.17, "effect": "burst", "mult": 1.5},
+                 "mech": None},
+    "黑角域散修": {"name": "黑角域散修", "title": "黑角域·散修（游戏命名）",
+                   "source": "原著世界观（游戏命名）", "intro": "", "quotes": (),
+                   "skill": {"name": "阴邪夺气", "chance": 0.17, "effect": "drain", "mult": 0.09},
+                   "mech": None},
+    "黑盟死士": {"name": "黑盟死士", "title": "黑盟·死士（游戏命名）", "elite": True,
+                 "source": "原著世界观（游戏命名，非原著角色）",
+                 "intro": "黑袍人吐血厉喝，反手欺身——「黑盟不会放过你们的！」见于原著黑盟篇。",
+                 "quotes": ("黑盟不会放过你们的！",),
+                 "skill": {"name": "死士搏命", "chance": 0.20, "effect": "burst", "mult": 1.7},
+                 "mech": {"t": "reflect", "v": 0.30, "d": 2, "p": 0.33, "kind": "搏命·反噬"}},
+    "魂殿鹜护法": {"name": "魂殿鹜护法", "title": "魂殿护法", "elite": True,
+                   "source": "第六百十四章 鹜护法 / 第六百九十二章",
+                   "intro": "「桀桀，我魂殿可有的是手段收拾你。」黑雾无声漫过，笑声从四面响起。",
+                   "quotes": ("桀桀，我魂殿可有的是手段收拾你",
+                              "本护法便等着看一场好戏吧",
+                              "药尘，难道你以为以我现在的实力，你还能是我对手不成？"),
+                   "skill": {"name": "摄魂术", "chance": 0.19, "effect": "drain", "mult": 0.10},
+                   "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.28, "kind": "摄魂·禁技"}},
+    "药皇韩枫": dict(_CHAR_HANFENG, name="药皇韩枫"),
+    "地魔老鬼": dict(_CHAR_DIMO),
+    "魂殿摘星老鬼": dict(_CHAR_ZHAIXING),
+    "魂殿执事": {"name": "魂殿执事", "title": "魂殿·执事（游戏命名）", "elite": True,
+                 "source": "原著世界观（游戏命名，非原著角色）",
+                 "intro": "黑袍执事合上锁魂册，指尖黑雾凝成锁链——游戏原创怪，不代编台词。",
+                 "quotes": (),
+                 "skill": {"name": "锁魂链", "chance": 0.20, "effect": "drain", "mult": 0.10},
+                 "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.26, "kind": "魂殿·锁技"}},
+    "魂灭生": {"name": "魂灭生", "title": "魂殿殿主", "elite": True,
+               "source": "第一千五百一十二章 萧炎vs魂殿殿主",
+               "intro": "「成大事，若是在乎这些，终究是小家子气。」殿主端坐黑雾之上。",
+               "quotes": ("三局两平，有些出乎本殿的意料", "成大事，若是在乎这些，终究是小家子气"),
+               "skill": {"name": "灭世魂掌", "chance": 0.25, "effect": "burst", "mult": 1.8},
+               "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.32, "kind": "造化掌·镇身"}},
+    # ---- 爬塔 BOSS 层（tower_data.BOSS_NAMES 十个名字全覆盖）----
+    "穆蛇": dict(_CHAR_MUSHE),
+    "摘星老鬼": dict(_CHAR_ZHAIXING),
+    "韩枫": dict(_CHAR_HANFENG),
+    "血刀圣者": {"name": "血刀圣者", "title": "血刀圣者（原著称号）", "elite": True,
+                 "source": "原著·天墓/魂殿篇（语料逐字核对：血刀圣者）",
+                 "intro": "金甲人影负手而立，血气自刀锋倒卷——原著未载其本人台词，不代编。",
+                 "quotes": (),
+                 "skill": {"name": "血刀", "chance": 0.26, "effect": "burst", "mult": 1.7},
+                 "mech": {"t": "debuff_heal", "v": 0.30, "d": 2, "p": 0.30, "kind": "血刀·封脉"}},
+    "魂魔老人": {"name": "魂魔老人", "title": "魂殿·魂魔老人", "elite": True,
+                 "source": "原著·魂殿篇（语料逐字核对：魂魔老人）",
+                 "intro": "枯木般的老人睁开灰眼，魂殿黑雾自袖口溢出——无本人台词，不代编。",
+                 "quotes": (),
+                 "skill": {"name": "魂魔手", "chance": 0.26, "effect": "drain", "mult": 0.11},
+                 "mech": {"t": "silence", "v": 1, "d": 2, "p": 0.29, "kind": "魂魔·禁技"}},
+    "狮天": {"name": "狮天", "title": "狮天（原著人物）", "elite": True,
+             "source": "原著·天墓篇（语料逐字核对：狮天）",
+             "intro": "金发男子踏碎虚空而来，旁人喝止他莫要坏事——原著无其本人可核对台词。",
+             "quotes": (),
+             "skill": {"name": "狮王裂空", "chance": 0.27, "effect": "burst", "mult": 1.7},
+             "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.27, "kind": "狮天·裂空"}},
+    "天蛇老怪": {"name": "天蛇老怪", "title": "天蛇府·天蛇", "elite": True,
+                 "source": "原著·天蛇府篇（语料逐字核对：天蛇老怪）",
+                 "intro": "蛇杖点地，老怪阴冷一笑——语料中那句嘲讽是萧炎所说，不代编为他的台词。",
+                 "quotes": (),
+                 "skill": {"name": "蛇杖毒瘴", "chance": 0.26, "effect": "poison", "mult": 0.12},
+                 "mech": {"t": "dot", "v": 0.16, "d": 3, "p": 0.30,
+                          "kind": "天蛇·毒瘴", "base": 1}},
+    "蝎山": {"name": "蝎山", "title": "万蝎门·蝎山", "elite": True,
+             "source": "原著·毒宗篇（语料逐字核对：蝎山）",
+             "intro": "万蝎门主一身低调装束，出手却带腐蚀毒雾——无本人台词，不代编。",
+             "quotes": (),
+             "skill": {"name": "万蝎毒雾", "chance": 0.26, "effect": "poison", "mult": 0.12},
+             "mech": {"t": "debuff_atk", "v": 0.20, "d": 2, "p": 0.30, "kind": "蝎山·蚀脉"}},
+    "范痨": {"name": "范痨", "title": "范痨（原著人物）", "elite": True,
+             "source": "第三百九十九章 大路激战",
+             "intro": "阴森喝声在道路上空徘徊，血气随之炸开——原文只有一声「杀！」，不凑台词。",
+             "quotes": (),
+             "skill": {"name": "阴森血掌", "chance": 0.26, "effect": "drain", "mult": 0.11},
+             "mech": {"t": "reflect", "v": 0.22, "d": 2, "p": 0.28, "kind": "范痨·血煞"}},
+    # ---- 周本（游戏原创意象，明确标注，不冒充原著角色）----
+    "天焚塔灵": {"name": "天焚塔灵", "title": "天焚炼气塔·守塔灵（游戏原创）", "elite": True,
+                 "source": "游戏原创（原著无「塔灵」角色）",
+                 "intro": "塔底岩浆翻涌，异火凝成的守塔之灵睁开双目——游戏原创意象，非原著角色。",
+                 "quotes": (),
+                 "skill": {"name": "焚塔火域", "chance": 0.28, "effect": "burst", "mult": 1.8},
+                 "mech": {"t": "dot", "v": 0.18, "d": 3, "p": 0.32,
+                          "kind": "塔灵·火域", "base": 1}},
+    "塔卫统领": {"name": "塔卫统领", "title": "天焚塔·塔卫统领（游戏原创）", "elite": True,
+                 "source": "游戏原创（原著无「塔卫」角色）",
+                 "intro": "火晶甲叶相撞，塔卫统领横戟挡在塔阶尽头——游戏原创怪，不冒充原著台词。",
+                 "quotes": (),
+                 "skill": {"name": "火晶斩", "chance": 0.24, "effect": "burst", "mult": 1.6},
+                 "mech": {"t": "stun", "v": 1, "d": 2, "p": 0.24, "kind": "塔卫·镇门"}},
+    "塔卫": {"name": "塔卫", "title": "天焚塔·塔卫（游戏原创）",
+             "source": "游戏原创（原著无「塔卫」角色）", "intro": "", "quotes": (),
+             "skill": {"name": "火晶刺", "chance": 0.20, "effect": "burst", "mult": 1.5},
+             "mech": None},
+}
+#: 塔的精英层名字形如「精英·穆蛇」，取角色包时剥掉前缀即可复用同一只怪的设定。
+def monster_character(name: str) -> dict | None:
+    raw = str(name or "")
+    ch = MONSTER_CHARACTERS.get(raw)
+    if ch is None and raw.startswith("精英·"):
+        ch = MONSTER_CHARACTERS.get(raw[3:])
+    return ch
 
 # ---------------------------------------------------------------------------
 # 后期天焚炼气塔 · 聚火壶修炼（2026-11-19 大改）
@@ -1414,6 +1729,10 @@ START_LUCK = 1              # 实机第 5 格「机缘 1」
 START_STONES = 2            # 新手礼：够强化一次（原版初始没有，实机提示炎星石不足）
 STONE_PRICE = 600           # 宝库卖炎星石
 START_HP_POTION = 5         # 实机包裹：回灵丹 ×5
+#: 宝库单次购买上限（2026-11-20 用户「买东西别限制 99」）。
+#: 真正的约束是金币（core.shop_buy 里 total > gold 直接挡），这个数只防
+#: 「买 999999999999」这类手滑把显示/存档撑爆；9999 已远超正常采买量。
+SHOP_BUY_MAX = 9999
 
 #: 商店里除药材外的固定商品
 SHOP_EXTRA = [
