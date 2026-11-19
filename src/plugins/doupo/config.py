@@ -148,6 +148,12 @@ def realm_index(lv: int) -> int:
     return ri
 
 
+def realm_lv(realm_idx: int) -> int:
+    """境界下标 -> 该境界起始等级（realm_index 的逆）。斗尊(8)=73、斗圣(11)=94。"""
+    ri = max(0, min(len(REALM_TABLE) - 1, int(realm_idx)))
+    return 1 + sum(t[1] for t in REALM_TABLE[:ri])
+
+
 def realm_name(lv: int) -> str:
     """等级 -> 境界名（原著 13 阶）。"""
     return REALM_TABLE[realm_index(lv)][0]
@@ -381,21 +387,102 @@ FLAMES = [
 ]
 FLAME_NAMES = [f["name"] for f in FLAMES]
 
-#: 宗门「本宗所藏」异火（2026-11-18 A 方案：入道/转宗真发放，1 级）。
-#: ⚠️ 只登记原著有据、且落在可养四火内的三处；新增文案统一写「本宗异火」，
-#:    不宣称门派私有（旧卡栏目名「本宗传承」沿用未改，待统一）。原著性质：
-#:   * 蛇人族：青莲地心火被美杜莎女王先取走，萧炎后自神殿夺回（第200/209章）
-#:   * 迦南学院：陨落心炎封印在天焚炼气塔下，原文「非门派私有」（第463章）
-#:   * 丹塔：三千焱炎火封于星域，原文「到现在却还是无主之物」（第154章）
-#: 焚炎谷的传承之火是九龙雷罡火(12)，不在可养表内，暂不发放（留给 B 方案）。
+#: 入道「 starter 异火」（2026-11-19 三层投放重构）。
+#: ⚠️ 旧口径（2026-11-18 A 方案）按宗门发青莲/陨落/三千三朵超标火：青莲=A线隐藏彩蛋、
+#:    陨落/三千=S线大后期，全部收回，不再入道白送。但傀儡「异火闸门」/养火玩法要求
+#:    新号至少有一朵火，否则整体瘫痪。故改为**全宗门统一发一朵 B 线数值火**（无招式特效、
+#:    只给炼药/傀儡加成），S/A 火一律走各自的境界/剧情/隐藏支线解锁。
+#: 原著性质：这朵 starter 火只作数值载体，不宣称任何门派传承（对应旧卡「本宗传承」文案待统一）。
+STARTER_FLAME = "火云水炎"
 FACTION_FLAME_GRANT = {
-    "sherenzu": "青莲地心火",
-    "jianan": "陨落心炎",
-    "danta": "三千焱炎火",
+    # 入道统一发 STARTER_FLAME（见 core.grant_starter_flame），此处保留空映射以兼容
+    # 既有「本宗所藏」读取点；任何宗门都不再白送 S/A 超标火。
 }
 FLAME_BY_NAME = {f["name"]: f for f in FLAMES}
 #: 帝炎不靠喂养，靠斗帝之路解锁（原版是内购）
 FLAME_DIYAN = "帝炎"
+
+# ---------------------------------------------------------------------------
+# 异火三层投放（2026-11-19 设计文档 docs/异火投放分层设计_2026-11-19.md）
+# ---------------------------------------------------------------------------
+# 23 朵 = S 大后期/剧情锁 5 + A 隐藏支线彩蛋 7 + B 数值填充 11。
+# 「解锁」= 玩家收服（p["flames"][name] > 0），单一真值；S 的境界/剧情门槛、A 的支线
+# 由发放入口校验，不另建解锁字段（最高声明：不塞 JSON、不建重复真值源）。
+FLAME_TIER = {
+    "帝炎": "S", "虚无吞炎": "S", "净莲妖火": "S", "三千焱炎火": "S", "陨落心炎": "S",
+    "金帝焚天炎": "A", "生灵之焱": "A", "九幽金祖火": "A", "火山石焰": "A",
+    "骨灵冷火": "A", "九龙雷罡火": "A", "青莲地心火": "A",
+    "九幽风炎": "B", "海心焰": "B", "火云水炎": "B", "风怒龙炎": "B",
+    "幽冥毒火": "B", "阴阳双炎": "B", "万兽灵火": "B", "荒破灭焱": "B",
+    "红莲业火": "B", "龟灵地火": "B", "玄黄炎": "B",
+}
+
+#: S 线解锁门槛：境界索引（realm_index）下限 / 主线进度 main_idx 下限。
+#: 两者取「且」——既要熬到境界，也要推到对应剧情。数值为 [调参]，原著只给榜位。
+#: 境界索引来自 REALM_TABLE：斗宗=7(64-72)、斗尊=8(73-81)、斗圣=11(94-102)、斗帝=103。
+S_FLAME_GATE = {
+    "虚无吞炎":   {"realm": 11, "main": 4},   # 斗圣 + 魂族主线
+    "净莲妖火":   {"realm": 11, "main": 3},   # 斗圣 + 天墓/妖火空间
+    "三千焱炎火": {"realm": 8,  "main": 3},   # 斗尊 + 丹塔星域
+    "陨落心炎":   {"realm": 8,  "main": 2},   # 斗尊 + 天焚炼气塔
+    # 帝炎走 p["diyan"] 斗帝成就位（tiandi_rate），不在此表。
+}
+
+#: A 线隐藏支线：完成该支线时**静默**收服异火（任务 desc/reward 不写火名）。
+#: key=支线名，value=火名。支线本体在 SIDE_TASK_POOL，disguise=True 表示隐藏奖励。
+A_FLAME_SIDE = {
+    "神农谷的灵田":   "生灵之焱",
+    "药老的旧友":     "骨灵冷火",
+    "焚炎谷的试炼":   "九龙雷罡火",
+    "古族来客":       "金帝焚天炎",
+    "沙漠深处的蛇影": "青莲地心火",
+    "炎族的窖藏":     "九幽金祖火",
+    "星域的余烬":     "火山石焰",
+}
+
+# ---------------------------------------------------------------------------
+# B 线数值填充异火（11 朵）：可持有 / 可喂养 / 只给数值，无主动技。
+# ---------------------------------------------------------------------------
+# * kind = alchemy → 炼药成功率加成（每级 +value，封顶 CRAFT_RATE_CAP）
+# * kind = puppet  → 傀儡伤害/防御加成（每级 +value）
+# * need = 每级药渣（与可养五火同口径 need×N）
+# * novel = 原著依据；正文 0 命中的三朵显式标 game_only，不编造引用（原著红线）。
+BONUS_FLAMES = [
+    {"name": "九幽风炎", "icon": "黑", "rank": 10, "kind": "alchemy", "value": 0.03,
+     "need": 60, "desc": "成形于极阴深渊风罡最烈处，可凝品质最好的药鼎；炼药成功率每级 +3%。"
+                         "（第一千三百三十章「开辟晶壁」）"},
+    {"name": "海心焰", "icon": "蓝", "rank": 15, "kind": "alchemy", "value": 0.02,
+     "need": 60, "desc": "深蓝水相，升腾如海水涟漪；炼药成功率每级 +2%。"
+                         "（第一千一百二十七章「不速之客」）"},
+    {"name": "火云水炎", "icon": "紫", "rank": 16, "kind": "alchemy", "value": 0.02,
+     "need": 60, "desc": "炎族火耀长老所掌；炼药成功率每级 +2%。"
+                         "（第一千四百七十四章「荒破灭焱」）"},
+    {"name": "风怒龙炎", "icon": "黄", "rank": 18, "kind": "alchemy", "value": 0.03,
+     "need": 60, "desc": "生于古老沙漠龙卷风风眼，风火相合；炼药成功率每级 +3%。【原著正文未载，游戏设定】"},
+    {"name": "幽冥毒火", "icon": "绿", "rank": 20, "kind": "alchemy", "value": 0.04,
+     "need": 60, "desc": "幽冥毒泽瘴气所养，剧毒；毒系炼药成功率每级 +4%。【原著正文未载，游戏设定】"},
+    {"name": "阴阳双炎", "icon": "白", "rank": 21, "kind": "alchemy", "value": 0.03,
+     "need": 60, "desc": "黑白双色，兼具生灭之力；炼药成功率每级 +3%。【原著正文未载，游戏设定】"},
+    {"name": "万兽灵火", "icon": "赤", "rank": 22, "kind": "alchemy", "value": 0.02,
+     "need": 60, "desc": "万兽之魂血脉凝结，常现万兽模样；炼药成功率每级 +2%。"
+                         "（第一千六百章「异火广场」）"},
+    {"name": "荒破灭焱", "icon": "墨", "rank": 6, "kind": "puppet", "value": 0.04,
+     "need": 60, "desc": "霸道之火，炎族火炫所降；傀儡攻击每级 +4%。"
+                         "（第一千四百一十七章「天罗封魔阵」）"},
+    {"name": "红莲业火", "icon": "红", "rank": 8, "kind": "puppet", "value": 0.03,
+     "need": 60, "desc": "深红妖艳、火苗化莲，压制低位异火；傀儡攻击每级 +3%。"
+                         "（第一千三百三十章「开辟晶壁」）"},
+    {"name": "龟灵地火", "icon": "褐", "rank": 13, "kind": "puppet", "value": 0.04,
+     "need": 60, "desc": "形如巨龟的褐色异火；傀儡防御每级 +4%。"
+                         "（第一千四百七十章「空间破裂」）"},
+    {"name": "玄黄炎", "icon": "深黄", "rank": 23, "kind": "puppet", "value": 0.02,
+     "need": 60, "desc": "异火榜末位、深黄之火；傀儡攻防每级 +2%（入门档）。"
+                         "（第一千六百章「异火广场」）"},
+]
+BONUS_FLAME_NAMES = [f["name"] for f in BONUS_FLAMES]
+BONUS_FLAME_BY_NAME = {f["name"]: f for f in BONUS_FLAMES}
+#: 可持有/可喂养的全部异火名（可养五火 + B 线十一火；帝炎走 diyan 位也在五火内）
+OWNED_FLAME_NAMES = FLAME_NAMES + BONUS_FLAME_NAMES
 
 # ---------------------------------------------------------------------------
 # 药材（宝库·随身商店）  [调参，命名取自原著]
@@ -627,8 +714,11 @@ IMPL_PROMISE_WORDS = (
 )
 
 
-def craft_rate_for(alch_idx: int, grade: str) -> tuple[float, int]:
+def craft_rate_for(alch_idx: int, grade: str, flame_bonus: float = 0.0) -> tuple[float, int]:
     """某炼药师炼某品阶丹药的真实成功率与品阶差。
+
+    ``flame_bonus``（2026-11-19）：B 线炼药异火的合成加成（小数），**只在最后加一次**，
+    全部支线共用 CRAFT_RATE_CAP 封顶；默认 0 → 旧调用逐字节不变。
 
     返回 ``(rate, diff)``：``diff`` = 丹药所需品阶 − 炼药师品阶。
       diff <  0  高品阶炼低阶：每低 1 档 +LOW_GRADE_BONUS，封顶 CRAFT_RATE_CAP
@@ -637,14 +727,14 @@ def craft_rate_for(alch_idx: int, grade: str) -> tuple[float, int]:
       diff == 1  勉强越阶：rate = 基础 ×0.35
       diff >= 2  几无可能：rate = 基础 ×0.05
     """
-    base = craft_rate(alch_idx)
+    base = craft_rate(alch_idx) + max(0.0, float(flame_bonus))
     diff = alch_grade_idx(grade) - int(alch_idx)
     if diff < 0:
         return min(CRAFT_RATE_CAP, base + (-diff) * LOW_GRADE_BONUS), diff
     if diff == 0:
-        return base, diff
+        return min(CRAFT_RATE_CAP, base), diff
     penalty = OVERREACH_PENALTY.get(1 if diff == 1 else 2, 0.05)
-    return min(base, base * penalty), diff
+    return min(CRAFT_RATE_CAP, base * penalty), diff
 
 
 #: 中文数字（成数表述唯一表，用户 2026-11-18「全部纯中文，不用阿拉伯数字」）
@@ -902,6 +992,22 @@ SIDE_TASK_POOL = [
      "reward": {"gold": 600, "exp": 1200, "luck": 12}},
     {"name": "丹房杂役", "desc": "炼制 1 次丹药", "kind": "craft", "target": 1,
      "reward": {"gold": 500, "exp": 1000, "luck": 10}},
+    # ---- A 线隐藏彩蛋支线（2026-11-19）：desc/reward 不写异火名，完成后静默收服 ----
+    # 惊喜感：接任务时只看到普通委托；提交时才在回包里揭晓「意外引出一缕奇火」。
+    {"name": "神农谷的灵田", "desc": "替神农老人照看 5 株灵药", "kind": "herb", "target": 5,
+     "reward": {"gold": 800, "exp": 2000, "luck": 20}},
+    {"name": "药老的旧友", "desc": "炼制 3 份丹药送去旧友处", "kind": "craft", "target": 3,
+     "reward": {"gold": 900, "exp": 2200, "luck": 20}},
+    {"name": "焚炎谷的试炼", "desc": "斩杀 5 只妖兽", "kind": "kill", "target": 5,
+     "reward": {"gold": 1000, "exp": 2500, "luck": 25}},
+    {"name": "古族来客", "desc": "采集 6 株七叶花", "kind": "herb", "target": 6,
+     "reward": {"gold": 1000, "exp": 2500, "luck": 25}},
+    {"name": "沙漠深处的蛇影", "desc": "斩杀 4 只妖兽", "kind": "kill", "target": 4,
+     "reward": {"gold": 900, "exp": 2200, "luck": 22}},
+    {"name": "炎族的窖藏", "desc": "强化玄重尺 2 次", "kind": "weapon", "target": 2,
+     "reward": {"gold": 1100, "exp": 2600, "luck": 25}},
+    {"name": "星域的余烬", "desc": "炼制 4 份丹药", "kind": "craft", "target": 4,
+     "reward": {"gold": 1200, "exp": 2800, "luck": 28}},
 ]
 
 # ---------------------------------------------------------------------------

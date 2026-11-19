@@ -16,6 +16,7 @@ import re
 import time
 
 from . import config as cfg
+from . import flame_bonus as _flame_bonus
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
@@ -113,7 +114,8 @@ def create_player(qq, name, group) -> dict:
         "weapons": ["玄重尺"], "equipped_weapon": "玄重尺", "tower_best": 0,
         "hp": 0, "mp": 0,
         "skills": {},
-        "flames": {n: 0 for n in cfg.FLAME_NAMES},
+        # 三层投放：可养五火 + B 线十一火都占位（0=未收服）。单一真值，不另建解锁字段。
+        "flames": {n: 0 for n in getattr(cfg, "OWNED_FLAME_NAMES", cfg.FLAME_NAMES)},
         "bag": {"回灵丹": cfg.START_HP_POTION, "炎星石": cfg.START_STONES},
         "alch": cfg.ALCH_START, "alch_exp": 0,
         "bonus": {},
@@ -981,7 +983,7 @@ def auto_pill_candidates(p, effect: str, locked: set[str] | None = None) -> list
 
 def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
           puppet=None, formation_n=0, locked=None, auto_pill=True,
-          pill_budget=None) -> dict:
+          pill_budget=None, puppet_flame_mult=1.0) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
 
     ``puppet`` / ``formation_n``（2026-11-18 傀儡）：出战傀儡真实列 dict 与同场
@@ -1151,6 +1153,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         if puppet and m_hp > 0:
             from . import puppet_core as pc  # 延迟导入避免与 core 环
             p_atk = pc.puppet_attack(puppet)
+            # B 线傀儡异火加成：与怪血反解用的 puppet_expected_damage(flame_mult) 同源。
+            p_atk = p_atk * max(1.0, float(puppet_flame_mult))
             p_dmg = max(1, int(p_atk * mitigation(m_def)))
             p_dmg = min(p_dmg, m_hp)
             m_hp -= p_dmg
@@ -2295,7 +2299,9 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
 
     # 2026-11-18 原著口径：成功率随「炼药师品阶 vs 丹药品阶」变化，不再所有丹药一个值。
     # diff>0 越阶衰减（第495章四品勉强炼五品「成功率太小」），diff<=0 够格用基础率。
-    rate, diff = cfg.craft_rate_for(p.get("alch", 0), rec.get("grade", ""))
+    rate, diff = cfg.craft_rate_for(
+        p.get("alch", 0), rec.get("grade", ""),
+        flame_bonus=_flame_bonus.alchemy_rate_bonus(p))
     if rng() < rate:
         add_item(p, name, 1)
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
@@ -2599,17 +2605,24 @@ def skill_up(p, name) -> dict:
 # 异火：本宗所藏发放（2026-11-18 A 方案）
 # ---------------------------------------------------------------------------
 def faction_flame(fid) -> str:
-    """本宗所藏异火名（只认 config 里原著有据的三处，无则空串）。"""
-    return str(cfg.FACTION_FLAME_GRANT.get(str(fid or "")) or "")
+    """入道 starter 异火名（三层投放后全宗门统一一朵 B 线数值火）。
+
+    旧口径按宗门发青莲/陨落/三千三朵超标火，已收回：青莲=A线隐藏彩蛋、
+    陨落/三千=S线大后期。这里返回唯一的 starter（config.STARTER_FLAME），
+    供卡面/文案的「本宗异火」提示位沿用（文案待统一，见 AGENTS.md）。
+    """
+    return str(getattr(cfg, "STARTER_FLAME", "") or "")
 
 
 def grant_faction_flame(p) -> str:
-    """入道 / 转宗时发放本宗所藏异火（1 级），返回火名或空串。
+    """入道 / 转宗时发放 starter 异火（1 级），返回火名或空串。
 
     只在玩家**一朵异火都没有**时发放：
       * 老档（全 0）首次入道/转宗即补发，不需要额外标记字段；
-      * 已有任意异火就不再发 → 天然防「反复转宗刷满三朵」；
+      * 已有任意异火就不再发 → 天然防「反复转宗刷」；
       * 异火只升不降，故一次生效，不会重复触发。
+
+    三层投放（2026-11-19）：发的是 B 线数值火（无招式特效），S/A 火走各自解锁路径。
     """
     if not isinstance(p, dict):
         return ""
@@ -2623,11 +2636,47 @@ def grant_faction_flame(p) -> str:
     return name
 
 
+def s_flame_gate(p, name: str) -> tuple[bool, str]:
+    """S 线异火解锁判定：境界索引 + 主线进度双门槛。
+
+    返回 ``(可解锁, 未满足原因)``。帝炎不在此列（走 diyan 斗帝成就）。
+    """
+    gate = (getattr(cfg, "S_FLAME_GATE", {}) or {}).get(name)
+    if not gate:
+        return True, ""
+    if int(p.get("lv", 1)) < cfg.realm_lv(int(gate["realm"])):
+        return False, "境界未至（需斗尊以上）"
+    if int(p.get("main_idx", 0)) < int(gate["main"]):
+        return False, "主线剧情未推进到相应章节"
+    return True, ""
+
+
+def unlock_flame(p, name: str) -> dict:
+    """统一收服入口：S 线校验门槛，A 线只认支线回调，B 线可直接收服。
+
+    返回 ``{"ok": bool, "name":..., "reason":...}``。
+    单一真值仍是 ``p["flames"][name] > 0``，不新增解锁字段。
+    """
+    if name not in getattr(cfg, "FLAME_TIER", {}):
+        return {"ok": False, "reason": "noflame", "name": name}
+    fl = p.setdefault("flames", {})
+    if int(fl.get(name, 0)) > 0:
+        return {"ok": False, "reason": "owned", "name": name}
+    tier = cfg.FLAME_TIER[name]
+    if tier == "S":
+        ok, why = s_flame_gate(p, name)
+        if not ok:
+            return {"ok": False, "reason": "locked", "name": name, "why": why}
+    fl[name] = 1
+    return {"ok": True, "name": name, "tier": tier}
+
+
 # ---------------------------------------------------------------------------
 # 异火喂养
 # ---------------------------------------------------------------------------
 def feed_flame(p, name, amount=None) -> dict:
-    fl = cfg.FLAME_BY_NAME.get(name)
+    # B 线十一火也可喂养（数值火）：与可养五火合并查表，口径同源。
+    fl = cfg.FLAME_BY_NAME.get(name) or getattr(cfg, "BONUS_FLAME_BY_NAME", {}).get(name)
     if not fl:
         return {"ok": False, "reason": "noflame"}
     if name == cfg.FLAME_DIYAN:
@@ -2753,7 +2802,14 @@ def task_submit(p) -> dict:
     p["exp"] = int(p.get("exp", 0)) + int(rw.get("exp", 0))
     p["luck"] = min(9999, int(p.get("luck", 0)) + int(rw.get("luck", 0)))
     p["task"] = None
-    return {"ok": True, "task": t, "reward": rw}
+    # A 线隐藏彩蛋：支线 desc/reward 不写火名，完成时静默收服，回包才揭晓（惊喜）。
+    surprise = ""
+    hidden = (getattr(cfg, "A_FLAME_SIDE", {}) or {}).get(str(t.get("name")), "")
+    if hidden:
+        res = unlock_flame(p, hidden)
+        if res.get("ok"):
+            surprise = hidden
+    return {"ok": True, "task": t, "reward": rw, "surprise_flame": surprise}
 
 
 def main_progress(p, kind, n=1) -> None:

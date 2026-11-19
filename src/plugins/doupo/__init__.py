@@ -625,6 +625,23 @@ async def _(event: Event):
     await finish_text(feed, event, await commands.cmd_feed(store, str(event.user_id), arg))
 
 
+# 2026-11-19 三层投放补齐：玩家主动收服入口（S 线门槛 / B 线直接 / A 线拒绝）。
+# 正则刻意用「收服异火|收服」且不吃「傀儡 收服」（后者以「傀儡」起头，走傀儡 matcher）。
+claim_flame = on_regex(_pat(r"(?:收服异火|收服)") + r"\s*(.*)", priority=PRI, block=True,
+                       rule=_mode_is("doupo"))
+
+
+@claim_flame.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, claim_flame)
+    txt = _plain(event)
+    kw = "收服异火" if "收服异火" in txt else "收服"
+    arg = _arg(event, kw)
+    await finish_text(claim_flame, event,
+                      await commands.cmd_claim_flame(store, str(event.user_id), arg))
+
+
 # ---------------------------------------------------------------------------
 # 宝库 / 炼药 / 背包
 # ---------------------------------------------------------------------------
@@ -1096,6 +1113,8 @@ register_keywords("doupo", [
     "布阵",
     "配置斗技",
     "异火",
+    "收服",
+    "收服异火",
     "养火",
     "喂火",
     "宝库",

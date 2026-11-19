@@ -295,6 +295,7 @@ MENU_GROUPS = (
         ("宗门", "看本门与可转宗门（进阶池 lv40 / 隐世池 lv90）"),
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
         ("异火", "看 5 种异火的主动技 / 被动、原著出处与喂养进度"),
+        ("收服 火云水炎", "主动收服异火：数值火可直接收，大后期火须境界+主线达标；隐藏彩蛋火不在此列"),
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "集齐传承+三主材+金属，炼一具人级铜傀儡（须先过五道资格）"),
@@ -441,8 +442,8 @@ async def cmd_enter(store, qq, name, gid) -> str:
         await store.enable_group(str(gid))
     first = "、".join((p.get("learned") or [])[:1]) or "本宗基础技"
     owned = [n for n, v in (p.get("flames") or {}).items() if int(v or 0) > 0]
-    flame_line = ("本宗异火【%s】已认你为主——「异火」可看，「养火」可养。\n" % owned[0]) \
-        if owned else ""
+    flame_line = ("随身数值异火【%s】已认你为主（入道赐下）——「异火」可看，「养火」可养。\n"
+                  % owned[0]) if owned else ""
     return (
         "🔥 你自云岚山下睁眼，斗气绕体三周——\n"
         f"【{cfg.full_realm(1)}】\n"
@@ -853,7 +854,7 @@ async def cmd_faction(store, qq, args) -> str:
                         + "、".join(res.get("options") or ["（无）"]))
             return "转宗失败，请检查宗门名。"
         await store.put_player(p)
-        flame_line = ("\n　本宗异火【%s】已认你为主——「养火」可养。" % res["flame"]) \
+        flame_line = ("\n　随身数值异火【%s】（入道赐下）——「养火」可养。" % res["flame"]) \
             if res.get("flame") else ""
         return (f"🏯 已转投【{res['name']}】（原【{res['old']}】），耗 {res['cost']:,} 金币。\n"
                 f"　四槽已按新门重配：" + "、".join(res["loadout"])
@@ -1084,6 +1085,27 @@ def no_tradition_flame_msg(p: dict) -> str:
     return f"🔥 {fname}本宗无传承异火，暂无异火可展示或养成。"
 
 
+def _unflame_hint(name: str) -> str:
+    """未收服异火的获取方向，单一真值取自 config 的分线表（不另建真值源）。
+
+    三层投放后不再有「本宗异火入道即得」的通用话术：starter 是全宗门统一的
+    B 线数值火，S 走境界+主线门槛，A 藏隐藏支线（不明示），其余走常规机缘。
+    """
+    tier = (getattr(cfg, "FLAME_TIER", {}) or {}).get(name, "")
+    if name == cfg.FLAME_DIYAN:
+        return "帝炎须踏斗帝之路，诸火自燃归一身。"
+    if tier == "S":
+        gate = (getattr(cfg, "S_FLAME_GATE", {}) or {}).get(name) or {}
+        realm_idx = int(gate.get("realm", 0))
+        realm_txt = cfg.full_realm(cfg.realm_lv(realm_idx)) if realm_idx else "大后期"
+        return "此火为大后期之火，须修至%s、主线推进到位方可收服。" % realm_txt
+    if tier == "A":
+        return "此火隐于某段机缘，了结相应之事自会现身，事前不会言明。"
+    if name == getattr(cfg, "STARTER_FLAME", ""):
+        return "入道或转宗时会随身一朵数值异火，可养。"
+    return "游历机缘或弃火可得，先收服再喂养。"
+
+
 def flame_usage_hint(p: dict) -> str:
     """异火卡/文本底部的「用法」一行：必须指向玩家**真能养**的那一朵。
 
@@ -1095,7 +1117,7 @@ def flame_usage_hint(p: dict) -> str:
         return "用法：养火 %s（一次喂光现有药渣）" % owned[0]
     own = core.faction_flame(p.get("faction"))
     if own:
-        return "用法：先收服再养——本宗异火【%s】入道/转宗即得" % own
+        return "用法：先收服再养——入道/转宗补发的数值异火【%s】会随身，养火可升级" % own
     return "用法：先收服一朵异火，再「养火 <火名>」"
 
 
@@ -1122,9 +1144,7 @@ async def cmd_flames(store, qq) -> str:
             state = "已收服" if p.get("diyan") else "未得（成就斗帝自燃）"
             out.append(f"　{f['icon']} {name}　{state}")
         elif lv <= 0:
-            own = core.faction_flame(p.get("faction"))
-            hint = "（本宗所藏，入道/转宗即得）" if own == name else ""
-            out.append(f"　{f['icon']} {name}　未收服{hint}")
+            out.append(f"　{f['icon']} {name}　未收服")
         elif lv >= cfg.FLAME_MAX_LV:
             out.append(f"　{f['icon']} {name}　{lv} 级（圆满）")
         else:
@@ -1139,6 +1159,17 @@ async def cmd_flames(store, qq) -> str:
         if a:
             cite = a["novel"].split(" —— ")[0].split("；")[0]
             out.append(f"　　原著：{cite}")
+    # B 线数值异火：只列已收服（新号 1 朵 starter），无招式特效、只给数值加成。
+    b_owned = [f for f in getattr(cfg, "BONUS_FLAMES", [])
+               if int(fl.get(f["name"], 0)) > 0]
+    if b_owned:
+        out.append("　数值异火（无招式，按等级给加成）：")
+        for f in b_owned:
+            name = f["name"]
+            lv = int(fl.get(name, 0))
+            kind = "炼药" if f["kind"] == "alchemy" else "傀儡"
+            out.append(f"　　{f['icon']} {name}　{lv}/{cfg.FLAME_MAX_LV} 级"
+                       f"　{kind}+{int(round(float(f['value']) * 100))}%/级")
     out.append("")
     out.append("　收服后主动技可用「上阵 <技名>」放进四槽，「斗技详情 <技名>」看全文与出处")
     out.append("　" + flame_usage_hint(p))
@@ -1150,11 +1181,12 @@ async def cmd_feed(store, qq, name) -> str:
     if not p:
         return NOT_ENTERED
     name = (name or "").strip()
+    all_names = getattr(cfg, "OWNED_FLAME_NAMES", cfg.FLAME_NAMES)
     if not name:
-        return "用法：养火 青莲地心火（可选：" + "、".join(cfg.FLAME_NAMES) + "）"
-    hit = next((n for n in cfg.FLAME_NAMES if name in n or n in name), None)
+        return "用法：养火 火云水炎（可选：" + "、".join(all_names) + "）"
+    hit = next((n for n in all_names if name in n or n in name), None)
     if not hit:
-        return "无此异火。可选：" + "、".join(cfg.FLAME_NAMES)
+        return "无此异火。可选：" + "、".join(all_names)
     res = core.feed_flame(p, hit)
     chance = core.advance_task(p, "flame", 1) if res.get("ok") else None
     await store.put_player(p)
@@ -1164,9 +1196,7 @@ async def cmd_feed(store, qq, name) -> str:
         if res.get("reason") == "diyan":
             return "帝炎不靠喂养，只认斗帝。"
         if res.get("reason") == "unowned":
-            own = core.faction_flame(p.get("faction"))
-            tip = ("本宗异火为【%s】，入道/转宗时自动收服。" % own) if own else \
-                  "本宗无异火赐下，须另寻机缘收服。"
+            tip = _unflame_hint(hit)
             return "❌ 【%s】尚未收服，不能直接喂养。%s" % (hit, tip)
         if res.get("reason") == "max":
             return f"【{hit}】已至 {res['lv']} 级圆满，再多药渣也烧不动了。"
@@ -1178,6 +1208,47 @@ async def cmd_feed(store, qq, name) -> str:
                f"{_fmt(res['left'])}。"]
     out.extend(_chance_lines(chance, qq))
     return "\n".join(out)
+
+
+async def cmd_claim_flame(store, qq, name) -> str:
+    """「收服 <异火名>」：玩家主动收服入口（2026-11-19 三层投放补齐）。
+
+    分线口径（单一真值在 config.FLAME_TIER / S_FLAME_GATE / A_FLAME_SIDE）：
+      * S 线：走 core.unlock_flame() 的境界+主线双门槛，未达标回「why」；
+      * A 线：隐藏支线专属，**不给主动收服**——否则「不明示/完成后惊喜」形同虚设，
+        统一回模糊提示，不暴露该火存在；
+      * B 线：数值载体，可直接收服（starter 入道已自带，其余靠此入口补齐获取方式）。
+    帝炎走 diyan 斗帝成就位，不进 flames，此处显式挡住。
+    """
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    name = (name or "").strip()
+    # 收服解析用全部 23 朵（FLAME_TIER），不能用 OWNED_FLAME_NAMES——后者只含
+    # 旧五火+B十一火，会漏掉虚无吞炎/A 线 6 朵，导致文档写了却收不到（真机事故）。
+    all_names = list((getattr(cfg, "FLAME_TIER", {}) or {}).keys()) or cfg.FLAME_NAMES
+    hit = next((n for n in all_names if name in n or n in name), None)
+    if not hit:
+        return "无此异火，无从收服。可收服的异火见「异火」。"
+    # 帝炎只认斗帝成就，不能被口令收服。
+    if hit == cfg.FLAME_DIYAN:
+        return "帝炎不靠收服，只认斗帝——冲上斗帝之日，诸火自燃归一身。"
+    tier = (getattr(cfg, "FLAME_TIER", {}) or {}).get(hit, "")
+    # A 线隐藏彩蛋：主动收服一律拒，且回话不暴露「这朵火可由口令拿到」。
+    if tier == "A":
+        return "此火不在可寻之列，游历中自有机缘——先去做做任务、四处走走吧。"
+    res = core.unlock_flame(p, hit)
+    if not res.get("ok"):
+        if res.get("reason") == "owned":
+            return "【%s】已在你身，无须再收服。" % hit
+        if res.get("reason") == "locked":
+            return "❌ 【%s】非你此刻所能承载。%s" % (hit, res.get("why", "境界或主线未至"))
+        return "收服失败，机缘未至。"
+    await store.put_player(p)
+    if tier == "S":
+        return ("🔥 你以意志与境界驭住了【%s】——此为大后期之火，"
+                "「异火」可看其威，「养火」可养其力。" % hit)
+    return "🔥 你收服了数值异火【%s】——「养火」可喂药渣升级，加成即时生效。" % hit
 
 
 # ---------------------------------------------------------------------------
@@ -1613,8 +1684,15 @@ async def cmd_task_submit(store, qq) -> str:
         t = res["task"]
         return f"尚未完成：{t['name']}（{t.get('progress', 0)}/{t['target']}）"
     rw = res["reward"]
-    return (f"✅ 支线【{res['task']['name']}】完成！\n"
-            f"　金币 +{rw['gold']}　修为 +{rw['exp']}　机缘 +{rw['luck']}")
+    # 2026-11-19：提交必须存档（此前只在内存改 p，重启丢奖励）；A 线惊喜在此揭晓。
+    await store.put_player(p)
+    lines = [f"✅ 支线【{res['task']['name']}】完成！",
+             f"　金币 +{rw['gold']}　修为 +{rw['exp']}　机缘 +{rw['luck']}"]
+    surprise = res.get("surprise_flame") or ""
+    if surprise:
+        lines.append(f"　✨ 更意外的是——你在任务中引出一缕奇火，竟是【{surprise}】！")
+        lines.append("　（已自动收服，发送「异火」查看）")
+    return "\n".join(lines)
 
 
 async def cmd_main_submit(store, qq) -> str:
@@ -2421,6 +2499,7 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
     「点一次只出一条内容」——战报不能另发一条文字。不传 = 只回文本，行为不变。
     """
     from . import puppet_core as pc
+    from . import flame_bonus as fb
     pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
@@ -2439,9 +2518,11 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
     roster = await pstore.list_puppets(qq)
     pu = await pstore.active_puppet(qq)
     n = pc.formation_count(roster)
-    bonus = pc.puppet_expected_damage(pu, n)
+    # B 线傀儡异火：一个 flame_mult 同时喂怪血反解与实战傀儡击（同源，红线）。
+    flame_mult = 1.0 + fb.puppet_atk_bonus(p)
+    bonus = pc.puppet_expected_damage(pu, n, flame_mult=flame_mult)
     mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
-    res = core.fight(p, mon, puppet=pu, formation_n=n)
+    res = core.fight(p, mon, puppet=pu, formation_n=n, puppet_flame_mult=flame_mult)
     core.record_last_battle(p, "傀儡遗迹", res, opponent=sg["monster"])
     await store.put_player(p)
     head = "【傀儡遗迹·%s】%s\n　%s" % (sg["name"], sg["desc"], sg["monster"])

@@ -547,7 +547,6 @@ def build_flames_data(p: dict) -> dict:
                      "sub": "本宗无传承异火。以下异火皆为游历中所遇，与师门无关。", "note": ""})
     rows.append({"title": "可收服的异火", "right": "",
                  "sub": "须先收服才可喂养；未收服不显示下级需求。", "note": ""})
-    own = core.faction_flame(p.get("faction"))
     for f in cfg.FLAMES:
         name = f["name"]
         lv = int(fl.get(name, 0))
@@ -557,9 +556,11 @@ def build_flames_data(p: dict) -> dict:
             sub = f["desc"]
         elif lv <= 0:
             # 2026-11-18 A 方案：未收服不得喂养，卡面也不许再写「下级需 N 药渣」
+            # 2026-11-19 三层投放：不再有「本宗异火入道即得」——starter 是全宗门统一的
+            # B 线数值火，S 走境界+主线、A 藏隐藏支线。获取提示与文本层同一真值源。
             state = "未收服"
             sub = f["desc"]
-            note = "本宗异火，入道/转宗即得" if own == name else "须另寻机缘收服"
+            note = commands._unflame_hint(name)
         elif lv >= cfg.FLAME_MAX_LV:
             state = f"{lv} 级（圆满）"
             sub = f["desc"]
@@ -571,6 +572,23 @@ def build_flames_data(p: dict) -> dict:
             # NOTE_GAP 与描述拉开；旧版用全角空格拼进 sub，长描述折行后会连读。
             note = f"下级需 {commands._fmt(need)} 药渣"
         rows.append({"title": name, "right": state, "sub": sub, "note": note})
+    # B 线数值异火（2026-11-19）：只列已收服的，避免新号卡片一下铺 11 行。
+    # 加成聚合唯一源 = flame_bonus 模块，这里只做展示，不重算数值。
+    b_owned = [f for f in getattr(cfg, "BONUS_FLAMES", [])
+               if int(fl.get(f["name"], 0)) > 0]
+    if b_owned:
+        rows.append({"title": "数值异火（炼药/傀儡加成）", "right": "",
+                     "sub": "无招式特效，按等级给炼药或傀儡加成；可喂药渣升级。", "note": ""})
+        for f in b_owned:
+            name = f["name"]
+            lv = int(fl.get(name, 0))
+            state = f"{lv}/{cfg.FLAME_MAX_LV} 级（圆满）" if lv >= cfg.FLAME_MAX_LV \
+                else f"{lv}/{cfg.FLAME_MAX_LV} 级"
+            kind = "炼药" if f["kind"] == "alchemy" else "傀儡"
+            sub = f"{kind}加成每级 +{int(round(float(f['value']) * 100))}%　{f['desc']}"
+            note = "" if lv >= cfg.FLAME_MAX_LV else \
+                f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
+            rows.append({"title": name, "right": state, "sub": sub, "note": note})
     return {
         "icon": "star", "title": "异火",
         "subtitle": f"药渣 ×{dross}",

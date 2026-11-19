@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""异火发放 A 方案自检（2026-11-18）。exit 0 = 全绿。
+"""异火发放自检（2026-11-18 A 方案 → 2026-11-19 三层投放重构）。exit 0 = 全绿。
 
-口径（与 config.FACTION_FLAME_GRANT 同源）：
-  * 只发原著有据、且落在可养四火内的三处「本宗异火」：蛇人族/迦南/丹塔；
-  * 文案禁写「传承」（原著里这三处都不是门派传承，焚炎谷的传承之火不在可养表）；
+口径（与 config.STARTER_FLAME / FLAME_TIER 同源）：
+  * 入道/转宗只发一朵 B 线数值 starter（火云水炎），不再白送青莲/陨落/三千三朵超标火；
+  * 青莲=A线隐藏彩蛋、陨落/三千/净莲/帝炎=S线大后期，见 test_flame_tiers.py；
   * 只在玩家一朵异火都没有时发放 → 老档可补发、转宗不能刷；
-  * 未收服不可喂养（堵住 0→1 后门）。
+  * 未收服不可喂养（堵住 0→1 后门）；
+  * 卡面/文本「用法」指向玩家真能养的那一朵。
 
 运行：/opt/venv/bin/python src/plugins/doupo/test_doupo_flame_grant.py
 """
@@ -68,53 +69,54 @@ async def main():
     store = store_mod.Store(os.path.join(_TMP, "doupo.json"))
     await store.load()
 
-    # ---- 1. 映射表本身有据 ----
-    bad = [k for k in cfg.FACTION_FLAME_GRANT
-           if k not in fac.FACTIONS or cfg.FACTION_FLAME_GRANT[k] not in cfg.FLAME_NAMES]
-    check("映射只指向真实宗门与可养异火", not bad, str(bad))
-    check("映射不含帝炎（帝炎只认斗帝）",
-          cfg.FLAME_DIYAN not in cfg.FACTION_FLAME_GRANT.values(), "")
-    check("焚炎谷传承之火不在可养表故未映射",
-          "fenyangu" not in cfg.FACTION_FLAME_GRANT, "")
+    # ---- 1. starter 配置本身有据 ----
+    starter = cfg.STARTER_FLAME
+    check("starter 登记在可持有表", starter in cfg.OWNED_FLAME_NAMES, starter)
+    check("starter 是 B 线数值火", cfg.FLAME_TIER.get(starter) == "B", starter)
+    check("starter 在 BONUS_FLAMES 有数值定义", starter in cfg.BONUS_FLAME_BY_NAME, starter)
+    check("不再有按宗门发 S/A 的旧映射", not cfg.FACTION_FLAME_GRANT,
+          str(cfg.FACTION_FLAME_GRANT))
 
-    # ---- 2. 入道发放 ----
+    # ---- 2. 入道发放：任何宗门都只发 starter ----
     qq = find_start_qq("sherenzu")
     check("能构造蛇人族新号（种子稳定）", bool(qq), qq)
     p = core.create_player(qq, "火主", 900000077)
-    check("蛇人族入道即得青莲地心火",
-          p["faction"] == "sherenzu" and owned(p).get("青莲地心火") == 1, str(owned(p)))
+    check("蛇人族入道即得 starter",
+          p["faction"] == "sherenzu" and owned(p).get(starter) == 1, str(owned(p)))
+    check("入道不发超标 S/A 火",
+          not any(cfg.FLAME_TIER.get(n) in ("S", "A") for n in owned(p)), str(owned(p)))
 
     qq2 = find_start_qq("xiaojia")
     p2 = core.create_player(qq2, "无火", 900000077)
-    check("无对应所藏的宗门不发火",
-          p2["faction"] == "xiaojia" and not owned(p2), str(owned(p2)))
+    check("任何宗门都发 starter（不再有「无火宗门」）",
+          p2["faction"] == "xiaojia" and owned(p2).get(starter) == 1, str(owned(p2)))
 
     # ---- 3. 幂等 / 防刷 ----
-    before = owned(p)["青莲地心火"]
+    before = owned(p)[starter]
     again = core.grant_faction_flame(p)
     check("重复发放幂等（不会 1→2）",
-          again == "" and owned(p)["青莲地心火"] == before, str(owned(p)))
+          again == "" and owned(p)[starter] == before, str(owned(p)))
 
     p3 = dict(p)
     p3["faction"] = "jianan"
     p3["faction_name"] = fac.FACTIONS["jianan"]["name"]
     got = core.grant_faction_flame(p3)
-    check("已有异火者转宗不再发（防刷满三朵）",
-          got == "" and owned(p3) == {"青莲地心火": 1}, str(owned(p3)))
+    check("已有异火者转宗不再发（防刷）",
+          got == "" and owned(p3) == {starter: 1}, str(owned(p3)))
 
-    # ---- 4. 老档补发：全 0 玩家转去迦南 ----
+    # ---- 4. 老档补发：全 0 玩家转宗 ----
     legacy = core.create_player(qq2, "老档", 900000077)
-    legacy["flames"] = {n: 0 for n in cfg.FLAME_NAMES}
+    legacy["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}
     legacy["lv"] = 40
     legacy["gold"] = 999999
     res = core.change_faction(legacy, "jianan")
-    check("老档全 0 转宗补发本宗异火",
-          res.get("ok") and res.get("flame") == "陨落心炎"
-          and owned(legacy) == {"陨落心炎": 1}, str(res))
+    check("老档全 0 转宗补发 starter",
+          res.get("ok") and res.get("flame") == starter
+          and owned(legacy) == {starter: 1}, str(res))
 
     # ---- 5. 未收服不可养 ----
     q = core.create_player("12001", "喂火", 900000077)
-    q["flames"] = {n: 0 for n in cfg.FLAME_NAMES}
+    q["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}
     core.add_item(q, "药渣", 500)
     r = core.feed_flame(q, "净莲妖火")
     check("未收服喂养被拒", r.get("ok") is False and r.get("reason") == "unowned",
@@ -122,27 +124,28 @@ async def main():
     check("被拒后不扣药渣", core.count_item(q, "药渣") == 500,
           str(core.count_item(q, "药渣")))
 
-    q["flames"]["青莲地心火"] = 1
-    r2 = core.feed_flame(q, "青莲地心火")
-    check("已收服可正常喂养", r2.get("ok") is True, str(r2)[:120])
+    q["flames"][starter] = 1
+    r2 = core.feed_flame(q, starter)
+    check("已收服 B 线数值火可正常喂养", r2.get("ok") is True, str(r2)[:120])
 
     # ---- 6. 命令层文案 ----
     qq3 = find_start_qq("sherenzu")
     txt = await cmds.cmd_enter(store, qq3, "入道火主", 900000077)
-    check("入道回包说明本宗异火", "本宗异火" in txt and "青莲地心火" in txt,
-          txt[:120])
+    check("入道回包说明数值异火（不再写本宗异火）",
+          "数值异火" in txt and starter in txt and "本宗异火" not in txt, txt[:120])
     fed = await cmds.cmd_feed(store, qq3, "净莲妖火")
-    check("养火拒绝时指向本宗异火", "尚未收服" in fed and "青莲地心火" in fed,
-          fed[:120])
+    check("养火拒绝时按 S 线给门槛提示（不再写本宗异火）",
+          "尚未收服" in fed and "本宗异火" not in fed and "大后期" in fed, fed[:160])
     p_after = await store.get_player(qq3)
-    check("命令回包写入后存档带火", owned(p_after).get("青莲地心火") == 1,
+    check("命令回包写入后存档带 starter", owned(p_after).get(starter) == 1,
           str(owned(p_after)))
 
     # ---- 7. 最高声明：不加新玩家字段 ----
     base_keys = set(core.create_player("12002", "键", 900000077).keys())
     check("发放不新增玩家字段（无 grant 标记）",
-          not any("flame_grant" in k or "flame_ver" in k for k in base_keys),
-          str([k for k in base_keys if "flame" in k]))
+          not any("flame_grant" in k or "flame_ver" in k or "unlock" in k
+                  for k in base_keys),
+          str([k for k in base_keys if "flame" in k or "unlock" in k]))
 
     # ---- 8. 帝炎不受影响 ----
     q4 = core.create_player("12003", "斗帝", 900000077)
@@ -150,19 +153,64 @@ async def main():
           "帝炎" not in owned(q4) and q4.get("diyan") is False, "")
 
     # ---- 9. 异火卡/文本底部「用法」必须指向玩家真能养的那一朵 ----
-    #     旧版写死「养火 青莲地心火」：迦南玩家手里是陨落心炎，照抄必被「尚未收服」挡回。
-    h_own = cmds.flame_usage_hint({"flames": {"陨落心炎": 1}, "faction": "jianan"})
-    check("用法提示用玩家已收服的火", "陨落心炎" in h_own, h_own)
+    h_own = cmds.flame_usage_hint({"flames": {starter: 1}, "faction": "jianan"})
+    check("用法提示用玩家已收服的火", starter in h_own, h_own)
     h_wait = cmds.flame_usage_hint({"flames": {}, "faction": "jianan"})
-    check("未收服时用法改提示先收服+本宗火名",
-          "先收服" in h_wait and "陨落心炎" in h_wait, h_wait)
+    check("未收服时用法改提示先收服+starter 名",
+          "先收服" in h_wait and starter in h_wait, h_wait)
     h_none = cmds.flame_usage_hint({"flames": {}, "faction": "xiaojia"})
-    check("无本宗所藏时用法不强指某一朵",
-          "先收服" in h_none and "青莲地心火" not in h_none, h_none)
+    check("未收服时用法仍指向 starter（全宗门统一）",
+          "先收服" in h_none and starter in h_none, h_none)
     h_card = card_mod.build_flames_data(
         {"faction": "jianan", "faction_name": "迦南学院",
-         "flames": {"陨落心炎": 1}})["tip"]
+         "flames": {starter: 1}})["tip"]
     check("异火卡 tip 与文本同一口径", h_card == h_own, h_card)
+
+    # ---- 10. 「收服 <异火名>」主动收服入口（三层投放补齐）----
+    async def _fresh_claim_qq(tag, lv=1, main=0):
+        qq = "13900" + tag
+        np_ = core.create_player(qq, "收服" + tag, 900000077)
+        np_["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}  # 清掉 starter，专测收服
+        np_["lv"] = lv
+        np_["main_idx"] = main
+        await store.put_player(np_)
+        return qq
+
+    # B 线数值火：可直接收服并落盘
+    qb = await _fresh_claim_qq("01")
+    cb = await cmds.cmd_claim_flame(store, qb, "荒破灭焱")
+    pb = await store.get_player(qb)
+    check("B 线火可主动收服", owned(pb).get("荒破灭焱") == 1 and "收服了" in cb, cb[:120])
+
+    # S 线低境界：拒绝且不写入
+    qs = await _fresh_claim_qq("02", lv=1, main=0)
+    cs = await cmds.cmd_claim_flame(store, qs, "陨落心炎")
+    ps = await store.get_player(qs)
+    check("S 线低境界收服被拒", "非你此刻所能承载" in cs and owned(ps).get("陨落心炎", 0) == 0,
+          cs[:120])
+
+    # S 线达标：境界(斗尊)+主线(2) → 收服成功
+    qh = await _fresh_claim_qq("03", lv=cfg.realm_lv(8), main=2)
+    ch = await cmds.cmd_claim_flame(store, qh, "陨落心炎")
+    ph = await store.get_player(qh)
+    check("S 线达标可收服", owned(ph).get("陨落心炎") == 1 and "驭住" in ch, ch[:120])
+
+    # A 线隐藏彩蛋：主动收服拒绝，回话不暴露火名（保持「不明示」）
+    qa = await _fresh_claim_qq("04")
+    ca = await cmds.cmd_claim_flame(store, qa, "生灵之焱")
+    pa = await store.get_player(qa)
+    check("A 线主动收服被拒且不暴露火名",
+          "生灵之焱" not in ca and owned(pa).get("生灵之焱", 0) == 0, ca[:120])
+
+    # 帝炎：显式挡住，不进 flames
+    qd = await _fresh_claim_qq("05")
+    cd = await cmds.cmd_claim_flame(store, qd, "帝炎")
+    pd = await store.get_player(qd)
+    check("帝炎不能被口令收服", "斗帝" in cd and owned(pd).get("帝炎", 0) == 0, cd[:120])
+
+    # 已收服幂等：再收一次不报错、不重复
+    cb2 = await cmds.cmd_claim_flame(store, qb, "荒破灭焱")
+    check("重复收服幂等", "已在你身" in cb2, cb2[:120])
 
 
 def _run():
