@@ -731,7 +731,10 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     raw *= root   # 根基虚浮 → 实际输出打折；适量丹药 root=1 逐字节不变
 
     # 基础单击（未计破防/条件）：也是 DoT 的伤害基数
-    base = max(1, int(raw * mitigation(target_def) * (1.5 if crit else 1.0)))
+    # def_mult 是本次实际生效的防御减伤系数（破防会改写它）；回看卡据它算
+    # 「面板 → 防御削减 → 实收」，纯展示，不参与任何数值计算。
+    def_mult = mitigation(target_def)
+    base = max(1, int(raw * def_mult * (1.5 if crit else 1.0)))
     notes: list[str] = []
     heal_ratio = 0.0
     dmg = base
@@ -743,7 +746,8 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
         # 破防在 on_hit 里写入 fx_target["def_shred"]，这里读取后重算本次伤害；
         # 条件/连击/增幅加成走 bonus。
         eff_def = int(target_def * fx.target_def_mult(fx_target))
-        dmg = max(1, int(raw * mitigation(eff_def) * (1.5 if crit else 1.0)))
+        def_mult = mitigation(eff_def)
+        dmg = max(1, int(raw * def_mult * (1.5 if crit else 1.0)))
         if r["bonus"] > 0:
             dmg = max(1, int(dmg * (1.0 + r["bonus"])))
     # 2026-11-17 完整战斗回看：kind 本来就是招式名（普攻叫「普攻」），这里再补一个
@@ -751,7 +755,12 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     # 新增字段不会改变任何既有战斗数值或回包。
     return {"dmg": dmg, "crit": crit, "kind": kind, "skill": entry is not None,
             "move": kind, "tier": str((entry or {}).get("tier") or ""),
-            "notes": notes, "heal_ratio": heal_ratio}
+            "notes": notes, "heal_ratio": heal_ratio,
+            # 2026-11-19 回看卡「伤害构成」：raw = 面板原始（防御/暴击之前），
+            # def_cut = 被对方防御稀释掉的量。展示层据此写「面板 X · 防御 -Y」，
+            # 让玩家看得见「伤害被稀释了多少」。只加字段，不改任何数值计算。
+            "raw": int(raw),
+            "def_cut": max(0, int(raw - raw * def_mult))}
 
 
 def faction_pools_open(p) -> list[str]:
@@ -1190,9 +1199,13 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                       "move": "闪避"}))
             else:
                 roll = 1.0 - var + 2.0 * var * rng()
+                # 回看卡「承伤构成」：atk_raw = 防御前原始，dealt0 = 防御后/技能前。
+                # 三个字段只供展示，不参与任何数值计算（旧行为逐字节不变）。
+                atk_raw = max(1, int(m_atk * roll))
                 # 根基裁定（隐形）：虚浮者防御同样打折 → 同怪受到更多伤害。
                 # PVE 玩家承伤处；root=1（适量/正常修炼）时逐字节不变。
                 dealt = max(1, int(m_atk * mitigation(st["防御"] * root) * roll))
+                dealt0 = dealt
                 # 怪物技能（2026-11-19）：概率施放，只作用于本回合，不改面板。
                 # 效果一律并入「兽击」那一条 log 的 notes —— 不额外插 dmg=0 的条目，
                 # 否则回看卡会把一次攻击渲染成两行、并把总量算重。
@@ -1229,7 +1242,12 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 hp -= inc["final"]
                 taken += inc["final"]
                 log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True,
-                             "move": "兽击"}
+                             "move": "兽击",
+                             # 回看卡「承伤构成」：原始 → 防御削减 → 减伤吸收 → 实际。
+                             # 纯展示字段，不参与结算（旧行为逐字节不变）。
+                             "atk_raw": int(atk_raw),
+                             "def_cut": max(0, int(atk_raw - dealt0)),
+                             "absorbed": max(0, int(dealt - inc["final"]))}
                 notes = list(sk_note) + list(inc["notes"] or [])
                 if notes:
                     log_entry["notes"] = notes
@@ -1267,6 +1285,12 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         ratio_m = m_hp / max(1, int(mon["hp"]))
         win = ratio_p > ratio_m
         exhausted = True
+    # 回看卡「终局」：先留住**战斗结束时**的真实血/斗气，再改写存档
+    # （战败会把 p["hp"] 重置成上限×0.7，回看若读 p 就显示成「还有大半管血却判负」，
+    # 2026-11-19 用户实拍质疑「明明还有血量怎么算失败」正是这个假象）。
+    hp_end = max(0, int(hp))
+    mp_end = max(0, int(mp))
+    foe_hp_end = max(0, int(m_hp))
     p["hp"] = max(0 if not win else 1, hp)
     p["mp"] = mp   # 斗气结转：写回本场消耗后的剩余值，不再强制回满
 
@@ -1279,6 +1303,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         "puppet": (str(puppet.get("name") or "傀儡") if puppet else None),
         "formation": int(formation_n or 0),
         # 2026-11-19 战斗事件（供战报/回看卡渲染；数值层不消费）
+        # 终局快照：战斗结束那一刻的真实血/斗气（不是战后重置值），回看卡据此
+        # 显示「气血归零而败」而不是误导性的战后血量。
+        "hp_end": hp_end, "mp_end": mp_end, "foe_hp_end": foe_hp_end,
+        # 对手血量上限：回看卡「终局」条要按比例画条，没有分母就画不出形变
+        "foe_hp_max": max(0, int(mon.get("hp") or 0)),
         "exhausted": bool(exhausted),
         "auto_pills": {"hp": int(pill_used.get("hp", 0)),
                        "mp": int(pill_used.get("mp", 0))},
@@ -1428,12 +1457,20 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
     merged: dict[str, int] = {}
     for name, cnt in all_drops:
         merged[name] = merged.get(name, 0) + cnt
+    # 终局：取最后一场 fight 的真实结束值（前面场次的血/斗气已结转进下一场，
+    # 所以最后一场就是整场结束那一刻）。缺字段的旧调用方按 .get 消费，不炸。
+    _last = r if specs else {}
     return {
         "win": win, "rounds": total_rounds, "taken": total_taken,
         "exp": total_exp, "gold": total_gold,
         "drops": list(merged.items()), "log": [d for x in detail for d in x["log"]],
         "detail": detail, "enemies": [x["name"] for x in detail],
         "enemy_count": len(detail), "hero_aid": hero_aid,
+        "hp_end": _last.get("hp_end"), "mp_end": _last.get("mp_end"),
+        "foe_hp_end": _last.get("foe_hp_end"),
+        "foe_hp_max": int((_last.get("mon") or {}).get("hp") or 0),
+        "exhausted": bool(_last.get("exhausted")),
+        "fortune": bool(_last.get("fortune")),
         # 2026-11-19：整场夺取的火能（仅胜利累加）+ 自动服药总数（供文案）
         "fire_energy_gain": int(fire_gain),
         "auto_pills": {"hp": int(pill_budget.get("hp", 0)),
@@ -1478,19 +1515,42 @@ def record_last_battle(p: dict, kind: str, res: dict, opponent: str = "",
         row.setdefault("index", i)
         logs.append(row)
 
+    # 终局血/斗气：优先取 fight() 留下的 hp_end/mp_end（战斗结束那一刻），
+    # 没有才回退存档值。战败时 p["hp"] 已被重置成上限×0.7（及调息），
+    # 直接读 p 会显示「还有大半管血却判负」——用户 2026-11-19 质疑的假象。
+    _hp_end = res.get("hp_end")
+    _mp_end = res.get("mp_end")
+    hp_show = int(_hp_end) if _hp_end is not None else int(p.get("hp") or 0)
+    mp_show = int(_mp_end) if _mp_end is not None else int(p.get("mp") or 0)
+    foe_hp_end = res.get("foe_hp_end")
+
+    # 败因（回看卡顶部必须直说，不许让玩家猜）：
+    win = bool(res.get("win"))
+    exhausted = bool(res.get("exhausted"))
+    if win and exhausted:
+        end_reason, end_text = "exhausted_win", "力竭判胜"
+    elif win:
+        end_reason, end_text = "kill", "击杀对手"
+    elif exhausted:
+        end_reason, end_text = "exhausted_lose", "力竭判负"
+    elif int(hp_show) <= 0:
+        end_reason, end_text = "hp_zero", "气血耗尽"
+    else:
+        end_reason, end_text = "lose", "战败"
+
     snap = {
         "version": 1,
         "ts": time.time(),
         "kind": str(kind or "战斗"),
-        "win": bool(res.get("win")),
+        "win": win,
         "rounds": int(res.get("rounds") or 0),
         "opponent": str(opponent or ""),
         "player": {
             "name": str(p.get("name") or "无名"),
             "lv": int(p.get("lv") or 1),
             "power": int(power(p)),
-            "hp": int(p.get("hp") or 0), "hp_max": int(st["体力"]),
-            "mp": int(p.get("mp") or 0), "mp_max": int(mp_max(p)),
+            "hp": int(hp_show), "hp_max": int(st["体力"]),
+            "mp": int(mp_show), "mp_max": int(mp_max(p)),
         },
         "summary": {
             "taken": int(res.get("taken") or 0),
@@ -1507,6 +1567,12 @@ def record_last_battle(p: dict, kind: str, res: dict, opponent: str = "",
             "auto_pills": {"hp": int((res.get("auto_pills") or {}).get("hp") or 0),
                            "mp": int((res.get("auto_pills") or {}).get("mp") or 0)},
             "fortune": bool(res.get("fortune")),
+            # 终局与败因：foe_hp_end = 战斗结束时对手剩余血；end_reason 供卡片直写
+            # 「气血耗尽 / 力竭判负 / 击杀对手」，不再让玩家自己猜为什么输。
+            "foe_hp_end": (int(foe_hp_end) if foe_hp_end is not None else None),
+            "foe_hp_max": int(res.get("foe_hp_max") or 0),
+            "end_reason": end_reason,
+            "end_text": end_text,
             "extra": _jsonable(extra or {}),
         },
         "log": logs,

@@ -42,7 +42,7 @@ MUTATIONS = [
      '"ratio": 1.0, "share": _pct(t["foe"], total),'),
     ("模板对新旧数据不分流", TPL,
      '    return any(data.get(k) for k in\n'
-     '               ("verdict", "kpis", "bars", "beats", "actions", "rounds"))',
+     '               ("verdict", "end", "kpis", "bars", "beats", "actions", "rounds"))',
      '    return True'),
     ("不落盘 exhausted", CORE,
      '            "exhausted": bool(res.get("exhausted")),',
@@ -55,8 +55,8 @@ MUTATIONS = [
      '        "rounds": round_bubbles(battle),\n',
      '        "rounds": [],\n'),
     ("气泡左右列错边", BR,
-     '        b["mine" if a.get("side") == "我方" else "foe"].append(a)',
-     '        b["mine" if a.get("side") != "我方" else "foe"].append(a)'),
+     '        side = "mine" if a.get("side") == "我方" else "foe"',
+     '        side = "foe" if a.get("side") == "我方" else "mine"'),
     ("气泡两列并成一列（几何碰撞）", TPL,
      '    col_w = (content_w - 2 * BUBBLE_PAD - BUBBLE_COL_GAP) // 2',
      '    col_w = content_w - 2 * BUBBLE_PAD'),
@@ -78,9 +78,48 @@ MUTATIONS = [
      '                # 否则气泡半边纯空白，玩家以为卡坏了（2026-11-19 实拍反馈）。\n'
      '                entries = [{"move": "无动作", "value": "", "tags": "",\n'
      '                            "tone": "dim", "h": LINE_H + BUBBLE_ROW_GAP,\n'
-     '                            "placeholder": True}]\n',
+     '                            "comp": [], "placeholder": True}]\n',
      '            if False:\n'
      '                entries = []\n'),
+    # ---- 2026-11-19 补料：终局真值 / 败因 / 每回合战损 / 伤害构成 ----
+    # 终局退回读存档血量（战败已被重置成上限×0.7）= 用户质疑的那个假象
+    ("终局退回读战后重置血量", CORE,
+     '    hp_show = int(_hp_end) if _hp_end is not None else int(p.get("hp") or 0)',
+     '    hp_show = int(p.get("hp") or 0)'),
+    # 败因不判气血归零 → 统一写「战败」，用户还得自己猜
+    ("败因不判气血耗尽", CORE,
+     '    elif int(hp_show) <= 0:\n'
+     '        end_reason, end_text = "hp_zero", "气血耗尽"',
+     '    elif False:\n'
+     '        end_reason, end_text = "hp_zero", "气血耗尽"'),
+    # 每回合不统计「我受」→ 抬头只剩敌受，看不出自己掉了多少
+    ("每回合不算我受伤害", BR,
+     '        if side == "foe":\n'
+     '            b["hurt"] += _i(a.get("dmg"))',
+     '        if side == "foe":\n'
+     '            b["hurt"] += 0'),
+    # 余血不钳 0 → 致死那击印出 -287
+    ("余血不钳到 0（印负数）", BR,
+     '            b["hp"] = max(0, _i(a.get("hp_after")))',
+     '            b["hp"] = _i(a.get("hp_after"))'),
+    # 伤害构成永远为空 → 「多少被稀释」又看不见了
+    ("伤害构成永远为空", BR,
+     '    if raw <= 0 or (cut <= 0 and absorbed <= 0):\n        return ""',
+     '    if True:\n        return ""'),
+    # 模板不画终局资源条（数据有了但用户看不到）
+    ("模板不画终局条", TPL,
+     '    if end_rows:\n'
+     '        blocks.append(_cap("终局"))',
+     '    if False:\n'
+     '        blocks.append(_cap("终局"))'),
+    # 终局条恒定满条 → 「气血归零」看起来还是满血
+    ("终局条不按比例（恒定满条）", TPL,
+     '            fw = int(track_w * ratio)',
+     '            fw = track_w'),
+    # 气泡抬头不写回合战损
+    ("气泡抬头不写战损", TPL,
+     '        if b["sum_text"]:',
+     '        if False:'),
 ]
 
 

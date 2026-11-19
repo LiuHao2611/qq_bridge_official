@@ -154,7 +154,41 @@ def verdict_info(battle: dict) -> dict:
         "rounds": _i(battle.get("rounds")),
         # 2026-11-19 熔断：300 回合脏数据判定，必须显式标出来，不能冒充正常取胜
         "exhausted": bool(s.get("exhausted")),
+        # 收场原因（气血耗尽 / 力竭判负 / 击杀对手…）：玩家不该靠猜
+        "end_text": _s(s.get("end_text"), ""),
     }
+
+
+def end_state(battle: dict) -> dict:
+    """终局三格资源条（我气血 / 我斗气 / 敌气血）+ 收场原因。
+
+    ⚠️ 只认 ``summary.end_reason``：那是 2026-11-19 起 ``record_last_battle``
+    用 ``fight()`` 的 ``hp_end`` 写的**战斗结束时**真值。旧存档的
+    ``player.hp`` 是战败重置后的上限×0.7（回血假象），拿它画「终局」等于
+    把用户 2026-11-19 质疑的那个错再印一遍 —— 所以旧档宁可不画。
+
+    ``max<=0`` 表示没有分母（旧数据/切磋无对手上限）→ 模板只画数字不画条。
+    """
+    s = battle.get("summary") or {}
+    pl = battle.get("player") or {}
+    if not s.get("end_reason"):
+        return {}
+    hp_max = max(0, _i(pl.get("hp_max")))
+    mp_max = max(0, _i(pl.get("mp_max")))
+    foe_hp = s.get("foe_hp_end")
+    rows = [
+        {"label": "我气血", "value": max(0, _i(pl.get("hp"))), "max": hp_max,
+         "tone": "mine"},
+        {"label": "我斗气", "value": max(0, _i(pl.get("mp"))), "max": mp_max,
+         "tone": "mp"},
+    ]
+    if foe_hp is not None:
+        rows.append({"label": "敌气血", "value": max(0, _i(foe_hp)),
+                     "max": max(0, _i(s.get("foe_hp_max"))), "tone": "foe"})
+    return {"text": _s(s.get("end_text"), ""),
+            "reason": _s(s.get("end_reason"), ""),
+            "win": bool(battle.get("win")),
+            "rows": rows}
 
 
 def kpi_cells(battle: dict) -> list[dict]:
@@ -251,6 +285,23 @@ def beats(battle: dict, limit: int = BEAT_LIMIT) -> list[dict]:
 
 
 # ---------------------------------------------------------------- 逐招明细
+def _comp_text(raw: int, cut: int, absorbed: int) -> str:
+    """伤害构成：``面板 3,100 · 防御 -520 · 技能 -386``。
+
+    「实收」不在这里重复 —— 右侧那个大数字就是实收。没有削减就不出这行
+    （否则每条都挂一行 0，等于用文字噪声掩盖信息）。
+    暴击/增幅会让实收大于「面板−防御」，词条行的「暴击」标记负责解释这个缺口。
+    """
+    if raw <= 0 or (cut <= 0 and absorbed <= 0):
+        return ""
+    parts = ["面板 " + _num(raw)]
+    if cut > 0:
+        parts.append("防御 -" + _num(cut))
+    if absorbed > 0:
+        parts.append("技能 -" + _num(absorbed))
+    return " · ".join(parts)
+
+
 def action_items(battle: dict) -> list[dict]:
     """一条 log 一行：左「序号｜回合 阵营 招式」，右「数值」，中间夹词条。"""
     out: list[dict] = []
@@ -293,6 +344,12 @@ def action_items(battle: dict) -> list[dict]:
         else:
             # 心火共鸣 / 踉跄 / 被控这类 0 伤害事件：写「—」比写「0」诚实且不误导
             value, tone = "—", "dim"
+        # 伤害构成（2026-11-19 用户要「多少被稀释/防御/无效」）：
+        # 我方出手带 raw（面板原始）；敌方出手带 atk_raw/def_cut/absorbed。
+        # 旧战报没有这些字段 → 0，展示层据此决定要不要画「原始→实际」那行。
+        raw = _i(it.get("raw")) or _i(it.get("atk_raw"))
+        cut = _i(it.get("def_cut"))
+        absorbed = _i(it.get("absorbed"))
         out.append({
             "idx": _i(it.get("index"), i),
             "round": rmap[i - 1] if (i - 1) < len(rmap) else i,
@@ -301,6 +358,16 @@ def action_items(battle: dict) -> list[dict]:
             "value": value,
             "tone": tone,
             "tags": "·".join(tags[:TAG_LIMIT]),
+            # 伤害构成 + 该条动作发生后的血/斗气快照（回看卡画「战损」用）
+            "comp": _comp_text(raw, max(0, cut), max(0, absorbed)),
+            "dmg": _i(it.get("dmg")),
+            "raw": raw,
+            "cut": max(0, cut),
+            "absorbed": max(0, absorbed),
+            "hp_after": _i(it.get("hp_after")),
+            "mp_after": _i(it.get("mp_after")),
+            "foe_hp_after": (int(it["foe_hp_after"])
+                             if it.get("foe_hp_after") is not None else None),
         })
     return out
 
@@ -311,17 +378,66 @@ def round_bubbles(battle: dict) -> list[dict]:
     ``action_items`` 的 ``round`` 已是多敌拉平后的连续回合号（见 display_rounds），
     所以这里直接按它分组即可。``who='v'`` 的切磋对手写成「对方」，也归到敌方列。
 
-    结构：``[{"round": n, "mine": [action, ...], "foe": [action, ...]}, ...]``。
+    结构：``[{"round": n, "mine": [...], "foe": [...], "sum_text": ...,
+    "foot_l": ..., "foot_r": ...}, ...]``。
+
+    每回合除两侧动作外还带三个**汇总**（2026-11-19 用户：每回合我受伤多少、对方
+    受伤多少、还剩多少血/斗气都看不到）：
+
+      * ``hurt``   本回合我挨的伤害（敌方列 dmg 之和）→ ``sum_text`` 的「我受」
+      * ``hurt_foe`` 本回合对方挨的伤害（我方列 dmg 之和）→「敌受」
+      * ``hp`` / ``mp`` / ``foe_hp`` 回合末余量，取自 log 的 ``*_after`` 快照
+
+    ``hp`` 必须 clamp 到 0：core 写的是原始 ``int(hp)``，致死那一击会留下
+    ``-287`` 这种负数，直接印出来玩家只会更困惑（0 才是人话）。
     这是**纯增量字段**：``groups`` / ``actions`` / 文本兜底全部保持原样，
     复用 doupo_battle 骨架的 doupo_ruin 看不到 rounds，继续走旧路径。
     """
+    pl = battle.get("player") or {}
+    hp_max = max(0, _i(pl.get("hp_max")))
+    mp_max = max(0, _i(pl.get("mp_max")))
     buckets: dict[int, dict] = {}
     for a in action_items(battle):
         rnd = _i(a.get("round"), 1)
-        b = buckets.setdefault(rnd, {"round": rnd, "mine": [], "foe": []})
+        b = buckets.setdefault(rnd, {"round": rnd, "mine": [], "foe": [],
+                                     "hurt": 0, "hurt_foe": 0,
+                                     "hp": None, "mp": None, "foe_hp": None})
+        side = "mine" if a.get("side") == "我方" else "foe"
         # 只按阵营分列，不改 action 本身（值/词条/配色都沿用 action_items 的口径）
-        b["mine" if a.get("side") == "我方" else "foe"].append(a)
-    return [buckets[k] for k in sorted(buckets)]
+        b[side].append(a)
+        if side == "foe":
+            b["hurt"] += _i(a.get("dmg"))
+        else:
+            b["hurt_foe"] += _i(a.get("dmg"))
+        # 两种阵营的条目都带「我方」血/斗气快照（挨打后 / 出手后），
+        # 取最后一条就是回合末。对手余血只有我方出手那条记了 foe_hp_after。
+        if a.get("hp_after") is not None:
+            b["hp"] = max(0, _i(a.get("hp_after")))
+        if a.get("mp_after") is not None:
+            b["mp"] = max(0, _i(a.get("mp_after")))
+        if a.get("foe_hp_after") is not None:
+            b["foe_hp"] = max(0, _i(a.get("foe_hp_after")))
+
+    out: list[dict] = []
+    for k in sorted(buckets):
+        b = buckets[k]
+        parts = []
+        if b["hurt"]:
+            parts.append("我受 " + _num(b["hurt"]))
+        if b["hurt_foe"]:
+            parts.append("敌受 " + _num(b["hurt_foe"]))
+        b["sum_text"] = " · ".join(parts) or "本回合无伤"
+        left = []
+        if b["hp"] is not None:
+            left.append("余血 " + (_num(b["hp"]) + "/" + _num(hp_max) if hp_max
+                                   else _num(b["hp"])))
+        if b["mp"] is not None:
+            left.append("余气 " + (_num(b["mp"]) + "/" + _num(mp_max) if mp_max
+                                   else _num(b["mp"])))
+        b["foot_l"] = " · ".join(left)
+        b["foot_r"] = ("敌血 " + _num(b["foe_hp"])) if b["foe_hp"] is not None else ""
+        out.append(b)
+    return out
 
 
 def action_rows(battle: dict) -> list[str]:
@@ -334,15 +450,21 @@ def action_rows(battle: dict) -> list[str]:
 
 
 def head_rows(battle: dict) -> list[str]:
-    """战况事实行（KPI 之外的文字部分，最多 3 行）。"""
+    """战况事实行（KPI 之外的文字部分，最多 3 行）。
+
+    ⚠️ 有 ``end_reason``（新档）时**不再重复气血/斗气**：同一组数字已经在
+    「终局」资源条里画成图，文字再印一遍等于用冗余把卡撑长
+    （2026-11-19 用户：别搞一堆纯文字）。旧档没有终局条，继续用文字兜住资源。
+    """
     s = battle.get("summary") or {}
     pl = battle.get("player") or {}
     drops = [d for d in (s.get("drops") or []) if isinstance(d, (list, tuple)) and len(d) >= 2]
     drop = "、".join(f"{n}×{c}" for n, c in drops)
-    out = [
-        f"战力 {_num(pl.get('power'))}｜境 lv{_i(pl.get('lv'), 1)}"
+    stay = "" if s.get("end_reason") else (
         f"｜气血 {_num(pl.get('hp'))}/{_num(pl.get('hp_max'))}"
-        f"｜斗气 {_num(pl.get('mp'))}/{_num(pl.get('mp_max'))}",
+        f"｜斗气 {_num(pl.get('mp'))}/{_num(pl.get('mp_max'))}")
+    out = [
+        f"战力 {_num(pl.get('power'))}｜境 lv{_i(pl.get('lv'), 1)}{stay}",
         f"代价 {_num(s.get('taken'))}｜修为 +{_num(s.get('exp'))}"
         f"｜金币 +{_num(s.get('gold'))}",
     ]
@@ -359,6 +481,8 @@ def build_data(battle: dict) -> dict:
     return {
         "title": "战斗回看",
         "verdict": verdict_info(battle),
+        # 终局资源条（战斗结束那一刻的血/斗气 + 收场原因）；旧档返回 {} 不画
+        "end": end_state(battle),
         "kpis": kpi_cells(battle),
         "bars": damage_bars(battle),
         "beats": beats(battle),
@@ -377,11 +501,15 @@ def text(battle: dict) -> str:
     battle = battle or {}
     data = build_data(battle)
     v = data["verdict"]
-    out = [f"⚔️ {data['title']}｜{'胜' if v['win'] else '败'}｜{v['kind']}"
+    out = [f"⚔️ {data['title']}｜{'胜' if v['win'] else '败'}"
+           f"｜{v['end_text'] or v['kind']}"
            f"｜{v['rounds']}回合｜对手 {v['opponent']}"]
     t = totals(battle)
     out.append(f"我方输出 {_num(t['mine'])}｜敌方输出 {_num(t['foe'])}"
                f"｜每回合 {_num(t['per_round'])}")
+    for row in (data.get("end") or {}).get("rows") or []:
+        out.append(f"{row['label']} {_num(row['value'])}"
+                   + (f"/{_num(row['max'])}" if row.get("max") else ""))
     for g in data["groups"]:
         out.append(f"【{g['name']}】")
         out.extend(g["rows"])

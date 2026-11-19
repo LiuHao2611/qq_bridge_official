@@ -9,9 +9,16 @@
 通行做法（简版观看率 80%、条形图 30%、时间轴 20%；「人对图像形变的感知强于数字
 变化」；「做减法」），改成自上而下的五层：
 
-    胜负徽标（暖色胜 / 冷色败） → 三格 KPI → 双方输出占比双条（长度按真实数值
-    缩放，必不同长） → 关键节点时间轴（机缘/心火/踉跄/暴击/服药/被控/反伤）
-    → 逐招明细（一条一行，左招式右数值，隔行浅底便于横扫）
+    胜负徽标（暖色胜 / 冷色败） → 终局资源条（我气血/我斗气/敌气血 + 收场原因）
+    → 三格 KPI → 双方输出占比双条（长度按真实数值缩放，必不同长） → 关键节点
+    时间轴（机缘/心火/踉跄/暴击/服药/被控/反伤） → 回合气泡（一回合一个，左右
+    两列敌我行为，逐条带伤害构成与回合末余量）
+
+2026-11-19 补料（用户：「每回合我受伤多少、对方受伤多少、多少被稀释都看不到，
+还有血量怎么就判失败」）：气泡抬头右侧写「我受 X · 敌受 Y」，每条动作下面加
+一行「面板 X · 防御 -Y（ · 技能 -Z）」，气泡底部写「余血/余气 · 敌血」；
+顶部新增终局资源条，用真实结束值画条 —— 血量归零就是空条，不再让战后回血
+冒充终局（战败会把气血重置成上限×0.7，那是回血不是剩余）。
 
 ``doupo_ruin``（傀儡遗迹）复用本骨架：它不传 verdict/kpis/bars/beats/actions，
 ``_rich()`` 返回 False → 走原来的「分组 + 折行」路径，像素与改造前一致。
@@ -60,27 +67,40 @@ BUBBLE_HEADER_H = FS_GROUP + 8    # 回合号行
 BUBBLE_SIDE_H = S.FS_LABEL + 8    # 我方 / 敌方 列头行
 BUBBLE_ROW_GAP = 8        # 同一列内相邻动作间距
 BUBBLE_TAG_H = S.FS_LABEL + 6     # 词条说明行
+BUBBLE_COMP_H = S.FS_LABEL + 6    # 伤害构成行（面板 → 防御 → 实收）
+BUBBLE_FOOT_H = S.FS_LABEL + 10   # 气泡底部「余血 / 余气 / 敌血」行
 BUBBLE_COL_GAP = 16       # 左右两列之间的间距（不是用空格凑）
 CAP_BEFORE = 14           # 区块标题与其上方内容的间距（标题不能贴在上一块上）
 CAP_AFTER = 8             # 区块标题与其下方内容的间距
 CHIP_MAX_FS = S.FS_LABEL  # 16，关键节点的回合/类型 chip
+# ---- 终局资源条（2026-11-19：气血归零才是败因，别让战后回血冒充剩余）----
+END_ROW = 26              # 一行资源条（我气血 / 我斗气 / 敌气血）
+END_LABEL_W = 78          # 「我气血」标签列宽（FS_BODY 下 3 个汉字 ≈60px，58 会截成「我气…」）
+END_VAL_W = 150           # 右侧「8,412 / 10,883」数值列宽
+END_AFTER = 8             # 与下方 KPI 的间距
 
 _WHITE = "#FFFFFF"
 
 _DEMO = {
     "title": "战斗回看",
-    "verdict": {"win": True, "kind": "遭遇", "opponent": "魔炎谷库房",
-                "rounds": 4, "exhausted": False},
+    "verdict": {"win": False, "kind": "遭遇", "opponent": "血战佣兵、狮翼兽",
+                "rounds": 4, "exhausted": False, "end_text": "气血耗尽"},
+    "end": {"text": "气血耗尽", "reason": "hp_zero", "win": False,
+            "rows": [
+                {"label": "我气血", "value": 0, "max": 10883, "tone": "mine"},
+                {"label": "我斗气", "value": 84, "max": 5466, "tone": "mp"},
+                {"label": "敌气血", "value": 7120, "max": 12000, "tone": "foe"},
+            ]},
     "kpis": [
         {"label": "我方输出", "value": "12,846", "tone": "mine"},
-        {"label": "敌方输出", "value": "3,902", "tone": "foe"},
+        {"label": "敌方输出", "value": "15,902", "tone": "foe"},
         {"label": "每回合", "value": "3,211", "tone": "plain"},
     ],
     "bars": [
         {"label": "我方", "value": 12846, "text": "12,846", "ratio": 1.0,
-         "share": 77, "tone": "mine"},
-        {"label": "敌方", "value": 3902, "text": "3,902", "ratio": 0.3037,
-         "share": 23, "tone": "foe"},
+         "share": 45, "tone": "mine"},
+        {"label": "敌方", "value": 15902, "text": "15,902", "ratio": 1.0,
+         "share": 55, "tone": "foe"},
     ],
     "beats": [
         {"round": 1, "tag": "暴击", "text": "狂狮怒罡 2,107", "tone": "mine"},
@@ -89,22 +109,27 @@ _DEMO = {
     ],
     "actions": [
         {"idx": 1, "round": 1, "side": "我方", "move": "狂狮怒罡",
-         "value": "2,107", "tone": "mine", "tags": "暴击·斗气-40"},
+         "value": "2,107", "tone": "mine", "tags": "暴击·斗气-40",
+         "comp": "面板 2,860 · 防御 -680"},
         {"idx": 2, "round": 1, "side": "敌方", "move": "兽击",
-         "value": "318", "tone": "foe", "tags": "防御减伤"},
+         "value": "318", "tone": "foe", "tags": "防御减伤",
+         "comp": "面板 520 · 防御 -140 · 技能 -62"},
     ],
     "rounds": [
-        {"round": 1, "mine": [{"move": "狂狮怒罡", "value": "2,107",
-                               "tone": "mine", "tags": "暴击·斗气-40"}],
-         "foe": [{"move": "兽击", "value": "318",
-                  "tone": "foe", "tags": "防御减伤"}]},
+        {"round": 1,
+         "mine": [{"move": "狂狮怒罡", "value": "2,107", "tone": "mine",
+                   "tags": "暴击·斗气-40", "comp": "面板 2,860 · 防御 -680"}],
+         "foe": [{"move": "兽击", "value": "3,418", "tone": "foe",
+                  "tags": "防御减伤", "comp": "面板 5,200 · 防御 -1,140 · 技能 -642"}],
+         "sum_text": "我受 3,418 · 敌受 2,107",
+         "foot_l": "余血 8,412/10,883 · 余气 2,340/5,466", "foot_r": "敌血 7,120"},
     ],
     "groups": [
-        {"name": "战况", "rows": ["战力 8,214｜境 lv37｜气血 412/1,000｜斗气 40/600",
-                                 "代价 318｜修为 +320｜金币 +85"]},
+        {"name": "战况", "rows": ["战力 8,214｜境 lv37",
+                                 "代价 15,902｜修为 +0｜金币 +0"]},
         {"name": "逐招明细", "rows": [
             "01｜回合1 我方 狂狮怒罡（暴击·斗气-40） 2,107",
-            "02｜回合1 敌方 兽击（防御减伤） 318",
+            "02｜回合1 敌方 兽击（防御减伤） 3,418",
         ]},
     ],
     "tip": "发「战斗评价」听一句毒舌 · 只保留最后一场战斗",
@@ -122,6 +147,11 @@ def _gs(v, default="—") -> str:
     return default if v is None or v == "" else str(v)
 
 
+def _mn(v) -> str:
+    """千分位。数字本身来自 battle_review，模板只负责印得看得懂。"""
+    return f"{_gi(v):,}"
+
+
 def _rows_of(g: dict) -> list:
     return [r for r in (g.get("rows") or []) if r]
 
@@ -137,7 +167,7 @@ def _rich(data: dict) -> bool:
     「同一份骨架给两张卡复用」的兼容边界，改动这里前先看 doupo_ruin.py。
     """
     return any(data.get(k) for k in
-               ("verdict", "kpis", "bars", "beats", "actions", "rounds"))
+               ("verdict", "end", "kpis", "bars", "beats", "actions", "rounds"))
 
 
 def _wrap(s: str, max_w: int) -> list[str]:
@@ -149,13 +179,20 @@ def _tone_color(p: dict, tone: str) -> str:
     """阵营配色：我方暖（朱红）/ 敌方冷（斗气蓝）/ 丹药药青 / 无伤害事件灰。"""
     if tone == "mine":
         return p["title_color"]
-    if tone == "foe":
+    if tone in ("foe", "mp"):   # 斗气条与敌方同属冷色系（蓝），语义一致
         return p["mp_to"]
     if tone == "pill":
         return p["pill_text"]
     if tone == "dim":
         return p["dim_color"]
     return p["accent_color"]
+
+
+def _resource_grad(p: dict, tone: str) -> tuple[str, str]:
+    """资源条渐变：气血红、斗气蓝。敌我气血同色，靠左侧标签区分（不靠颜色猜）。"""
+    if tone == "mp":
+        return p["mp_from"], p["mp_to"]
+    return p["hp_from"], p["hp_to"]
 
 
 def _tone_grad(p: dict, tone: str) -> tuple[str, str]:
@@ -181,25 +218,37 @@ def _bubble_plan(rounds: list[dict], content_w: int) -> list[dict]:
                 room = max(24, col_w - val_w - 8)
                 mv = _fit(_gs(a.get("move"), "出手"), room, FS_BODY, "regular")
                 tags = _fit(_gs(a.get("tags"), ""), col_w, S.FS_LABEL, "regular")
-                rh = LINE_H + (BUBBLE_TAG_H if tags else 0) + BUBBLE_ROW_GAP
+                # 伤害构成可能放不下（「面板 3,100 · 防御 -520 · 技能 -386」≈262px）：
+                # 按真实列宽折行，不截断 —— 截掉「技能 -386」等于把用户要看的稀释量切了
+                comp_lines = S.wrap_cjk(_gs(a.get("comp"), ""), S.FS_LABEL,
+                                        "regular", col_w) if a.get("comp") else []
+                comp_lines = [ln for ln in comp_lines if ln][:2]
+                rh = (LINE_H + (BUBBLE_COMP_H * len(comp_lines))
+                      + (BUBBLE_TAG_H if tags else 0) + BUBBLE_ROW_GAP)
                 entries.append({"move": mv, "value": val, "tags": tags,
+                                "comp": comp_lines,
                                 "tone": _gs(a.get("tone"), "mine"), "h": rh})
             if not entries:
                 # 空列（敌人已死 / 本回合真没动作）给一个淡色占位，
                 # 否则气泡半边纯空白，玩家以为卡坏了（2026-11-19 实拍反馈）。
                 entries = [{"move": "无动作", "value": "", "tags": "",
                             "tone": "dim", "h": LINE_H + BUBBLE_ROW_GAP,
-                            "placeholder": True}]
+                            "comp": [], "placeholder": True}]
             sides[key] = entries
         col_h = max(
             sum(e["h"] for e in sides["mine"]),
             sum(e["h"] for e in sides["foe"]),
             BUBBLE_ROW_GAP + 8,   # 空列也保留一行高度，气泡不会一边塌掉
         )
+        sum_text = _gs(r.get("sum_text"), "")
+        foot_l = _gs(r.get("foot_l"), "")
+        foot_r = _gs(r.get("foot_r"), "")
+        foot_h = BUBBLE_FOOT_H if (foot_l or foot_r) else 0
         plan.append({"round": _gi(r.get("round")), "sides": sides,
+                     "sum_text": sum_text, "foot_l": foot_l, "foot_r": foot_r,
                      "col_w": col_w, "col_h": col_h,
                      "h": BUBBLE_PAD + BUBBLE_HEADER_H + BUBBLE_SIDE_H
-                          + col_h + BUBBLE_PAD})
+                          + col_h + foot_h + BUBBLE_PAD})
     return plan
 
 
@@ -236,6 +285,14 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
     v = data.get("verdict") or {}
     if v:
         blocks.append(("verdict", v, H_VERDICT + VERDICT_GAP))
+
+    # 终局资源条紧跟胜负徽标：先回答「为什么输」，再谈打得多狠。
+    # 旧档（无 end_reason）end 为 {}，整块不出现。
+    end = data.get("end") or {}
+    end_rows = [r for r in (end.get("rows") or []) if isinstance(r, dict)]
+    if end_rows:
+        blocks.append(_cap("终局"))
+        blocks.append(("end", end_rows, END_ROW * len(end_rows) + END_AFTER))
 
     kpis = [k for k in (data.get("kpis") or []) if isinstance(k, dict)]
     if kpis:
@@ -307,15 +364,60 @@ def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
     c.text((tx, y + 44), sub, size=FS_BODY, color=p["dim_color"],
            role="regular", anchor="lm")
     rec("vsub", sub, tx, y + 44, FS_BODY)
-    if v.get("exhausted"):
-        # 300 回合熔断判胜必须显式标注，不能冒充正常取胜
-        ex = "力竭判胜"
+    if v.get("exhausted") or v.get("end_text"):
+        # 收场原因必须写在徽标旁：「气血耗尽」「力竭判负」「击杀对手」。
+        # 力竭熔断（300 回合脏数据）不许冒充正常取胜，也走这一行。
+        ex = _gs(v.get("end_text"), "") or "力竭判胜"
         ex_w = _w(ex, FS_BODY, "regular")
         sx = x0 + content_w - ex_w
         if sx > tx + _w(sub, FS_BODY, "regular") + 10:
-            c.text((sx, y + 44), ex, size=FS_BODY, color=p["accent_color"],
+            # 败因用冷色（同敌方），胜因用暗金：颜色本身也在讲结果
+            c.text((sx, y + 44), ex, size=FS_BODY,
+                   color=(p["mp_to"] if not win else p["accent_color"]),
                    role="regular", anchor="lm")
             rec("vex", ex, sx, y + 44, FS_BODY)
+
+
+def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
+              p: dict, rec) -> None:
+    """终局资源条：一条一行「标签 ▸ 按真实比例长的条 ▸ 数值/上限」。
+
+    气血归零那条只会剩一条空轨道 —— 这就是「为什么判负」的图形答案，
+    比任何一句「气血耗尽」都直接。``max<=0``（没有分母）时只印数字不画条。
+    """
+    bar_x0 = x0 + END_LABEL_W
+    bar_x1 = x0 + content_w - END_VAL_W
+    track_w = max(60, bar_x1 - bar_x0)
+    for i, r in enumerate(rows):
+        ry = y + i * END_ROW
+        tone = _gs(r.get("tone"), "mine")
+        lab = _fit(_gs(r.get("label"), "—"), END_LABEL_W - 10, FS_BODY, "regular")
+        c.text((x0, ry + 12), lab, size=FS_BODY, color=p["dim_color"],
+               role="regular", anchor="lm")
+        rec("n%d_l" % i, lab, x0, ry + 12, FS_BODY)
+
+        val = _gi(r.get("value"))
+        mx = _gi(r.get("max"))
+        if mx > 0:
+            c.rounded_rect((bar_x0, ry + 6, bar_x0 + track_w, ry + 18), radius=6,
+                           fill=p["track_color"])
+            ratio = max(0.0, min(1.0, val / float(mx)))
+            fw = int(track_w * ratio)
+            if val > 0:
+                fw = max(6, fw)   # 还有血就得看得见，别缩成一根头发
+            if fw > 0:
+                g1, g2 = _resource_grad(p, tone)
+                c.gradient_rect((bar_x0, ry + 6, bar_x0 + fw, ry + 18),
+                                g1, g2, radius=6)
+            # 条宽写进盒名（n{i}_bar{px}）：几何自检只认矩形，认不出「0 血却画满条」，
+            # 门禁靠这个名字断言「归零的空条真的是空条」。
+            rec("n%d_bar%d" % (i, fw), "", bar_x0, ry + 6, 12, anchor="la")
+            txt = "%s / %s" % (_mn(val), _mn(mx))
+        else:
+            txt = _mn(val)
+        c.text((x0 + content_w, ry + 12), txt, size=FS_BODY,
+               color=p["text_color"], role="regular", anchor="rm")
+        rec("n%d_v" % i, txt, x0 + content_w - _w(txt, FS_BODY), ry + 12, FS_BODY)
 
 
 def _draw_kpi(c: Canvas, kpis: list, x0: int, y: int, content_w: int,
@@ -471,9 +573,16 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                role="regular", anchor="lm")
         rec("r%d_h" % ri, head_txt, hx, hy, FS_GROUP)
         line_x = hx + _w(head_txt, FS_GROUP, "regular") + 10
-        if line_x < x0 + content_w - BUBBLE_PAD - 8:
-            c.line((line_x, hy, x0 + content_w - BUBBLE_PAD, hy),
-                   fill=p["line_color"], width=1)
+        line_r = x0 + content_w - BUBBLE_PAD
+        # 回合战损摘要放抬头右侧：本回合挨了多少、打掉对方多少（零额外高度）
+        if b["sum_text"]:
+            s = _fit(b["sum_text"], line_r - line_x - 12, S.FS_LABEL, "regular")
+            c.text((line_r, hy), s, size=S.FS_LABEL, color=p["dim_color"],
+                   role="regular", anchor="rm")
+            rec("r%d_sum" % ri, s, line_r - _w(s, S.FS_LABEL), hy, S.FS_LABEL)
+            line_r -= _w(s, S.FS_LABEL) + 12
+        if line_x < line_r - 8:
+            c.line((line_x, hy, line_r, hy), fill=p["line_color"], width=1)
 
         col_w = b["col_w"]
         col_x = {
@@ -510,12 +619,36 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                        anchor="rm")
                 rec("r%d_%s%d_v" % (ri, key, ei), e["value"], right - vw, cy,
                     FS_NUM, role="bold")
+                # 伤害构成行：面板 → 防御削减 → 技能吸收。实收就是右侧那个大数字，
+                # 不重复印（重复=噪声），没有削减时计划里根本没有这一行。
+                ny = ey + LINE_H
+                for li, ln in enumerate(e.get("comp") or []):
+                    c.text((cx, ny + BUBBLE_COMP_H // 2), ln, size=S.FS_LABEL,
+                           color=p["dim_color"], role="regular", anchor="lm")
+                    rec("r%d_%s%d_c%d" % (ri, key, ei, li), ln, cx,
+                        ny + BUBBLE_COMP_H // 2, S.FS_LABEL)
+                    ny += BUBBLE_COMP_H
                 if e["tags"]:
-                    ty = ey + LINE_H + BUBBLE_TAG_H // 2
+                    ty = ny + BUBBLE_TAG_H // 2
                     c.text((cx, ty), e["tags"], size=S.FS_LABEL,
                            color=p["dim_color"], role="regular", anchor="lm")
                     rec("r%d_%s%d_t" % (ri, key, ei), e["tags"], cx, ty, S.FS_LABEL)
                 ey += e["h"]
+
+        # 气泡底部：回合末余量。左「余血/余气」右「敌血」，两端锚定便于竖扫
+        if b["foot_l"] or b["foot_r"]:
+            fy = by + bh - BUBBLE_PAD - BUBBLE_FOOT_H // 2
+            if b["foot_l"]:
+                c.text((x0 + BUBBLE_PAD, fy), b["foot_l"], size=S.FS_LABEL,
+                       color=p["dim_color"], role="regular", anchor="lm")
+                rec("r%d_fl" % ri, b["foot_l"], x0 + BUBBLE_PAD, fy, S.FS_LABEL)
+            if b["foot_r"]:
+                c.text((x0 + content_w - BUBBLE_PAD, fy), b["foot_r"],
+                       size=S.FS_LABEL, color=_tone_color(p, "foe"),
+                       role="regular", anchor="rm")
+                rec("r%d_fr" % ri, b["foot_r"],
+                    x0 + content_w - BUBBLE_PAD - _w(b["foot_r"], S.FS_LABEL),
+                    fy, S.FS_LABEL)
 
 
 def _sword_glyph(c: Canvas, cx: int, cy: int, color: str) -> None:
@@ -587,6 +720,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     for bi, (kind, payload, bh) in enumerate(blocks):
         if kind == "verdict":
             _draw_verdict(c, payload, x0, y, content_w, p, rec)
+        elif kind == "end":
+            _draw_end(c, payload, x0, y, content_w, p, rec)
         elif kind == "kpi":
             _draw_kpi(c, payload, x0, y, content_w, p, rec)
         elif kind == "bars":
