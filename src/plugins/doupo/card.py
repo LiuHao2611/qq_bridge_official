@@ -199,6 +199,41 @@ async def render_menu() -> bytes | None:
 # 斗技自 2026-11-14 起走 doupo_skills 专用模板（描述/伤害/五段条/重点大字），
 # 不再与上面四张共用 doupo_list。
 # ---------------------------------------------------------------------------
+async def _render_pages(template: str, data: dict, card_name: str) -> list[bytes]:
+    """渲染可分成多页的卡（战斗回看）：返回每页 PNG；失败返回 ``[]`` 走纯文本。
+
+    切页是模板的事（``pic.split_pages`` 调模板自己的测量函数），本层只负责
+    逐页渲染。**任一一页失败就整份降级**——只发前两页会把后排回合吞掉，
+    比回到纯文本更糟（纯文本至少有完整逐招）。
+    """
+    pic = _load_pic()
+    if pic is None:
+        return []
+    try:
+        pages = pic.split_pages(template, data, width=CARD_WIDTH)
+    except Exception as e:  # noqa: BLE001
+        log.warning("%s 分页失败（整份降级纯文本）：%s: %s", card_name, type(e).__name__, e)
+        return []
+    out: list[bytes] = []
+    for i, page_data in enumerate(pages, 1):
+        try:
+            out.append(await pic.render(template, card=card_name,
+                                        width=CARD_WIDTH, data=page_data))
+            continue
+        except Exception as e:  # noqa: BLE001
+            log.debug("%s 第 %d 页主题链路失败，试内置 light：%s", card_name, i, e)
+        try:
+            out.append(await asyncio.to_thread(
+                pic.render_sync, template, "light", card_name,
+                width=CARD_WIDTH, data=page_data))
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s 第 %d/%d 页渲染失败（整份降级纯文本）：%s: %s",
+                        card_name, i, len(pages), type(e).__name__, e)
+            return []
+    log.info("%s 出图 %d 页", card_name, len(out))
+    return out
+
+
 async def _render_list(template: str, data: dict, card_name: str) -> bytes | None:
     """渲染任意斗破列表卡：主题链路 → 内置 light 兜底 → None（调用方回纯文本）。"""
     pic = _load_pic()
@@ -740,9 +775,14 @@ def build_battle_data(last_battle: dict) -> dict:
     return br.build_data(last_battle or {})
 
 
-async def render_battle(last_battle: dict) -> bytes | None:
-    """「战斗回看」出图：完整逐招过程卡，按钮「战斗评价」由 card_key 派生。"""
-    return await _render_list("doupo_battle", build_battle_data(last_battle),
+async def render_battle(last_battle: dict) -> list[bytes]:
+    """「战斗回看」出图：返回**每页** PNG（短战报就一页，长战报按回合分页）。
+
+    分页口径见 ``pic.templates.doupo_battle.split_pages``：切点只在回合边界，
+    首页保留结算区，续页只留胜负徽标 + 逐招明细（顶部印「第 x/N 页 · 回合 a-b」）。
+    出图失败返回 ``[]``，调用方回纯文本兜底（完整逐招不丢）。
+    """
+    return await _render_pages("doupo_battle", build_battle_data(last_battle),
                               CARD_BATTLE_NAME)
 
 

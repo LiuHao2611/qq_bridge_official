@@ -291,15 +291,17 @@ async def _(event: Event):
     msg = await commands.cmd_battle_review(store, uid)
     p = await store.get_player(uid)
     last = p.get("last_battle") if p else None
-    png = None
+    pages: list[bytes] = []
     if isinstance(last, dict) and last.get("log"):
         try:
-            png = await card.render_battle(last)
+            pages = await card.render_battle(last)
         except Exception as e:  # noqa: BLE001 — 出图异常必须有文本兜底，不许静默
             logger.warning("战斗回看卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
-    if png:
+    if pages:
         # card_key="battle" → 官方通道同条消息挂「战斗评价」按钮，绝不分离发送。
-        await finish_card(battle_review_cmd, event, png, "battle", "doupo_battle.png")
+        # 超长战报（26 回合 ≈5,200px）由模板按回合切页，多页仍是**一条**消息
+        # （官方 markdown 内嵌多图 / NapCat 多图片段），不是「文字+卡」两条。
+        await finish_card(battle_review_cmd, event, pages, "battle", "doupo_battle.png")
         return
     await finish_text(battle_review_cmd, event, msg)
 

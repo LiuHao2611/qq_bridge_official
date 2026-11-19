@@ -265,6 +265,128 @@ def _layout(data: dict, content_w: int) -> tuple[list[tuple], int]:
     return blocks, sum(bh for _, _, bh in blocks)
 
 
+# ---------------------------------------------------------------- 分页
+#: 单页最大图高（px）。2026-11-19 用户「超长就分页」：26 回合的完整战报约
+#: 5,200px，手机上要滑好几屏才看得完；超过本高度就按**回合边界**切页。
+#: 2,600 让常见 6~8 回合战报仍然单页（不打扰），长战报才分。
+PAGE_MAX_H = 2600
+#: 最多几页。一条消息内多图是 markdown 内嵌（每条一个素材上传），页数过多拖慢
+#: 发送；超出上限时把剩余回合并入末页 —— 宁可末页高，绝不丢回合。
+MAX_PAGES = 5
+
+#: 卡片上下固定开销（标题行 + 分隔线 + 底部提示行 + 内边距），与 build() 同式。
+CHROME_H = PAD + FS_TITLE + 8 + 1 + 18 + 12 + FS_BODY + PAD
+#: 页副标题行高（多页时才有）。
+SUB_H = FS_BODY + 8
+#: 续页固定内容只有「胜负徽标 + 逐招明细标题」——玩家翻页仍知道打的是谁、什么结果。
+CONT_FIXED_H = H_VERDICT + VERDICT_GAP + CAP_BEFORE + FS_GROUP + CAP_AFTER
+
+
+def card_height(data: dict, content_w: int) -> float:
+    """一张卡成品的真实高度（与 :func:`build` 的 ``h`` 同式）。
+
+    分页切点、门禁「每页都不超预算」、实拍核对都读这一个函数，
+    绝不在别处按「回合数 × 估计值」拍脑袋。
+    """
+    _blocks, bh = _layout(data, content_w)
+    sub_h = SUB_H if str(data.get("subtitle") or "") else 0
+    return CHROME_H + sub_h + bh
+
+
+def split_pages(data: dict, width: int | None = None,
+                max_h: int = PAGE_MAX_H, max_pages: int = MAX_PAGES) -> list[dict]:
+    """按实测高度把回看卡切成多页；装得下就原样返回 ``[data]``（短战报零变化）。
+
+    * 切点只在**回合边界**：一回合的气泡绝不被劈成两半；
+    * 首页保留终局/输出对比/关键节点/战况，续页只留胜负徽标 + 逐招明细；
+    * 每页写 ``page``（index/total/from/to，供门禁与审计）和 ``subtitle``
+      （顶部直接印「第 2/3 页 · 回合 9-16」，翻到哪页一眼看得出来）；
+    * 单回合气泡高过预算时也必须整块放进某页（丢回合比页高更糟）。
+    """
+    rounds = [r for r in (data.get("rounds") or []) if isinstance(r, dict)]
+    if len(rounds) < 2:
+        return [data]
+    width = max(560, min(int(width or 720), 900))
+    content_w = width - PAD * 2
+    if card_height(data, content_w) <= max_h:
+        return [data]
+
+    plan = _bubble_plan(rounds, content_w)
+    _blocks, bh = _layout(data, content_w)
+    rounds_h = sum(b["h"] for b in plan) + BUBBLE_GAP * (len(plan) - 1)
+    first_cap = max_h - CHROME_H - SUB_H - (bh - rounds_h)
+    cont_cap = max_h - CHROME_H - SUB_H - CONT_FIXED_H
+
+    def _caps(k: int) -> list[float]:
+        return [first_cap] + [cont_cap] * max(0, k - 1)
+
+    def _pack(caps: list[float], scale: float = 1.0) -> list[tuple[int, int]]:
+        """按容量贪心装页；``caps`` 按页序取（超出末项就沿用末项）。"""
+        out_: list[tuple[int, int]] = []
+        i = 0
+        while i < len(plan):
+            cap = caps[min(len(out_), len(caps) - 1)] * scale
+            cap = max(cap, plan[i]["h"])   # 单气泡超预算：整块给它，绝不丢回合
+            used, take = 0.0, 0
+            while i + take < len(plan):
+                cost = plan[i + take]["h"] + (BUBBLE_GAP if take else 0)
+                if take and used + cost > cap:
+                    break
+                used += cost
+                take += 1
+            out_.append((i, i + take))
+            i += take
+        return out_
+
+    slices = _pack(_caps(len(plan) + 1))
+    capped = False
+    if len(slices) > 1:
+        # 页数能减就减（少一张图少一次素材上传）；减不动时**均匀填充**：
+        # 贪心会把末页剩成「只有一回合」的半空卡（实拍 26 回合 → 2557/2539/443）。
+        # 二分找「还能装进 k 页的最小容量」，等价于把总高均摊到 k 页。
+        k = len(slices)
+        total_h = rounds_h
+        while k - 1 >= 1 and total_h <= sum(_caps(k - 1)):
+            k -= 1
+        lo, hi = 0.2, 1.0
+        for _ in range(24):
+            mid = (lo + hi) / 2
+            if len(_pack(_caps(k), mid)) <= k:
+                hi = mid
+            else:
+                lo = mid
+        balanced = _pack(_caps(k), hi)
+        if len(balanced) == k:
+            slices = balanced
+
+    if len(slices) > max_pages:
+        # 页数封顶后**按回合均分**（不是把尾巴全丢进末页 —— 实拍会变成 39,937px 的巨图）。
+        # 只有 300 回合熔断这种脏数据才会走到这里：每页都会超出单页预算，
+        # 用 page["capped"] 明示「这是上限妥协」，门禁据此放行高度、但仍卡「不丢回合」。
+        capped = True
+        per = (len(plan) + max_pages - 1) // max_pages
+        slices = [(i, min(i + per, len(plan))) for i in range(0, len(plan), per)]
+
+    total = len(slices)
+    out: list[dict] = []
+    for n, (a, b) in enumerate(slices, 1):
+        seg = rounds[a:b]
+        page = dict(data)
+        page["rounds"] = seg
+        page["page"] = {"index": n, "total": total,
+                        "from": _gi(seg[0].get("round")),
+                        "to": _gi(seg[-1].get("round")),
+                        "capped": capped}
+        page["subtitle"] = "第 %d/%d 页 · 回合 %d-%d" % (
+            n, total, page["page"]["from"], page["page"]["to"])
+        if n > 1:
+            # 续页只讲「接着打的那几回合」：结算区已在前一页，重复印反而更长。
+            for k in ("end", "kpis", "bars", "beats", "groups", "actions"):
+                page.pop(k, None)
+        out.append(page)
+    return out
+
+
 def _legacy_layout(data: dict, content_w: int) -> list[tuple]:
     """旧骨架（doupo_ruin 等复用方）：分组 + 折行，逐字节保持原样。"""
     text_w = content_w - BULLET_INDENT
@@ -386,8 +508,6 @@ def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
     比任何一句「气血耗尽」都直接。``max<=0``（没有分母）时只印数字不画条。
     """
     bar_x0 = x0 + END_LABEL_W
-    bar_x1 = x0 + content_w - END_VAL_W
-    track_w = max(60, bar_x1 - bar_x0)
     for i, r in enumerate(rows):
         ry = y + i * END_ROW
         tone = _gs(r.get("tone"), "mine")
@@ -398,6 +518,13 @@ def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
 
         val = _gi(r.get("value"))
         mx = _gi(r.get("max"))
+        txt = ("%s / %s" % (_mn(val), _mn(mx))) if mx > 0 else _mn(val)
+        # 轨道右端按**本行数值实测宽度**让位：高等级战斗的敌血/上限能到 7~9 位数
+        # （「999,814,075 / 1,000,000,000」≈ 200px > END_VAL_W），固定 150px 会让
+        # 数字压在条上（实拍抓到）。数值本身绝不截断，改缩条。
+        txt_w = _w(txt, FS_BODY, "regular")
+        bar_x1 = x0 + content_w - max(END_VAL_W, txt_w + 8)
+        track_w = max(60, bar_x1 - bar_x0)
         if mx > 0:
             c.rounded_rect((bar_x0, ry + 6, bar_x0 + track_w, ry + 18), radius=6,
                            fill=p["track_color"])
@@ -412,12 +539,9 @@ def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
             # 条宽写进盒名（n{i}_bar{px}）：几何自检只认矩形，认不出「0 血却画满条」，
             # 门禁靠这个名字断言「归零的空条真的是空条」。
             rec("n%d_bar%d" % (i, fw), "", bar_x0, ry + 6, 12, anchor="la")
-            txt = "%s / %s" % (_mn(val), _mn(mx))
-        else:
-            txt = _mn(val)
         c.text((x0 + content_w, ry + 12), txt, size=FS_BODY,
                color=p["text_color"], role="regular", anchor="rm")
-        rec("n%d_v" % i, txt, x0 + content_w - _w(txt, FS_BODY), ry + 12, FS_BODY)
+        rec("n%d_v" % i, txt, x0 + content_w - txt_w, ry + 12, FS_BODY)
 
 
 def _draw_kpi(c: Canvas, kpis: list, x0: int, y: int, content_w: int,

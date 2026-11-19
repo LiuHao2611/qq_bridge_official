@@ -841,6 +841,147 @@ def test_battle_review_text_after_roundtrip():
     check("落盘后能回看完整过程", "【逐招明细】" in out and "回合" in out, out[:100])
 
 
+# ---------------------------------------------------------------------------
+# 超长战报分页（2026-11-19 用户「超长就分页」）
+# ---------------------------------------------------------------------------
+def _tpl():
+    """取 pic 独立包里的回看模板（与 card._load_pic 同一份，绝不二次加载）。"""
+    pic = card._load_pic()
+    if pic is None:
+        return None, None
+    return pic, importlib.import_module(pic.__name__ + ".templates.doupo_battle")
+
+
+def _tank_battle(cap: int) -> dict:
+    """造一场「打不死」的拉锯战：必走 HARD_ROUND_CAP 熔断，正好 cap 个回合。
+
+    ``mon["hp"]=1e9`` 保证打不完、``atk=1`` 保证玩家不被秒，回合数由熔断决定
+    —— 分页要验的是「回合多」这一件事，不依赖随机伤害。
+    """
+    old = cfg.HARD_ROUND_CAP
+    try:
+        cfg.HARD_ROUND_CAP = int(cap)
+        p = _player("qp")
+        p["lv"] = 40
+        p["hp"] = int(core.stats(p)["体力"])
+        p["bonus"] = {"防御": 20000}
+        mon = core.monster_scaled(p, cfg.MONSTERS[0])
+        mon["hp"] = 10 ** 9
+        mon["atk"] = 1
+        mon["def"] = 0
+        res = core.fight(p, mon, rng=lambda: 0.5)
+        return core.record_last_battle(p, "遭遇", res, opponent=str(mon["name"]))
+    finally:
+        cfg.HARD_ROUND_CAP = old
+
+
+def test_long_battle_splits_into_pages():
+    """26 回合长战报：按回合切页，页间不重不漏，每页渲染 0 违规。"""
+    pic, tpl = _tpl()
+    check("pic/模板可加载（分页自检）", pic is not None and tpl is not None)
+    if pic is None or tpl is None:
+        return
+    data = card.build_battle_data(_tank_battle(26))
+    rounds = data["rounds"]
+    pages = pic.split_pages("doupo_battle", data, width=card.CARD_WIDTH)
+    check("26 回合必须分页", len(pages) >= 2, f"pages={len(pages)}")
+    check("总高超过单页预算（前提成立）",
+          tpl.card_height(data, card.CARD_WIDTH - 2 * tpl.PAD) > tpl.PAGE_MAX_H,
+          f"h={tpl.card_height(data, card.CARD_WIDTH - 2 * tpl.PAD):.0f}")
+
+    got = [r["round"] for pg in pages for r in pg["rounds"]]
+    check("回合不重不漏且顺序不变",
+          got == [r["round"] for r in rounds], f"{got[:3]}…{got[-3:]} n={len(got)}")
+    check("每页页码/总数正确",
+          [pg["page"]["index"] for pg in pages] == list(range(1, len(pages) + 1))
+          and all(pg["page"]["total"] == len(pages) for pg in pages),
+          str([pg.get("page") for pg in pages]))
+    check("页副标题写「第 x/N 页 · 回合 a-b」",
+          all(("第 %d/%d 页" % (pg["page"]["index"], len(pages))) in pg["subtitle"]
+              and ("回合 %d-%d" % (pg["page"]["from"], pg["page"]["to"])) in pg["subtitle"]
+              for pg in pages), str([pg["subtitle"] for pg in pages]))
+    check("首页仍带结算区（终局/输出/节点）",
+          bool(pages[0].get("end")) and bool(pages[0].get("kpis"))
+          and bool(pages[0].get("bars")),
+          str(sorted(pages[0].keys())))
+    check("续页不重复结算区（只讲这一页的回合）",
+          all(not pg.get("end") and not pg.get("bars") for pg in pages[1:]), "续页仍有终局条")
+    check("每页都有 tip（不靠上一页提示）", all(pg.get("tip") for pg in pages), "丢 tip")
+    for i, pg in enumerate(pages, 1):
+        h = tpl.card_height(pg, card.CARD_WIDTH - 2 * tpl.PAD)
+        check("第 %d/%d 页高度守预算" % (i, len(pages)), h <= tpl.PAGE_MAX_H + 0.5,
+              f"{h:.0f} > {tpl.PAGE_MAX_H}")
+        boxes = []
+        png = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                              width=card.CARD_WIDTH, data=pg, boxes=boxes)
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        texts = [b for b in boxes if "_bar" not in b[0]]
+        problems = _check_boxes((12, 12, img.width - 12, img.height - 12), texts)
+        check("第 %d/%d 页几何 0 违规" % (i, len(pages)), not problems, str(problems[:3]))
+        heads = [b for b in texts if b[0].endswith("_h")]
+        check("第 %d/%d 页气泡数 = 该页回合数" % (i, len(pages)),
+              len(heads) == len(pg["rounds"]), f"boxes={len(heads)} rounds={len(pg['rounds'])}")
+
+
+def test_short_battle_stays_single_page():
+    """短战报（8 回合）不许被分页：渲染字节与不分页完全一致。"""
+    pic, tpl = _tpl()
+    if pic is None or tpl is None:
+        check("pic 可加载（短战报分页）", False)
+        return
+    data = card.build_battle_data(_sample_battle())
+    pages = pic.split_pages("doupo_battle", data, width=card.CARD_WIDTH)
+    check("短战报仍是一页", len(pages) == 1, f"pages={len(pages)}")
+    check("单页不加 page/subtitle（逐字节不变）",
+          "page" not in pages[0] and not pages[0].get("subtitle"),
+          str(sorted(pages[0].keys())))
+    png_a = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                            width=card.CARD_WIDTH, data=data)
+    png_b = pic.render_sync("doupo_battle", "light", card.CARD_BATTLE_NAME,
+                            width=card.CARD_WIDTH, data=pages[0])
+    check("单页渲染与分页入口产物逐字节相同", png_a == png_b,
+          f"{len(png_a)} vs {len(png_b)}")
+
+
+def test_page_cap_never_drops_rounds():
+    """300 回合脏数据：页数封顶 5，但一回合都不许丢（capped 明示超高是妥协）。"""
+    pic, tpl = _tpl()
+    if pic is None or tpl is None:
+        check("pic 可加载（页数封顶）", False)
+        return
+    data = card.build_battle_data(_tank_battle(300))
+    pages = pic.split_pages("doupo_battle", data, width=card.CARD_WIDTH)
+    check("页数封顶 = MAX_PAGES", len(pages) == tpl.MAX_PAGES, f"pages={len(pages)}")
+    got = [r["round"] for pg in pages for r in pg["rounds"]]
+    check("封顶后回合仍然不丢",
+          got == [r["round"] for r in data["rounds"]], f"n={len(got)}")
+    check("封顶页明确标记 capped（门禁据此放行页高）",
+          all(pg["page"].get("capped") for pg in pages), str(pages[0]["page"]))
+    counts = [len(pg["rounds"]) for pg in pages]
+    per = (len(data["rounds"]) + tpl.MAX_PAGES - 1) // tpl.MAX_PAGES
+    check("封顶时按回合均分（不许把尾巴全堆在末页）",
+          max(counts) <= 2 * per, f"{counts} per={per}")
+
+
+def test_finish_card_wiring_accepts_pages():
+    """接线门禁：多页必须仍走「一条消息」——官方内嵌多图 / NapCat 多图片段。"""
+    src = open(os.path.join(ROOT, "src", "game_compat.py"), encoding="utf-8").read()
+    check("send_card_via_channel 接受多图列表",
+          "images = [d for d in (data if isinstance(data, (list, tuple)) else [data]) if d]"
+          in src, "多图归一化丢了")
+    check("官方通道仍用 Outgoing(images=images) 一条消息",
+          "Outgoing(images=images, keyboard_cmd=kcmd)" in src, "退回单图发送")
+    check("NapCat 多页走多图片段 finish(*segs)",
+          "await matcher.finish(*segs)" in src, "NapCat 只发第一页")
+    check("NapCat 正常分支与降级分支都发全部页（两处）",
+          src.count("await matcher.finish(*segs)") == 2, "有一处只发了第一页")
+    import inspect
+    from src.game_compat import finish_card
+    check("finish_card 签名声明支持 list[bytes]",
+          "list[bytes]" in str(inspect.signature(finish_card)), "签名未提多页")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
