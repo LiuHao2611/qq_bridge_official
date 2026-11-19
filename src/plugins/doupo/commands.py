@@ -37,63 +37,16 @@ from .puppet_store import PUPPET_STORE as DEFAULT_PUPPET_STORE
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
 
-def _warn(msg: str) -> None:
-    """降级日志：优先 nonebot.log，裸跑测试退回 stdlib（与 store._log 同口径）。
-
-    本模块坚持「零 nonebot 依赖」，这里延迟导入并 try/except，只为「调息结算
-    失败」这类不该拦命令、又不许静默的事故留痕。
-    """
-    try:
-        from nonebot.log import logger as _lg
-    except Exception:  # noqa: BLE001
-        import logging
-
-        _lg = logging.getLogger("doupo")
-    _lg.warning(msg)
-
-
-#: 最近一次调息的实际恢复量（旁路缓存，**绝不写进 p**）。
-#: p 是 store 里的活字典，任何临时字段都会被 put_player 序列化进 players.data，
-#: 污染存档（最高声明：玩家数据只走真实列）。
-_LAST_REGEN: dict[str, dict] = {}
-
-
-async def _regen_tick(store, qq, p) -> None:
-    """按 ``regen_clock`` 里的时间基准结算一次自动调息（气血/斗气）。
-
-    2026-11-19 用户「给斗气和血量加上自动恢复」的落点：所有读玩家存档的口令都
-    走 ``_player``，在这里结算一次即可，不用在每个 cmd_* 里各写一遍。
-
-    三条硬约束（都是真实踩过的坑）：
-      * **首次见到只落基准**（``last_at`` 为空）：老档迁移不能凭空补回几小时血。
-      * **只推进整 tick**：余数留在时间戳里，否则每次命令都重新计时，永远不恢复。
-      * **只在真的回血/回气时落盘**：满状态时更新时间戳但不写 players，
-        避免「看一眼面板就写一次库」。
-    """
-    now = time.time()
-    last = await store.regen_last(str(qq))
-    if last <= 0:
-        await store.set_regen_last(str(qq), now)
-        return
-    res = core.regen(p, now - last)
-    if not res["consumed"]:
-        return
-    await store.set_regen_last(str(qq), last + float(res["consumed"]))
-    if res["touched"]:
-        _LAST_REGEN[str(qq)] = res
-        await store.put_player(p)
+#: 调息恢复量的旁路缓存（唯一源在 store，见其中 `REGEN_NOTICE` 的注释）。
+#: 2026-11-19 事故后从 commands 层**下沉到 Store.get_player()**：按钮点击、
+#: 人物卡/战报渲染等入口直接读 store，绕过 _player，导致点一上午都不恢复。
+#: 这里只保留一个别名，给人物卡面板的 `_regen_line()` 读。
+from .store import REGEN_NOTICE as _LAST_REGEN  # noqa: E402
 
 
 async def _player(store, qq):
-    p = await store.get_player(str(qq))
-    if p is None:
-        return None
-    try:
-        await _regen_tick(store, qq, p)
-    except Exception as e:  # noqa: BLE001
-        # 调息是附加能力，失败不许拦任何口令；但必须留痕，不能静默当没事。
-        _warn("调息结算失败（%s）：%s" % (type(e).__name__, str(e)[:160]))
-    return p
+    # 调息已在 Store.get_player() 里统一结算，本函数不再重复（重复会吞掉余数）。
+    return await store.get_player(str(qq))
 
 
 def _bar(cur: int, mx: int, width: int = 10) -> str:

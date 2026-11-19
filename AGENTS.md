@@ -2789,3 +2789,53 @@ INSTRUCT 原来「第一段结论 + 分点」，模型就回 `## 权重分级` +
   生产库 `doupo.sqlite` 已自动建 `regen_clock`（0 行，等第一条命令写基准）。
 * 实机演练（`tmp/verify_round2.py`，输出见对话）：离线 15 分钟 5 tick → 气血 +3360、
   斗气 +1980；同层三战力怪数值完全一致；普通掉 1 件 / 精英与 Boss 掉 2 件。
+
+## 变更记录 · 2026-11-19 10:4x　调息挂错层级：按钮玩家永远看不到恢复
+
+用户原话：「我看我的斗气和血量没有自动恢复呢，怎么回事」。
+
+### 一、现场证据（先查后修，没靠猜）
+* 生产库 `regen_clock` 只有 1 行，且 `last_at` 是 44 分钟前 —— 一上午只触发过一次结算。
+* 该玩家仍是残血：lv30、气血 7282/10403（70%）、斗气 635/5286（12%）。
+* 日志里没有 `调息结算失败`、没有 traceback —— 不是报错，是**根本没被调用**。
+
+### 二、根因：挂载点是命令层的 `_player`，而按钮不走它
+`commands._player()` 只有文本口令用；`__init__.py` 有 10 处、`button_dispatch.py`
+有 2 处直接 `await store.get_player()`：按钮点击、人物卡渲染、战斗回看卡、炼药卡
+翻页……全是绕过。用户日常点卡片，自然看不到恢复。
+
+上一轮「挂载点唯一：commands._player（43 处命令共用）」的说法**只对文本口令成立**，
+这是当时没查全入口就下的结论。
+
+### 三、修法：下沉到 `Store.get_player()`（唯一的底层收敛点）
+* `get_player()` 取到玩家后统一 `await self._maybe_regen(key, p)` —— 口令、按钮、
+  卡片渲染条条生效。
+* `_maybe_regen()`：
+  * `last<=0` 首次只落基准（老档不补历史）；
+  * 用 `core.regen(p, now-last)`，**只推进整 tick**，余数留在时间戳；
+  * 满状态吃时间不攒 tick；
+  * 失败只 `_log("warning", ...)`，不拦任何读取；
+  * 延迟 `importlib.import_module(__package__ + ".core")`：core 不依赖 store 无环，
+    且不能写 `from . import store` —— `__init__.py` 把包属性 `store` 盖成了
+    `STORE` 实例（2026-11-18 按钮事故同源）。
+* ⚠️ **必须出锁再调**：原 `get_player` 是 `async with self._lock: return ...`。
+  现在改成锁内取值、出锁后再 `_maybe_regen`——后者要拿同一把锁写 regen_clock
+  与 put_player，asyncio.Lock 不可重入，持锁调用直接死锁。
+* `commands._player()` 删掉 `_regen_tick` 调用（重复结算会吞余数）；
+  `_LAST_REGEN` 改为 `from .store import REGEN_NOTICE as _LAST_REGEN` 别名，
+  旁路缓存的唯一源搬到 store，仍然**不进玩家存档**。
+
+### 四、门禁与反证
+`tests/test_doupo_regen.py` +1 → 14 条。新增
+`test_direct_get_player_heals_like_buttons`：模拟按钮 dispatch 完全绕开 `_player`，
+直接 `store.get_player()` 必须恢复，且另开实例重读一致。
+反证：注释掉 `get_player` 里的 `_maybe_regen` → 4 条红（含这条）。
+
+### 五、回归
+脚本式 core 31/31、commands 119/119、e2e 77/77、menu_full 69/69、puppet 50/50、
+insight 55/55、card 16/16、duel 56/56；pytest game_save 12/12、user_data 8/8、
+regen 14/14。容器 `--build`+`--force-recreate` healthy，日志无 traceback。
+
+### 六、教训（以后别再犯）
+「每次读玩家都要生效」的逻辑，收敛点是 `Store.get_player()`，**不是**命令层的
+`_player()`。新增这类结算/过期/刷新逻辑前，先 `grep -rn "get_player("` 数一遍入口。

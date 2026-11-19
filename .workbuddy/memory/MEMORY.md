@@ -167,7 +167,12 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
   （`test_hp_monotonic_across_floors` 已按此改，别再改回 lv60/lv90 打前12层）。
 
 ### 自动调息（2026-11-19）
-* 唯一源 `core.regen(p, elapsed)`；挂载点唯一 `commands._player`（43 处命令共用）。
+* 唯一源 `core.regen(p, elapsed)`；**挂载点唯一 `Store.get_player()`**（2026-11-19 事故：
+  最初挂在 `commands._player`，但按钮/卡片渲染直接 `get_player` 绕过它，玩家点一上午
+  都不恢复）。「每次读玩家都要生效」的逻辑一律挂这里，命令层 `_player` 不是收敛点。
+* ⚠️ `get_player` 必须**出锁后**再 `_maybe_regen`（后者要拿同一把锁写库，asyncio.Lock
+  不可重入）；core 用 `importlib.import_module(__package__+".core")` 延迟取（避开包属性
+  `store` 被 STORE 实例遮蔽）。
 * 180 秒一 tick、气血 4%/斗气 6% 上限；时间基准只进 `regen_clock(qq,last_at)` 表。
 * 三条不许破：只推进**整 tick 秒数**（余数留着）；**满状态照吃时间不攒 tick**；
   **首次见到只落基准**（老档不该瞬间满血）。
