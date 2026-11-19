@@ -461,6 +461,20 @@ CASES = [
     # 不再单发一条文字战报；卡里的战况由 test_doupo_puppet 的 report 用例守。
     dict(id="47_puppet_ruin", text="傀儡遗迹", img="png",
          must=[], ban=["尚未踏入", "用法", "渲染失败"]),
+    # 48~53：2026-11-19 背包锁定 + 后期天焚炼气塔（聚火壶）。
+    # 顺序有依赖：先锁定/解锁，再入塔 → 火能（塔中状态）→ 换卡（火能不足）→ 出塔。
+    dict(id="48_lock", text="锁定 回灵丹", img=None,
+         must=["已锁定", "回灵丹"], ban=["用法", "包裹里没有", "尚未踏入"]),
+    dict(id="49_unlock", text="解锁 回灵丹", img=None,
+         must=["已解锁", "回灵丹"], ban=["用法", "包裹里没有", "尚未踏入"]),
+    dict(id="50_tower_in", text="入塔", img=None,
+         must=["踏入塔中", "火能"], ban=["用法", "尚未踏入"]),
+    dict(id="51_tower_fire", text="火能", img=None,
+         must=["天焚炼气塔", "火毒"], ban=["用法", "尚未踏入"]),
+    dict(id="52_tower_card", text="换卡", img=None,
+         must=["火能"], ban=["用法", "尚未踏入"]),
+    dict(id="53_tower_out", text="出塔", img=None,
+         must=["天焚炼气塔"], ban=["用法", "尚未踏入"]),
 ]
 
 

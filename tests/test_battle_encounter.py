@@ -232,14 +232,31 @@ def test_injection_guards():
 # 五、固定骨架战报：敌人再多，字数/行数不膨胀（2026-11-16 用户二次反馈）
 # ---------------------------------------------------------------------------
 class _SkeletonStore:
+    """最小存档桩。2026-11-19 起 cmd_fight 会读背包锁定与塔状态（火能入账），
+    这里按真实 Store 的签名补齐，否则 AttributeError 假红。"""
+
     def __init__(self, p):
         self.p = p
+        self.locks: set[str] = set()
+        self.tower: dict = {}
 
     async def get_player(self, qq):
         return self.p
 
     async def put_player(self, p):
         self.p = p
+
+    async def item_locks(self, qq):
+        return set(self.locks)
+
+    async def tower_state(self, qq):
+        return dict(self.tower) or {"card_tier": 0, "fire_energy": 0,
+                                    "fire_poison": 0, "last_ts": 0.0,
+                                    "free_day": "", "enters": 0, "magma": 0,
+                                    "in_tower": 0}
+
+    async def set_tower_state(self, qq, st):
+        self.tower = dict(st)
 
 
 def _fake_res(n: int) -> dict:

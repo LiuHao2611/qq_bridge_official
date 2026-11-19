@@ -559,20 +559,34 @@ def build_shop_data(p: dict) -> dict:
     }
 
 
-def build_bag_data(p: dict) -> dict:
-    """背包列表 → doupo_list 模板参数。"""
+def build_bag_data(p: dict, locked=None) -> dict:
+    """背包列表 → doupo_list 模板参数。
+
+    ``locked``：被玩家锁定的物品名集合（2026-11-19），标题前加 🔒。
+    丹药说明与 ``cmd_bag`` 同源，走 ``cfg.recipe_impl`` —— 卡面只印「本作真会
+    发生的事」；直接用 ``desc``（原著承诺）会违反 2026-11-18 的诚实契约。
+    """
+    locked = set(locked or ())
     items = core.bag_slots(p)
-    known = {r["name"]: r["desc"] for r in cfg.RECIPES}
+    known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items[:24]:
-        rows.append({"title": f"{name} ×{n}", "sub": known.get(name, "")})
+        # ⚠️ 卡片用 Pillow 自绘，字体没有 emoji 字形：🔒 会被**静默丢弃**
+        # （2026-11-19 实拍确认，玩家看不到任何锁定标记）。这里用中文标记，
+        # 文本层（cmd_bag）仍可用 🔒 —— 那是 QQ 客户端渲染的。
+        mark = "〔锁〕" if name in locked else ""
+        rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
     return {
         "icon": "diamond", "title": "包裹",
         "subtitle": f"{len(items)}/24 格 · 金币 {int(p.get('gold', 0))}",
         "rows": rows,
-        "tip": "用法：服丹 回灵丹",
+        "tip": "用法：服丹 回灵丹 · 锁定 回灵丹（锁定后战斗不自动服用）",
     }
+
+
+async def render_bag(p: dict, locked=None) -> bytes | None:
+    return await _render_list("doupo_list", build_bag_data(p, locked), "斗破背包")
 
 
 def build_rank_data(top: list) -> dict:
@@ -606,9 +620,6 @@ async def render_flames(p: dict) -> bytes | None:
 async def render_shop(p: dict) -> bytes | None:
     return await _render_list("doupo_list", build_shop_data(p), "斗破宝库")
 
-
-async def render_bag(p: dict) -> bytes | None:
-    return await _render_list("doupo_list", build_bag_data(p), "斗破背包")
 
 
 async def render_rank(top: list) -> bytes | None:

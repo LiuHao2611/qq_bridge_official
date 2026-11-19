@@ -140,13 +140,14 @@ def test_baseline_sane():
     数量断言跟随 MENU_GROUPS 独立 AST，避免功能新增后基准漏同步导致假红。
     """
     real = _baseline_real_commands()
-    assert len(real) == 45, "MENU_GROUPS 基准应为 45 条 canonical 口令，实际 %d" % len(real)
+    assert len(real) == 51, "MENU_GROUPS 基准应为 51 条 canonical 口令，实际 %d" % len(real)
     for must in ("斗破菜单", "入道", "人物", "修炼", "突破", "战斗", "强化",
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "养火", "宝库", "买", "炼药", "炼制", "服丹",
                  "背包", "任务", "接任务", "交任务", "领主线", "排行", "抢",
                  "切磋", "应战", "拒战", "爬塔", "塔层", "塔结算", "装备", "送",
-                 "电梯", "周副本", "周本状态", "战斗回看", "战斗评价"):
+                 "电梯", "周副本", "周本状态", "战斗回看", "战斗评价",
+                 "锁定", "解锁", "入塔", "出塔", "火能", "换卡"):
         assert must in real, "基准缺关键口令：%s" % must
     # 实现派生必须与独立基准逐字一致（漏一条都 FAIL）
     assert tuple(db.real_commands()) == tuple(real), \
