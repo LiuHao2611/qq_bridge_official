@@ -502,8 +502,8 @@ def text(battle: dict) -> str:
     data = build_data(battle)
     v = data["verdict"]
     out = [f"⚔️ {data['title']}｜{'胜' if v['win'] else '败'}"
-           f"｜{v['end_text'] or v['kind']}"
-           f"｜{v['rounds']}回合｜对手 {v['opponent']}"]
+           f"{'·' + v['end_text'] if v['end_text'] else ''}"
+           f"｜{v['kind']}｜{v['rounds']}回合｜对手 {v['opponent']}"]
     t = totals(battle)
     out.append(f"我方输出 {_num(t['mine'])}｜敌方输出 {_num(t['foe'])}"
                f"｜每回合 {_num(t['per_round'])}")
