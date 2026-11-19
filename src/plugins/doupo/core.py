@@ -1501,6 +1501,12 @@ def record_last_battle(p: dict, kind: str, res: dict, opponent: str = "",
             "enemies": [str(x) for x in (res.get("enemies") or [])],
             "hero_aid": _jsonable(res.get("hero_aid")),
             "hp_p": res.get("hp_p"), "hp_v": res.get("hp_v"),
+            # 2026-11-19 战斗事件的三项结论：缺了这三个字段，回看卡就画不出
+            # 「力竭判胜 / 自动服药 / 心火共鸣」—— 今天的战斗逻辑等于没同步。
+            "exhausted": bool(res.get("exhausted")),
+            "auto_pills": {"hp": int((res.get("auto_pills") or {}).get("hp") or 0),
+                           "mp": int((res.get("auto_pills") or {}).get("mp") or 0)},
+            "fortune": bool(res.get("fortune")),
             "extra": _jsonable(extra or {}),
         },
         "log": logs,
