@@ -137,7 +137,12 @@ def test_review_rows_include_resources_and_effects():
     rows = br.action_rows(battle)
     check("回看逐行非空", bool(rows) and rows[0] != "（本场没有逐招记录）", str(rows[:2]))
     check("回看含招式", any("回合" in r and "｜" in r for r in rows), str(rows[:1]))
-    check("回看含气血/斗气轨迹", any("气血" in r and "斗气" in r for r in rows), str(rows[:2]))
+    # 2026-11-19 改版：资源轨迹从每行两行改为「战况」一行摘要 + 逐招只留数值变化。
+    head = br.build_data(battle)["groups"][0]["rows"]
+    check("战况含气血/斗气残余", any("气血" in r and "斗气" in r for r in head), str(head))
+    log_n = len([x for x in battle["log"] if isinstance(x, dict)])
+    check("逐招一条一行（不再一条占两行）", len(rows) == log_n,
+          f"rows={len(rows)} log={log_n}")
     text = br.text(battle)
     check("文本兜底含分组", "【战况】" in text and "【逐招明细】" in text, text[:80])
     synthetic = {"win": False, "rounds": 12, "player": {"hp_max": 1000, "mp": 0, "mp_max": 500},
@@ -147,6 +152,132 @@ def test_review_rows_include_resources_and_effects():
     tags = br.tags(synthetic)
     for need in ("lose", "low_dmg", "no_mp", "high_taken", "many_rounds"):
         check(f"标签命中 {need}", need in tags, str(tags))
+
+
+def test_damage_bars_encode_value():
+    """条形长度必须编码数值：不同输出不得同长，相等输出才允许同长。"""
+    a = br.damage_bars({"rounds": 1, "log": [{"dmg": 300}, {"dmg": 100, "taken": True}]})
+    check("大的一方条更长", a[0]["ratio"] == 1.0 and a[1]["ratio"] < a[0]["ratio"],
+          str([(b["label"], b["ratio"]) for b in a]))
+    check("ratio 与数值成比例（不是写死的）",
+          abs(a[1]["ratio"] - 100 / 300) < 0.01, str(a[1]["ratio"]))
+    check("占比加总为 100", sum(b["share"] for b in a) == 100,
+          str([b["share"] for b in a]))
+    check("数值带千分位文案", a[0]["text"] == "300", a[0]["text"])
+
+    eq = br.damage_bars({"rounds": 1, "log": [{"dmg": 100}, {"dmg": 100, "taken": True}]})
+    check("等输出等长（不假装有差）", eq[0]["ratio"] == eq[1]["ratio"] == 1.0,
+          str([b["ratio"] for b in eq]))
+
+    zero = br.damage_bars({"rounds": 3, "log": [{"dmg": 90}]})
+    check("敌方零输出 = 零长条", zero[1]["ratio"] == 0.0, str(zero[1]))
+
+    big = br.damage_bars({"rounds": 1, "log": [{"dmg": 12846}, {"dmg": 3902, "taken": True}]})
+    check("大数千分位", big[0]["text"] == "12,846", big[0]["text"])
+
+
+def test_beats_cover_new_battle_events():
+    """今天新加的战斗事件（心火共鸣/踉跄/自动服药）必须能进关键节点。"""
+    log = [
+        {"index": 1, "round": 1, "move": "普攻", "dmg": 100},
+        {"index": 2, "round": 1, "move": "贵人相助", "dmg": 900, "aid": {"name": "药老"}},
+        {"index": 3, "round": 2, "move": "心火共鸣", "dmg": 0, "kind": "心火共鸣",
+         "fortune": True, "notes": ["心火冲顶，攻势自涨"]},
+        {"index": 4, "round": 2, "move": "踉跄", "dmg": 0, "kind": "失误",
+         "mishap": True, "notes": ["气机紊乱，这一手落了空"]},
+        {"index": 5, "round": 3, "move": "服用", "pill": "三纹青灵丹", "amount": 500, "dmg": 0},
+        {"index": 6, "round": 3, "move": "兽击", "dmg": 200, "taken": True},
+        {"index": 7, "round": 4, "move": "控制", "dmg": 0, "kind": "被控", "miss": True},
+        {"index": 8, "round": 4, "move": "反震", "dmg": 50, "reflect": True},
+        {"index": 9, "round": 5, "move": "佛怒火莲", "dmg": 1200, "crit": True},
+    ]
+    battle = {"rounds": 5, "log": log, "win": True}
+    allb = br.beats(battle, limit=9)
+    got = [b["tag"] for b in allb]
+    for need in ("机缘", "心火", "踉跄", "暴击", "服药", "被控", "反伤"):
+        check(f"关键节点识别 {need}", need in got, str(got))
+    check("关键节点按回合先后排", [b["round"] for b in allb] == sorted(b["round"] for b in allb),
+          str([b["round"] for b in allb]))
+    cap = br.beats(battle)
+    check("默认最多 5 条", len(cap) <= br.BEAT_LIMIT, str(len(cap)))
+    check("高优先级优先入选", "机缘" in [b["tag"] for b in cap], str([b["tag"] for b in cap]))
+    # 心火/踉跄这类 0 伤害事件必须带说明，不能只剩一个类型标签
+    texts = {b["tag"]: b["text"] for b in allb}
+    check("心火带文案", "心火冲顶" in texts["心火"], texts["心火"])
+    check("服药带数值", "500" in texts["服药"], texts["服药"])
+
+
+def test_actions_hide_zero_damage_as_dash():
+    battle = {"rounds": 2, "log": [
+        {"index": 1, "round": 1, "move": "心火共鸣", "dmg": 0, "kind": "心火共鸣",
+         "notes": ["心火冲顶"]},
+        {"index": 2, "round": 1, "move": "服用", "pill": "回气散", "amount": 260, "dmg": 0},
+        {"index": 3, "round": 2, "move": "佛怒火莲", "dmg": 3120, "crit": True},
+    ]}
+    acts = br.action_items(battle)
+    check("零伤害事件写「—」", acts[0]["value"] == "—", acts[0]["value"])
+    check("服药写 +回血", acts[1]["value"] == "+260", acts[1]["value"])
+    check("真实伤害带千分位", acts[2]["value"] == "3,120", acts[2]["value"])
+    toks = [t for t in acts[0]["tags"].split("·") if t]
+    check("词条不复读招式名", "心火" not in toks, acts[0]["tags"])
+    check("服药标记为丹药色", acts[1]["tone"] == "pill", acts[1]["tone"])
+
+
+def test_totals_split_sides_for_duel():
+    """切磋（who=v）没有 taken 字段，阵营判据若只看 taken 会把对手输出算成我方。"""
+    battle = {"rounds": 3, "log": [
+        {"index": 1, "round": 1, "move": "青莲剑歌", "dmg": 620, "who": "p"},
+        {"index": 2, "round": 1, "move": "紫云翼", "dmg": 1480, "who": "v"},
+        {"index": 3, "round": 2, "move": "紫云翼", "dmg": 1610, "who": "v"},
+    ]}
+    t = br.totals(battle)
+    check("切磋我方输出只算自己", t["mine"] == 620, str(t))
+    check("切磋敌方输出分离", t["foe"] == 3090, str(t))
+    ae = br.action_items(battle)
+    check("切磋敌方行标「对方」", ae[1]["side"] == "对方", ae[1]["side"])
+    check("切磋敌方行用冷色", ae[1]["tone"] == "foe", ae[1]["tone"])
+
+
+def test_multi_enemy_rounds_are_cumulative():
+    """多敌遭遇战里每个对手的 fight() 都从第 1 回合重数，回看必须拉平成连续回合。"""
+    battle = {"rounds": 4, "log": [
+        {"index": 1, "round": 1, "foe": "血战佣兵", "move": "普攻", "dmg": 10},
+        {"index": 2, "round": 1, "foe": "血战佣兵", "move": "兽击", "dmg": 5, "taken": True},
+        {"index": 3, "round": 2, "foe": "血战佣兵", "move": "普攻", "dmg": 10},
+        {"index": 4, "round": 1, "foe": "暴雪魔猿", "move": "普攻", "dmg": 10},
+        {"index": 5, "round": 2, "foe": "暴雪魔猿", "move": "普攻", "dmg": 10},
+    ]}
+    acts = br.action_items(battle)
+    rounds = [a["round"] for a in acts]
+    check("多敌回合拉平连续", rounds == [1, 1, 2, 3, 4], str(rounds))
+    check("同回合双方两条不误判换段", rounds[0] == rounds[1] == 1, str(rounds))
+    check("最后一行与表头回合数一致", rounds[-1] == battle["rounds"],
+          f"{rounds[-1]} vs {battle['rounds']}")
+    check("行内不再出现两个「回合1」",
+          sum(1 for r in br.action_rows(battle) if "回合1 " in r) == 2,
+          str([r for r in br.action_rows(battle) if "回合1 " in r]))
+    bb = br.beats({"rounds": 4, "log": [
+        {"index": 1, "round": 2, "foe": "甲", "move": "普攻", "dmg": 10},
+        {"index": 2, "round": 1, "foe": "乙", "move": "佛怒火莲", "dmg": 900, "crit": True},
+    ]})
+    check("关键节点用拉平后的回合", bb and bb[0]["round"] == 3, str(bb))
+
+
+def test_last_battle_persists_new_events():
+    """今天的战斗结论必须落进 last_battle，否则回看卡画不出力竭/自动服药/心火。"""
+    p = _player("q9")
+    res = {"win": True, "rounds": 300, "log": [], "taken": 0, "exp": 1, "gold": 1,
+           "exhausted": True, "auto_pills": {"hp": 2, "mp": 1}, "fortune": True}
+    snap = core.record_last_battle(p, "遭遇", res, opponent="测试傀儡")
+    s = snap["summary"]
+    check("落盘 exhausted", s.get("exhausted") is True, str(s.get("exhausted")))
+    check("落盘 auto_pills", s.get("auto_pills") == {"hp": 2, "mp": 1},
+          str(s.get("auto_pills")))
+    check("落盘 fortune", s.get("fortune") is True, str(s.get("fortune")))
+    v = br.build_data(snap)["verdict"]
+    check("力竭进卡片 verdict", v["exhausted"] is True, str(v))
+    raw = json.dumps(p["last_battle"], ensure_ascii=False)
+    check("新字段可 JSON 序列化", "auto_pills" in raw and '"exhausted": true' in raw, raw[:120])
 
 
 def test_comment_bank():
@@ -189,6 +320,14 @@ def test_battle_card_and_button():
     data = card.build_battle_data(battle)
     check("卡片数据含战况与逐招", [g["name"] for g in data["groups"]] == ["战况", "逐招明细"],
           str([g["name"] for g in data["groups"]]))
+    check("卡片数据带结算界面字段",
+          all(data.get(k) for k in ("verdict", "kpis", "bars", "actions")),
+          str(sorted(k for k in data if k != "groups")))
+    check("胜负徽标字段齐全",
+          isinstance(data["verdict"].get("win"), bool)
+          and bool(data["verdict"].get("opponent"))
+          and data["verdict"].get("rounds", 0) > 0, str(data["verdict"]))
+    check("KPI 三格", len(data["kpis"]) == 3, str(data["kpis"]))
     pic = card._load_pic()
     check("pic 包可加载", pic is not None)
     if pic is None:
@@ -212,6 +351,28 @@ def test_battle_card_and_button():
           and "战斗评价" in db.ALL_BUTTON_CMDS, str(plan.get("战斗评价")))
     check("键盘派生同口令", [b.cmd for b in kb.buttons_for("doupo:battle")] == ["战斗评价"],
           str(kb.buttons_for("doupo:battle")))
+
+
+def test_ruin_card_uses_legacy_skeleton():
+    """傀儡遗迹复用 doupo_battle 骨架：没有新字段就必须走旧分组路径（像素级不变）。"""
+    pic = card._load_pic()
+    check("pic 包可加载（ruin）", pic is not None)
+    if pic is None:
+        return
+    tpl = pic._doupo_battle
+    ruin_data = {"title": "傀儡遗迹", "subtitle": "今日进度 1/3 · 每日重置",
+                 "groups": [{"name": "第一段 · 魔炎谷库房",
+                             "rows": ["守库尸卫 ｜ 掉 强者躯体×1 ｜ 已通关"]}],
+                 "tip": "发「傀儡遗迹」逐段挑战"}
+    battle_data = card.build_battle_data(_sample_battle())
+    check("遗迹数据走旧骨架", tpl._rich(ruin_data) is False, str(ruin_data.keys()))
+    check("战报数据走结算界面", tpl._rich(battle_data) is True, str(battle_data.keys()))
+    png = pic.render_sync("doupo_ruin", "light", card.CARD_RUIN_NAME,
+                          width=720, data=ruin_data)
+    from PIL import Image
+    img = Image.open(io.BytesIO(png))
+    check("遗迹卡仍能渲染", png.startswith(b"\x89PNG") and img.width == 720,
+          f"size={img.size}")
 
 
 def test_battle_review_text_after_roundtrip():
