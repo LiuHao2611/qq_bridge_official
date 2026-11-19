@@ -263,17 +263,28 @@ def test_skill_damage_mult():
 
 
 def test_feed_flame():
-    need = int(cfg.FLAME_BY_NAME["青莲地心火"]["need"])      # 第 1 级所需 = need × 1
+    need = int(cfg.FLAME_BY_NAME["青莲地心火"]["need"])
+    # 2026-11-18「A 方案」起：未收服（0 级）不得喂养 —— 先钉这条硬前提。
+    # 本用例原本直接喂 0 级，A 方案上线后一直是红的（基线红，2026-11-19 修正）。
     p = _p(1)
     p["bag"] = {"药渣": 10}
     r = core.feed_flame(p, "青莲地心火")
-    assert r["ok"] and r["give"] == 10 and r["lv"] == 0
-    assert r["left"] == need - 10, f"left={r['left']} need={need}"
+    assert not r["ok"] and r["reason"] == "unowned", r
 
+    # 已收服（1 级）→ 升 2 级需要 need×(1+1)，喂满才算完成
     q = _p(1)
-    q["bag"] = {"药渣": need}
+    q["flames"]["青莲地心火"] = 1
+    q["bag"] = {"药渣": need * 2}
     r = core.feed_flame(q, "青莲地心火")
-    assert r["done"] and q["flames"]["青莲地心火"] == 1
+    assert r["ok"] and r["done"] and q["flames"]["青莲地心火"] == 2, r
+
+    # 喂一部分：只扣药渣、不升级、剩多少如实报
+    q2 = _p(1)
+    q2["flames"]["青莲地心火"] = 1
+    q2["bag"] = {"药渣": 10}
+    r = core.feed_flame(q2, "青莲地心火")
+    assert r["ok"] and r["give"] == 10 and r["lv"] == 1, r
+    assert r["left"] == need * 2 - 10, f"left={r['left']} need={need * 2}"
 
     # 满级后必须封顶
     s = _p(1)

@@ -30,6 +30,26 @@ HARD_MAX = 1.00
 #: 高层怪登记等级提升（受 monster_scaled 的 delta ±20% 钳位）
 LV_PER_CYCLE = 2
 
+#: 2026-11-19 用户「爬塔每层难度固定，不按玩家战力来」：
+#: 每层怪的全部数值由一个**只由层号决定**的「标尺等级」反解，与真实玩家无关。
+#: 第 1 层 = 1 级、第 10 层 = 19 级、第 30 层 = 59 级、第 52 层 = 103 级（封顶）。
+#: 封顶后仍靠 floor_difficulty 的二次增长继续加深，保证无限层有终点。
+REF_LV_PER_FLOOR = 2.0
+#: 标尺等级上限（与 config.MAX_LV 同值，此处不 import config 以保持零依赖）。
+REF_LV_CAP = 103
+
+
+def floor_ref_lv(n: int) -> int:
+    """第 n 层的「标尺等级」——**爬塔难度的唯一自变量**。
+
+    以前塔怪按玩家面板反解（``monster_scaled(p, ...)``），玩家一升级，同一层
+    的怪就同步变强，爬塔等于永远在原地跑。改成按层号定标尺后：同一个人今天
+    打第 20 层和明天打第 20 层，面对的是同一只怪；变强只体现在「能爬更高」。
+    """
+    n = max(1, int(n))
+    lv = int(round(1 + (n - 1) * REF_LV_PER_FLOOR))
+    return max(1, min(REF_LV_CAP, lv))
+
 #: 层间回血（每层胜利回一点，避免无限层瞬间耗尽）。
 #: 塔怪反解成「约4回合互杀」，与普通遭遇战同险；连爬必须留一点续航。
 #: ⚠ 2026-11-17 用户反馈「气血怎么没降低」：原值 0.35 会在单层伤害 <35% 上限时
@@ -134,11 +154,19 @@ def boss_name(n: int) -> str:
     return BOSS_NAMES[idx]
 
 
-def affixes_for(n: int, rng) -> list[str]:
-    """按层号派生词缀：精英 1 个、Boss 2 个，同种子可复现。"""
+def affixes_for(n: int, rng=None) -> list[str]:
+    """按层号派生词缀：精英 1 个、Boss 2 个。
+
+    ``rng=None``（2026-11-19 起 ``tower_floor`` 的默认调用）时种子取自层号本身，
+    保证「同一层每次打，怪和词缀完全一样」——这是用户「每层难度固定」的一部分。
+    传 rng 的旧调用（单测）行为不变。
+    """
     k = floor_kind(n)
     if k == "normal":
         return []
+    if rng is None:
+        import random as _r
+        rng = _r.Random("tower-affix:%d" % int(n)).random
     count = 2 if k == "boss" else 1
     # 用确定性洗牌避免同一层反复刷出不同词缀
     keys = list(AFFIX_KEYS)
@@ -297,6 +325,12 @@ def _self_test() -> int:
         and len(affixes_for(7, _r.Random(2).random)) == 0))
     chk("宝箱率 Boss=100%", chest_rate(10) == 1.0)
     chk("结算线性递增", clear_reward(10)["gold"] > clear_reward(5)["gold"] > 0)
+    # 2026-11-19 固定难度：标尺等级只由层号决定，且单调、封顶
+    chk("标尺等级单调不降", all(floor_ref_lv(n) <= floor_ref_lv(n + 1)
+                          for n in range(1, 400)))
+    chk("标尺等级封顶", floor_ref_lv(999) == REF_LV_CAP)
+    chk("第1层标尺1级", floor_ref_lv(1) == 1)
+    chk("词缀按层号固定", affixes_for(10) == affixes_for(10))
     print("SELF_TEST", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

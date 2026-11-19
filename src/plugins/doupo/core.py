@@ -243,6 +243,52 @@ def settle(p, now_ts=None) -> dict:
     return {"gain": gain, "minutes": int(elapsed // 60)}
 
 
+def regen(p, elapsed: float) -> dict:
+    """按经过时间结算气血/斗气的自动恢复（纯函数，时间源由调用方给）。
+
+    2026-11-19 用户「给斗气和血量加上自动恢复」。设计口径：
+
+      * **慢速保底，不取代丹药**：每 ``REGEN_TICK_SEC``（180 秒）回一次，
+        气血 4%/斗气 6% 上限。满血约 75 分钟、满蓝约 50 分钟 —— 打一两场
+        战斗掉掉的血，靠调息回来不如直接服掉落的疗伤丹。
+      * **离线同样累计**：``elapsed`` 是「上次结算到现在」的秒数，时间戳由
+        store 的 ``regen_clock`` 表持久化（不写 players.data，守最高声明）。
+      * **余数不丢**：只消耗整 tick 的秒数，剩下的零头留在时间戳里，
+        下次接着算（否则每次命令都把零头抹掉，玩家永远等不到下一 tick）。
+      * **满状态不吃时间**：气血斗气都满时直接吃掉全部 elapsed 并返回 0，
+        避免「满血挂机一小时，掉血后还要再等 3 分钟才回第一口」。
+
+    :return: ``{ticks, hp, mp, consumed, touched}``。
+             ``consumed`` 是本次应向前推进的时间戳秒数（0 表示不推进）。
+             ``touched`` 表示 hp/mp 是否真的被改写。
+    """
+    st = stats(p)
+    hp_max, mp_cap = int(st["体力"]), mp_max(p)
+    hp = max(0, min(hp_max, int(p.get("hp", hp_max))))
+    mp = max(0, min(mp_cap, int(p.get("mp", mp_cap))))
+    # 先夹回合法区间：老档/被外部写坏的值不该在调息时继续放大。
+    if hp != int(p.get("hp", hp)) or mp != int(p.get("mp", mp)):
+        p["hp"], p["mp"] = hp, mp
+    elapsed = max(0.0, float(elapsed))
+    if hp >= hp_max and mp >= mp_cap:
+        # 满状态：时间照吃，不攒 tick（否则挂满机后掉血要再等一整轮）
+        return {"ticks": 0, "hp": 0, "mp": 0, "consumed": elapsed, "touched": False}
+    ticks = int(elapsed // float(cfg.REGEN_TICK_SEC))
+    if ticks <= 0:
+        return {"ticks": 0, "hp": 0, "mp": 0, "consumed": 0.0, "touched": False}
+    hp_add = min(hp_max - hp, ticks * int(hp_max * float(cfg.REGEN_HP_PCT)))
+    mp_add = min(mp_cap - mp, ticks * int(mp_cap * float(cfg.REGEN_MP_PCT)))
+    if hp_add > 0:
+        p["hp"] = hp + hp_add
+    if mp_add > 0:
+        p["mp"] = mp + mp_add
+    return {
+        "ticks": ticks, "hp": int(hp_add), "mp": int(mp_add),
+        "consumed": ticks * float(cfg.REGEN_TICK_SEC),
+        "touched": bool(hp_add or mp_add),
+    }
+
+
 # ---------------------------------------------------------------------------
 # 升级 / 突破
 # ---------------------------------------------------------------------------
@@ -1128,6 +1174,34 @@ def tower_mod_from_affixes(affixes: list[str], temp_effects: list[dict]) -> dict
     return mod
 
 
+_TOWER_REF_CACHE: dict[int, dict] = {}
+
+
+def tower_ref_player(ref_lv: int) -> dict:
+    """爬塔「标尺玩家」：只由层号决定的纸面角色，用来反解该层怪物的数值。
+
+    2026-11-19 用户「爬塔每层难度固定，不按玩家战力来」。以前塔怪按**真实玩家**
+    面板反解，玩家一升级同层怪就同步变厚，爬塔等于原地踏步。现在把反解的对象
+    换成这只「标尺」：同样走 ``create_player`` 的完整初始流程（宗门/斗技/异火），
+    保证数值曲线与既有战斗平衡同一口径，但**不再读真实玩家的任何字段**。
+
+    缓存按等级，返回深拷贝：``stats()``/``ensure_loadout()`` 都会写对象，
+    共享同一份会互相污染（第 20 层打完，第 21 层的标尺就带着脏状态）。
+
+    ⚠️ 固定 qq ``tower-ref``：宗门/异火按 qq 定种子，换 qq 会让不同层的标尺
+    落到不同宗门，难度曲线出现不连续台阶。
+    """
+    ref_lv = max(1, min(int(cfg.MAX_LV), int(ref_lv)))
+    base = _TOWER_REF_CACHE.get(ref_lv)
+    if base is None:
+        base = create_player("tower-ref", "塔之标尺", "")
+        base["lv"] = ref_lv
+        base["hp"] = stats(base)["体力"]
+        base["mp"] = mp_max(base)
+        _TOWER_REF_CACHE[ref_lv] = base
+    return copy.deepcopy(base)
+
+
 def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
                 temp_effects=None) -> dict:
     """打塔里的一层（第 st['floor']+1 层）。
@@ -1137,10 +1211,14 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     :param rng      确定性随机（按会话种子）
     :return {win, floor, kind, name, affixes, rounds, taken, hp, mp, log, ...}
             其中 hp/mp 是**战斗后会话应保留的值**，由调用方写回 st，不动 p。
+
+    难度（2026-11-19 改造）：怪物数值由 ``td.floor_ref_lv(floor)`` 的标尺玩家
+    反解 —— **同层永远同一只怪**，与打它的玩家是谁、多少战力无关。玩家变强只
+    体现在「能爬更高」，而不是「同一层越来越难」。
     """
     floor = int(st.get("floor", 0)) + 1
     kind = td.floor_kind(floor)
-    affixes = td.affixes_for(floor, rng)
+    affixes = td.affixes_for(floor)   # 不传 rng：词缀按层号固定，同层可复现
     name = td.boss_name(floor) if kind == "boss" else (
         "精英·" + rng_choice(cfg.MONSTERS, rng)["name"] if kind == "elite"
         else rng_choice(cfg.MONSTERS, rng)["name"])
@@ -1157,15 +1235,16 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     fp["mp"] = int(st.get("temp_mp") if st.get("temp_mp") is not None else mp_max(fp))
     hp_before = int(fp["hp"])       # 进场血量（层间回血的「损失」基准）
 
-    # 虚拟 species：只给 hard/lv/倍率，数值由 monster_scaled 反解
+    # 虚拟 species：只给 hard/lv/倍率，数值由 monster_scaled 反解（反解对象是标尺）
+    ref_lv = td.floor_ref_lv(floor)
     species = {
         "name": name,
-        "lv": td.floor_monster_lv(floor, int(p.get("lv", 1))),
+        "lv": ref_lv,
         "hard": td.floor_hard(floor),
         "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": "塔·" + kind,
     }
-    mon = monster_scaled(fp, species)
+    mon = monster_scaled(tower_ref_player(ref_lv), species)
     mod = tower_mod_from_affixes(affixes, temp_effects)
     # 武器专属效果注入（2026-11-17 用户"武器影响斗技效果"）：当前装备武器的
     # special 按 DIM_MAP 映射到 tower_mod。仅玄重尺默认时同样生效，
@@ -1571,6 +1650,19 @@ def _roll_drops(p, rng, mon=None) -> list:
         n = 1 + int(rng() * 2) if tier <= 2 else 1   # 高阶天材地宝只掉 1 件
         add_item(p, m["name"], n)
         out.append((m["name"], n))
+
+    # 2026-11-19 用户「任何战斗掉落增加补血补斗气丹药」：
+    # 放在**所有既有判定之后**，rng 调用只追加不插队 —— 老路径的掉落序列逐字节不变。
+    # 精英/Boss 必掉气血+斗气各一件（硬仗本来就该喝药）；普通战斗按 HEAL_DROP_RATE
+    # 掉一件、气血斗气二选一。丹名取既有配方（回春散/回气丹），效果靠配方 pct 跟随上限。
+    if is_boss or "精英" in str(mon.get("kind") or ""):
+        for _nm in (cfg.HEAL_PILL_HP, cfg.HEAL_PILL_MP):
+            add_item(p, _nm, 1)
+            out.append((_nm, 1))
+    elif rng() < float(cfg.HEAL_DROP_RATE):
+        _nm = cfg.HEAL_PILL_HP if rng() < 0.5 else cfg.HEAL_PILL_MP
+        add_item(p, _nm, 1)
+        out.append((_nm, 1))
     return out
 
 
@@ -1779,12 +1871,17 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     lead = "炼化【%s】，" % name if is_material else ""
     if eff == "hp":
         before = int(p.get("hp", 0))
-        p["hp"] = min(st["体力"], before + val)
+        # ``pct``（2026-11-19）：疗伤药按「固定值 / 上限百分比」取高。
+        # 低境界时上限 12% 还不到 200，行为与改造前逐字节一致；高境界时
+        # 固定值已经无感，靠比例跟上（否则掉落等于白捡）。
+        gain = max(val, int(st["体力"] * float(rec.get("pct") or 0)))
+        p["hp"] = min(st["体力"], before + gain)
         return {"ok": True, "msg": lead + f"气血 +{p['hp'] - before}（{p['hp']}/{st['体力']}）"}
     if eff == "mp":
         mx = mp_max(p)
         before = int(p.get("mp", 0))
-        p["mp"] = min(mx, before + val)
+        gain = max(val, int(mx * float(rec.get("pct") or 0)))
+        p["mp"] = min(mx, before + gain)
         return {"ok": True, "msg": lead + f"斗气 +{p['mp'] - before}（{p['mp']}/{mx}）"}
     if eff == "exp":
         p["exp"] = int(p.get("exp", 0)) + val

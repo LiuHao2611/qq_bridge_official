@@ -37,8 +37,63 @@ from .puppet_store import PUPPET_STORE as DEFAULT_PUPPET_STORE
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
 
+def _warn(msg: str) -> None:
+    """降级日志：优先 nonebot.log，裸跑测试退回 stdlib（与 store._log 同口径）。
+
+    本模块坚持「零 nonebot 依赖」，这里延迟导入并 try/except，只为「调息结算
+    失败」这类不该拦命令、又不许静默的事故留痕。
+    """
+    try:
+        from nonebot.log import logger as _lg
+    except Exception:  # noqa: BLE001
+        import logging
+
+        _lg = logging.getLogger("doupo")
+    _lg.warning(msg)
+
+
+#: 最近一次调息的实际恢复量（旁路缓存，**绝不写进 p**）。
+#: p 是 store 里的活字典，任何临时字段都会被 put_player 序列化进 players.data，
+#: 污染存档（最高声明：玩家数据只走真实列）。
+_LAST_REGEN: dict[str, dict] = {}
+
+
+async def _regen_tick(store, qq, p) -> None:
+    """按 ``regen_clock`` 里的时间基准结算一次自动调息（气血/斗气）。
+
+    2026-11-19 用户「给斗气和血量加上自动恢复」的落点：所有读玩家存档的口令都
+    走 ``_player``，在这里结算一次即可，不用在每个 cmd_* 里各写一遍。
+
+    三条硬约束（都是真实踩过的坑）：
+      * **首次见到只落基准**（``last_at`` 为空）：老档迁移不能凭空补回几小时血。
+      * **只推进整 tick**：余数留在时间戳里，否则每次命令都重新计时，永远不恢复。
+      * **只在真的回血/回气时落盘**：满状态时更新时间戳但不写 players，
+        避免「看一眼面板就写一次库」。
+    """
+    now = time.time()
+    last = await store.regen_last(str(qq))
+    if last <= 0:
+        await store.set_regen_last(str(qq), now)
+        return
+    res = core.regen(p, now - last)
+    if not res["consumed"]:
+        return
+    await store.set_regen_last(str(qq), last + float(res["consumed"]))
+    if res["touched"]:
+        _LAST_REGEN[str(qq)] = res
+        await store.put_player(p)
+
+
 async def _player(store, qq):
-    return await store.get_player(str(qq))
+    p = await store.get_player(str(qq))
+    if p is None:
+        return None
+    try:
+        await _regen_tick(store, qq, p)
+    except Exception as e:  # noqa: BLE001
+        # 调息是附加能力，失败不许拦任何口令；但必须留痕，不能静默当没事。
+        _warn("调息结算失败（%s）：%s" % (type(e).__name__, str(e)[:160]))
+    return p
 
 
 def _bar(cur: int, mx: int, width: int = 10) -> str:
@@ -481,8 +536,26 @@ async def cmd_panel(store, qq) -> str:
         f"⚔️ 战力 {core.power(p)}（{p.get('wins', 0)}胜 {p.get('losses', 0)}负）",
         f"🤝 切磋荣誉 {int(p.get('duel_wins', 0))}胜 "
         f"{int(p.get('duel_losses', 0))}负（无惩罚，仅本群）",
+        _regen_line(p, st),
     ]
     return "\n".join(rows)
+
+
+def _regen_line(p, st) -> str:
+    """面板上的自动调息说明（2026-11-19）。
+
+    没有这一行，玩家只会发现「血自己涨了」却不知道为什么；写清速率与「离线也算」
+    才能让人放心下线。
+    """
+    mins = int(cfg.REGEN_TICK_SEC // 60)
+    hp_tick = int(int(st["体力"]) * float(cfg.REGEN_HP_PCT))
+    mp_tick = int(core.mp_max(p) * float(cfg.REGEN_MP_PCT))
+    last = _LAST_REGEN.get(str(p.get("qq") or ""))
+    head = "🌿 调息"
+    if last:
+        head += f" 本次 气血+{last['hp']}、斗气+{last['mp']}"
+    return (f"{head}\n　每 {mins} 分钟 气血+{hp_tick}、斗气+{mp_tick}"
+            f"（离线同样累计）")
 
 
 # ---------------------------------------------------------------------------

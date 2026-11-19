@@ -2676,3 +2676,112 @@ INSTRUCT 原来「第一段结论 + 分点」，模型就回 `## 权重分级` +
 * 群里真实收发仍需用户实测（探路话是否为「催什么，本喵去翻源码了…」）。
 * 第二题 97.3s、71.9k token：模型在 1421 行的 `factions.py` 里反复 sed 定位。
   想更省可在 INSTRUCT 里加「大文件先 grep 结构再定点读」，但这轮没改（未验证效果）。
+
+## 变更记录 · 2026-11-19 08:4x → 09:4x　自动调息 + 爬塔固定难度 + 战斗掉疗伤丹
+
+用户原话：「给斗气和血量加上自动恢复，还有爬塔每层难度固定，不按玩家战力来，
+任何战斗掉落增加补血补斗气丹药」。三条一次落地。
+
+### 一、自动调息：`core.regen()` + `regen_clock` 表 + `commands._player`
+
+改造前气血/斗气是**纯消耗品**：只有升级/突破（`_refill`）或稀有丹药能回，玩家下线
+一夜回来还是残血。现在每 180 秒回一次，气血 4% 上限、斗气 6% 上限（满血 75 分钟、
+满蓝 50 分钟），离线同样累计。
+
+* `config.py` 新增 `REGEN_TICK_SEC=180` / `REGEN_HP_PCT=0.04` / `REGEN_MP_PCT=0.06`。
+* `core.regen(p, elapsed) -> {ticks, hp, mp, consumed, touched}`：纯函数，时间源由
+  调用方给；先把 hp/mp 夹回 `[0, 上限]`（被写坏的老档不该在调息时继续放大）。
+* **时间基准只进真实列**：`store.py` 新增
+  `CREATE TABLE IF NOT EXISTS regen_clock(qq TEXT PRIMARY KEY, last_at REAL)`，
+  配 `regen_last()` / `set_regen_last()`（UPSERT）。hp/mp 本身仍写既有存档字段
+  —— 不为了调息去重构 players 表（最高声明针对的是**新增**玩家数据）。
+* 挂载点唯一：`commands._player()`。43 处 `await _player(...)` 全部自动获得调息，
+  不用在每个 `cmd_*` 里各写一遍；失败只 `_warn` 不拦命令（调息是附加能力）。
+* 面板末行新增 `_regen_line()`：
+  `🌿 调息 本次 气血+X、斗气+Y / 每 3 分钟 气血+652、斗气+396（离线同样累计）`。
+
+三条硬约束（每条都有对应门禁，写错必红）：
+
+1. **只推进整 tick 的秒数**。`consumed = ticks * 180`，零头留在时间戳里。直接把
+   `last_at` 设成 now 的话，每次命令都从头计时，玩家永远等不到下一 tick。
+2. **满状态照吃时间、不攒 tick**。否则满血挂机一小时后掉血，还要再等 3 分钟才回第一口。
+3. **首次见到只落基准**。`regen_last()==0` 时直接写入 now，不按「从 1970 年算起」
+   补历史——老档第一次上线不该瞬间满血。
+
+⚠️ 恢复量放模块级 `_LAST_REGEN` 旁路缓存，**绝不挂 `p["_regen"]`**：`p` 是 Store 里的
+活字典，任何临时字段都会被 `put_player()` 序列化进 `players.data`（最高声明红线）。
+
+### 二、爬塔每层难度固定：标尺玩家 + 按层号定词缀
+
+改造前 `tower_floor` 把**真实玩家**喂给 `monster_scaled`，玩家一升级同层怪同步变厚
+——爬塔等于永远原地跑，「爬高了」没有任何感觉。
+
+* `tower_data.py` 新增 `REF_LV_PER_FLOOR=2.0` / `REF_LV_CAP=103` / `floor_ref_lv(n)`：
+  第 1 层=1、第 10 层=19、第 30 层=59、第 52 层=103，之后封顶，难度继续交给
+  `floor_difficulty()` 的二次增长（无限层仍有终点）。
+* `core.tower_ref_player(ref_lv)`：**缓存 + deepcopy** 的「标尺玩家」，走
+  `create_player` 完整初始流程（宗门/斗技/异火与真实玩家同一口径），但**不读真实玩家
+  任何字段**。固定 qq `tower-ref` 保证宗门/异火不随层跳（否则难度曲线会有台阶）。
+* `tower_floor` 改成 `monster_scaled(tower_ref_player(ref_lv), species)`。
+* `tower_data.affixes_for(n, rng=None)`：`rng` 缺省时按层号定种子 → 同层同怪同词缀。
+  `tower_floor` 不再传 rng（传 rng 的旧调用/单测行为不变）。
+
+实测中位层数：lv1→4、lv10→8、lv23→11、lv39→19、lv59→27、lv79→36、lv103→45。
+同一层（第 20 层，标尺 lv39）三种战力看到的完全一样：
+`血刀圣者 气血 20079 / 攻击 20209｜破甲、禁疗`。
+
+⚠️ **高等级打低层就是零损耗**，这是新规则的正确结果，不是回归。
+`test_hp_monotonic_across_floors` 因此改成用「与目标层标尺同级」的玩家
+（`lv = td.floor_ref_lv(n_top)`），否则 lv60/lv90 打前 12 层会全血通过而假红。
+
+### 三、战斗掉补血补斗气丹药（含丹药 `pct` 语义）
+
+* `config.py` 新增 `HEAL_DROP_RATE=0.55` / `HEAL_PILL_HP="回春散"` / `HEAL_PILL_MP="回气丹"`。
+* `core._roll_drops()` 末尾追加判定，**放在所有既有判定之后**（rng 只追加不插队，
+  老路径的掉落序列逐字节不变；`mon=None` 的旧调用一件都不掉）：
+  普通怪按 55% 掉 1 件（气血/斗气二选一）；`is_boss` 或 kind 含「精英」必掉两件。
+* **不新增丹药**：用既有配方，新增字段 `pct`（占上限百分比），`use_item` 的 hp/mp
+  分支改成 `max(固定值, 上限 × pct)`。回春散 12%、凝血散 20%、回气丹 20%：
+  lv1 仍是 +200/+300（与改造前逐字节一致），lv103 变成 +14908/+9378。
+  否则高境界捡到一品药只有 200 点，等于白捡。
+* `cfg.recipe_impl()` 为 hp/mp + pct 输出「气血 +200 或上限 12%（取高）」，
+  守住 2026-11-18 的「卡面只印本作真会发生的事」契约。
+* 塔内不掉：塔战斗打在深副本、`tower_floor` 有「p 只读」红线，且塔本身有
+  三选一的回春散/回气丹补给。
+
+### 四、顺手修的基线红
+
+`src/plugins/doupo/test_core.py::test_feed_flame` 从 2026-11-18「A 方案：未收服不得
+喂养」上线起就一直红（还在喂 0 级异火）。改成先钉 `reason=="unowned"` 这条硬前提，
+再测「已收服 1 级 → 2 级」与「只喂一部分」两档。`CORE_TOTAL=31 PASSED=31`。
+
+### 五、门禁与反证
+
+新增三个文件、29 条：
+
+* `tests/test_doupo_tower_fixed.py`（7）：同层不同战力怪逐字段相同、词缀按层固定、
+  标尺单调且封顶、层数越高怪越强、变强 = 爬更高、lv1 打第 50 层必败、lv80 打第 1 层速杀。
+* `tests/test_doupo_regen.py`（13）：tick 边界、单 tick 量、余数保留、多 tick 累加、
+  封顶、满状态吃时间、存储往返、不入 `players.data`、首次只落基准、命令路径真落盘、
+  新档落基准、面板速率行、不产生修为。
+* `tests/test_doupo_heal_drops.py`（9）：丹名必须是真实 hp/mp 配方、普通掉 1 件、
+  rng 高不掉、Boss/精英必掉两件、`mon=None` 老路径不变、`pct` 随境界、impl 印比例、
+  `fight` 端到端落背包。
+
+反证 4 次全红：塔退回按玩家反解 → 3 条红；`consumed` 吞余数 → 1 条红；
+去掉 `pct` → 1 条红；删掉落块 → 4 条红。
+
+### 六、证据
+
+* 新三文件：7/7、13/13、9/9。
+* `tests/` 全量对拍（`git worktree HEAD` 跑同一套）：当前 **44 failed 全是基线 97 的子集**，
+  **零新增失败**；通过数 1397（基线 1288）。
+* 脚本式：core 31/31、commands 119/119、card 16/16、battle_depth 37/37、
+  menu_full 69/69、e2e 77/77、insight 55/55、puppet 50/50、duel 56/56、flame_grant 21/21。
+* pytest 隔离跑：alchemy 15、materials 6、recipe_evidence 6、recipe_honesty 12、
+  pill_breakthrough 16、root_factor 11、buttons 17、custom_buttons 17、game_save 12、
+  user_data_persistence 8 —— 全绿（合计 112 + 29 新 = 141）。
+* 容器 `--build` + `--force-recreate`，healthy，日志无 traceback，`docker diff` 无库文件；
+  生产库 `doupo.sqlite` 已自动建 `regen_clock`（0 行，等第一条命令写基准）。
+* 实机演练（`tmp/verify_round2.py`，输出见对话）：离线 15 分钟 5 tick → 气血 +3360、
+  斗气 +1980；同层三战力怪数值完全一致；普通掉 1 件 / 精英与 Boss 掉 2 件。

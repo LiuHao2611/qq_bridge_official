@@ -153,9 +153,27 @@ Linux 下变成 `/app/D:/AI/.../data` → 六个 SQLite 库全写进**镜像层*
   `core.record_last_battle()`（遭遇/掠夺/切磋/爬塔/周副本五入口，切磋双方各一份）。
   `battle_review.py` 只把 log 变行不重算；评语 `battle_comments.py` 40 条，
   只嘲讽表现不攻击玩家，种子 = openid+ts+log_len。
-* **菜单 / matcher 数严格相等（现 42 条）**：新增口令要同时改 `MENU_GROUPS`、
+* **菜单 / matcher 数严格相等（现 47 条）**：新增口令要同时改 `MENU_GROUPS`、
   `test_doupo_buttons`、`test_menu_full.CASES`、`test_commands`。
   `周本状态` 用 PRI-1 抢在 `周本` 之前。原著**没有七层塔**（七层是游戏化设计）。
+
+### 🚨 爬塔难度只由层号决定（2026-11-19 用户硬要求，不许改回）
+* 用户原话：「爬塔每层难度固定，不按玩家战力来」。
+* `core.tower_ref_player(td.floor_ref_lv(n))` → `monster_scaled(ref, species)`。
+  **禁止改回 `monster_scaled(fp, ...)`**：那会让玩家一升级同层怪同步变厚，爬塔原地跑。
+* `floor_ref_lv(n) = min(103, 1 + (n-1)*2)`；第52层封顶后难度只靠 `floor_difficulty`。
+* `affixes_for(n, rng=None)` 不传 rng 时按层号定种子 → 同层同词缀。
+* ⚠️ **高等级打低层就是不掉血**，这是正确行为。测「连爬掉血」必须用与目标层标尺同级的玩家
+  （`test_hp_monotonic_across_floors` 已按此改，别再改回 lv60/lv90 打前12层）。
+
+### 自动调息（2026-11-19）
+* 唯一源 `core.regen(p, elapsed)`；挂载点唯一 `commands._player`（43 处命令共用）。
+* 180 秒一 tick、气血 4%/斗气 6% 上限；时间基准只进 `regen_clock(qq,last_at)` 表。
+* 三条不许破：只推进**整 tick 秒数**（余数留着）；**满状态照吃时间不攒 tick**；
+  **首次见到只落基准**（老档不该瞬间满血）。
+* 恢复量放模块级 `_LAST_REGEN` 旁路缓存，**不许挂 `p["_regen"]`**（活字典会被序列化进存档）。
+* 疗伤丹用配方字段 `pct`（上限百分比，取 max(固定值, 上限×pct)）；`_roll_drops` 的
+  疗伤丹判定必须留在**所有既有判定之后**（rng 只追加不插队）。
 
 ## 6. 紫卡洗卡推荐（2026-11-16，别重造）
 

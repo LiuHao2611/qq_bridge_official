@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS pill_use (
     used_at   REAL    NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pill_use ON pill_use(qq, name, realm_idx);
+-- 2026-11-19 自动调息：只存「上次结算的时刻」，气血/斗气本身仍在既有存档字段里。
+-- 这也是**玩家数据**（不回它会凭空多算几小时恢复），按最高声明进真实列，不塞 JSON。
+CREATE TABLE IF NOT EXISTS regen_clock (
+    qq      TEXT PRIMARY KEY,
+    last_at REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -468,6 +474,37 @@ class Store:
                 raise StoreError("丹药记录写入失败（%s）：%s"
                                  % (type(e).__name__, str(e)[:200])) from e
         return int(row[0]) if row else 0
+
+    # ---- 自动调息的时间基准 ----
+    async def regen_last(self, qq: str) -> float:
+        """该玩家上次结算调息的 unix 秒；没有记录返回 0（= 首次见到，不补历史）。"""
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    row = con.execute(
+                        "SELECT last_at FROM regen_clock WHERE qq=?",
+                        (str(qq),)).fetchone()
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("调息时刻读取失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return float(row[0]) if row else 0.0
+
+    async def set_regen_last(self, qq: str, ts: float) -> None:
+        """写入新的调息时刻（UPSERT）。
+
+        ⚠️ 调用方只能传「上次时刻 + 整 tick 秒数」，不能直接传 now：
+        余数被抹掉的话玩家永远等不到下一 tick（每次命令都从头计时）。
+        """
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    con.execute(
+                        "INSERT INTO regen_clock(qq, last_at) VALUES(?,?)"
+                        " ON CONFLICT(qq) DO UPDATE SET last_at=excluded.last_at",
+                        (str(qq), float(ts)))
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("调息时刻写入失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
 
 
 def now() -> float:

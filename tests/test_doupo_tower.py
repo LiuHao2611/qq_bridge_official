@@ -114,16 +114,22 @@ def test_hp_monotonic_across_floors():
     实测 lv60 连爬 8 层每层都是满血 —— 玩家看到的就像「每层重置状态」，爬塔没有消耗感。
     修法：回血同时受「本层实际损失的一半」约束（FLOOR_REST_DMG_RATIO）。
 
-    口径边界：本用例**不带任何战利品**。三选一里的「回春散」会主动回血、
+    口径边界（2026-11-19 固定难度改造）：塔怪不再按玩家战力缩放，改成由层号的
+    「标尺等级」定死。于是**高等级玩家打低层就是零损耗**，不能再拿 lv60/lv90
+    去打前 12 层来验「会掉血」——那是新规则下的正确行为，不是回归。
+    这里改成让玩家等级与目标层标尺对齐：前期碾压、后期真掉血。
+
+    另一条边界：本用例**不带任何战利品**。三选一里的「回春散」会主动回血、
     「吸血+12%」会在战斗中回血，那两种情况下气血允许上涨（是玩家自己选的续航）。
     """
-    for lv in (30, 60, 90):
-        p = _player(lv, seed="mono%d" % lv)
-        st = ts.new_state("mono%d" % lv, seed="mono:%d" % lv)
-        rng = random.Random("mono:%d" % lv).random
+    for n_top in (12, 20, 30):
+        lv = td.floor_ref_lv(n_top)      # 与第 n_top 层标尺同级的玩家
+        p = _player(lv, seed="mono%d" % n_top)
+        st = ts.new_state("mono%d" % n_top, seed="mono:%d" % n_top)
+        rng = random.Random("mono:%d" % n_top).random
         prev = int(core.stats(p)["体力"])
         ups, drops = [], 0
-        for i in range(1, 13):
+        for i in range(1, n_top + 1):
             st["floor"] = i - 1
             r = core.tower_floor(p, st, rng)
             if not r["win"]:
@@ -135,7 +141,7 @@ def test_hp_monotonic_across_floors():
             prev = int(r["hp"])
             st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
         assert not ups, "连爬出现掉血后回满（像重置状态）：%s" % ups[:3]
-        assert drops >= 1, "lv%d 连爬完全没有掉血，塔不消耗气血" % lv
+        assert drops >= 1, "lv%d 连爬 %d 层完全没有掉血，塔不消耗气血" % (lv, n_top)
 
 
 def test_weapon_changes_panel_and_battle():
