@@ -446,6 +446,49 @@ def test_quote_with_subcommand_not_mistaken_for_add():
     assert cb.get_buttons(st.p, "shop") == (("血灵草", "买 血灵草 2"),)
 
 
+def test_quick_add_command_beats_card_alias():
+    """2026-11-19 用户方案②：引用卡片时首词是口令就按口令处理，优先于卡片名。
+
+    「斗技」既是真实口令首词、又是卡片别名（skills）。旧判据把首词是卡片名的
+    一律挡掉 → 引用宗门卡发「斗技 全部」报「不认识这张卡」。口令必须优先。
+    """
+    # 口令 + 卡片别名同形，带参数 → 快捷新增（用户要的「斗技 全部 也能加」）
+    assert cb.is_quick_add_arg("斗技 全部") is True
+    # 其它同形的（人物/宝库/炼药都是口令首词又是卡片名）同样口令优先
+    for cmd in ("人物 面板", "宝库 血灵草 2", "炼药 回灵丹", "异火 净莲妖火"):
+        assert cb.is_quick_add_arg(cmd) is True, cmd
+    # 普通口令（首词非卡片名）仍是快捷新增
+    assert cb.is_quick_add_arg("买 血灵草 2") is True
+
+    # 子命令结构仍必须挡住（否则「宝库 -血灵草」被当口令新增，旧 bug 复现）
+    for cmd in ("宝库 -血灵草", "宝库 清空", "宝库 查看", "宝库 list",
+                "-血灵草", "血灵草=买 血灵草 2"):
+        assert cb.is_quick_add_arg(cmd) is False, cmd
+    # 单发卡片名 = 查看该卡，不当新增
+    assert cb.is_quick_add_arg("宝库") is False
+
+
+def test_quote_douji_quanbu_adds_to_faction_card():
+    """端到端：引用宗门卡 + 「斗技 全部」→ 真加到 faction，而不是报不认识卡。"""
+    import asyncio
+
+    class MemStore:
+        def __init__(self, p):
+            self.p = p
+
+        async def get_player(self, qq):
+            return self.p
+
+        async def put_player(self, p):
+            self.p = p
+
+    st = MemStore({"qq": "u1"})
+    msg = asyncio.run(cb.handle_config(st, "u1", "斗技 全部", quote_card="faction"))
+    assert "宗门卡" in msg and "斗技" in msg, msg
+    assert "不认识" not in msg, msg
+    assert cb.get_buttons(st.p, "faction") == (("全部", "斗技 全部"),), cb.get_buttons(st.p, "faction")
+
+
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
