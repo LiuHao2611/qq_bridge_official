@@ -172,17 +172,23 @@ def puppet_attack(puppet: Optional[dict]) -> float:
     return (base + core + soul) * cfg.PUPPET_ATK_FACTOR
 
 
-def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0) -> float:
+def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
+                           flame_mult: float = 1.0) -> float:
     """傀儡每回合期望输出——**唯一函数**。
 
     ``fight`` 注入傀儡击、``damage_schedule`` 计入反解都必须调它，同涨同落。
     结阵（E36/E38）增益也在这里统一算，避免只加 fight 不进反解。
+
+    ``flame_mult``（2026-11-19）：B 线傀儡异火的攻击倍率（1.0+加成），由命令层从
+    玩家已收服的火聚合传入（flame_bonus.puppet_atk_bonus）。**必须两处同源**：
+    怪血反解（commands 传给 monster_scaled）与实战傀儡击都吃同一个 bonus。
+    默认 1.0 → 旧调用逐字节不变。
     """
     if not puppet:
         return 0.0
     atk = puppet_attack(puppet)
     bonus = 1.0 + max(0, formation_n - 1) * 0.15  # 结阵每人 +15% [调参]
-    return atk * bonus
+    return atk * bonus * max(1.0, float(flame_mult))
 
 
 def formation_count(puppets: List[dict]) -> int:
