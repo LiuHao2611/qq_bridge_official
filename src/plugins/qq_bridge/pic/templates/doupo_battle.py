@@ -231,7 +231,10 @@ def _bubble_plan(rounds: list[dict], content_w: int) -> list[dict]:
             if not entries:
                 # 空列（敌人已死 / 本回合真没动作）给一个淡色占位，
                 # 否则气泡半边纯空白，玩家以为卡坏了（2026-11-19 实拍反馈）。
-                entries = [{"move": "无动作", "value": "", "tags": "",
+                # 2026-11-19 再修：数据层 empty_foe 区分「击杀换敌」与「真无动作」，
+                # 敌方空列读它换一句人话；我方空列/旧数据缺省仍是「无动作」。
+                _ph = _gs(r.get("empty_foe"), "无动作") if key == "foe" else "无动作"
+                entries = [{"move": _ph, "value": "", "tags": "",
                             "tone": "dim", "h": LINE_H + BUBBLE_ROW_GAP,
                             "comp": [], "placeholder": True}]
             sides[key] = entries

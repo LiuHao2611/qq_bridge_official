@@ -469,6 +469,12 @@ def round_bubbles(battle: dict) -> list[dict]:
                                    else _num(b["mp"])))
         b["foot_l"] = " · ".join(left)
         b["foot_r"] = ("敌血 " + _num(b["foe_hp"])) if b["foe_hp"] is not None else ""
+        # 空敌方列的原因（2026-11-19 用户「第四回合敌人无动作，是被控还是显示有问题」）：
+        # 敌人被控时 core 会写 kind=被控 的敌方条目（列非空，这里不触发）；真正空列
+        # 若我方最后一击把对手打到 0 血，就是「击杀·换敌」，否则才是真「无动作」。
+        # 只加展示字段，不动列结构/动作条目，模板占位据此换一句人话。
+        b["empty_foe"] = ("击杀·换敌" if (not b["foe"] and b.get("foe_hp") == 0)
+                          else "无动作")
         out.append(b)
     return out
 
