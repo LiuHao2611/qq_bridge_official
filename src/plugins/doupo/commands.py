@@ -370,8 +370,8 @@ MENU_GROUPS = (
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
-        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯"),
-        ("傀儡遗迹", "每日副本六段自动连打至力竭：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿"),
+        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯/养魂"),
+        ("傀儡遗迹", "每日副本七段自动连打至力竭：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿→斗圣主殿"),
     )),
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
@@ -1884,6 +1884,13 @@ async def cmd_use(store, qq, name) -> str:
         if res.get("reason") == "resisted":
             # 丹药已被扣掉（原著就是「白白浪费」），必须让玩家看见这件事。
             return f"💊 服下【{hit}】，{res.get('msg')}"
+        if res.get("reason") == "need_puppet":
+            # P3 养魂：养魂涎不是口服丹。**一枚都没扣**（拦在扣物之前），
+            # 这里必须把「丹还在」和「该去哪用」都说清楚。
+            return ("🧿 【%s】要渡进傀儡体内，不能口服 —— 丹还在你包里。\n"
+                    "　发「傀儡 养魂」把它渡给出战傀儡：每枚 +%d 灵魂强度，"
+                    "上限 %d。" % (hit, int(cfg.PUPPET_SOUL_FEED_GAIN),
+                                   int(cfg.PUPPET_SOUL_FEED_MAX)))
         return res.get("msg") or "无法服用。"
     if hit in cfg.MATERIAL_BY_NAME:
         return f"✨ {res['msg']}"
@@ -2804,7 +2811,7 @@ async def cmd_pick(store, qq, n) -> str:
 # 都读它。此前 handler 无条件出傀儡卡，把淬炼/结阵/收服/融魂/配方的回执整条丢掉
 # ——玩家花了雷淬石和金币、只收到一张没变化的名录卡（2026-11-20 第十一轮，用户报
 # 「傀儡淬炼口令没触发」，真相是命令触发了、也真扣了料，只是回执被卡吞了）。
-PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂", "换躯")
+PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂", "换躯", "养魂")
 
 
 def puppet_is_subcmd(arg) -> bool:
@@ -2863,6 +2870,8 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         return await _cmd_puppet_awaken(store, qq, p, roster, elig, pstore, arg)
     if arg.startswith("换躯"):
         return await _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg)
+    if arg.startswith("养魂"):
+        return await _cmd_puppet_soul_feed(store, qq, p, roster, elig, pstore, arg)
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
@@ -2877,6 +2886,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     rec = pc.match_recipe(cur)
     fire_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(
         pc.fire_grade_of_tier(cur["fire_tier"]), "兽火")
+    si = pc.soul_feed_info(cur)
     lines = [
         "【%s】%s档 · %s皮" % (cur["name"], tier_name, skin),
         "　躯体：%s（%s%s）" % (cur["body_name"] or "—",
@@ -2902,12 +2912,17 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
             cur["purity"], pc.dye_bar(int(cur["purity"])),
             (" 紫纹%d层" % g["vein"]) if g.get("vein") else "",
             "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
+        # P3 养魂：灵魂强度是**可养**的（第900章养魂涎），卡面必须给出进度，
+        # 否则玩家喂了几枚看不出变化，会以为丹被吞了。
+        "　养魂 %d/%d%s　有效灵魂 %d（基准 %d）" % (
+            si["fed"], si["cap"], "（已满）" if si["maxed"] else "",
+            si["total"], pc.soul_base(cur)),
         "　%s%s" % ("已认主·永不背叛" if cur["bonded"] else "未认主",
                     "　有灵（北王式）" if cur["awakened"] else ""),
     ]
     if len(roster) > 1:
         lines.append("　持有 %d 具；发「傀儡 结阵」查看合击" % len(roster))
-    lines.append("　子命令：配方 / 淬炼 / 结阵 / 收服 / 融魂 / 换躯")
+    lines.append("　子命令：配方 / 淬炼 / 结阵 / 收服 / 融魂 / 换躯 / 养魂")
     return "\n".join(lines)
 
 
@@ -3148,7 +3163,9 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
         sg = stages[idx]
         # ⚠️ 传真实 p：不传会让怪血按标尺玩家变厚、实战却按真人出手（两张皮）。
         bonus = pc.puppet_expected_damage(pu, n, flame_mult=flame_mult, p=p)
-        mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
+        # 段名字在 ``name``、物种名在 ``monster``：喂给战斗的必须是**物种**
+        # （战报「敌方」、BOSS 名、角色包登场旁白都按它取），段名只用于段落列表。
+        mon = core.monster_scaled(p, dict(sg, name=sg["monster"]), puppet_bonus=bonus)
         res = core.fight(p, mon, puppet=pu, formation_n=n,
                          puppet_flame_mult=flame_mult, pill_budget=pill_budget)
         await _finalize_battle(p, qq, res, "傀儡遗迹",
@@ -3221,8 +3238,8 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
 _PUPPET_COLUMNS = frozenset({
     "name", "tier", "tier_name", "skin", "body_name", "body_realm", "body_star",
     "body_fresh", "body_fresh_until", "core_tier", "core_attr", "soul_source",
-    "soul_strength", "mind_stripped", "metal_name", "metal_grade", "fire_tier",
-    "fire_attr", "purity", "bonded", "awakened", "origin", "damaged",
+    "soul_strength", "soul_fed", "mind_stripped", "metal_name", "metal_grade",
+    "fire_tier", "fire_attr", "purity", "bonded", "awakened", "origin", "damaged",
 })
 
 
@@ -3313,6 +3330,74 @@ async def _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg) -> str:
             % (cur["name"], name, new["body_realm"],
                ("·%d星" % new["body_star"]) if new["body_star"] else "",
                old_tier, new_tier))
+
+
+async def _cmd_puppet_soul_feed(store, qq, p, roster, elig, pstore, arg) -> str:
+    """P3 养魂（E09/N08，第900章「养魂涎」）：把养魂涎渡进傀儡，稳定加灵魂强度。
+
+    为什么要有这条命令：养魂涎是五品丹，玩家从宝库买来只会「服丹」，而丹药
+    结算只认玩家自己（气血/斗气/机缘…），**没有傀儡的上下文**。所以养魂必须有
+    自己的入口，否则丹要么被当成机缘吃掉、要么吞了没反应 —— 两种都是把玩家的
+    钱扔进水里。
+
+    规则（确定性、不掷骰）：
+      * 每次 +``PUPPET_SOUL_FEED_GAIN``，累计上限 ``PUPPET_SOUL_FEED_MAX``；
+      * **只扣真正用得上的丹**：喂到 190 再要求喂 5 枚，只吃 1 枚到 200；
+      * 已满 / 没丹 / 没傀儡三种分支都先报错后返回，**一枚都不扣**；
+      * 灵魂进益走 ``soul_total``，同一份数值喂给攻击/气血/护甲三个出口
+        （卡面与实战同源，不做两张皮）。
+    """
+    from . import puppet_core as pc
+    cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
+    tail = arg[len("养魂"):].strip()
+    want = int(tail) if tail.isdigit() else 1
+    want = max(1, min(50, want))
+    pill = cfg.PUPPET_SOUL_PILL
+    info = pc.soul_feed_info(cur)
+    n_formation = pc.formation_count(roster)
+    head = "🧿 【%s】灵魂强度 %d/%d（基准 %d + 养魂 %d）" % (
+        cur["name"], info["fed"], info["cap"], pc.soul_base(cur), info["fed"])
+    if info["maxed"]:
+        return (head + "\n　已至养魂上限，再喂也是白费 —— 丹留在你包里。\n"
+                "　换一具傀儡养：发「傀儡」看名录。")
+    have = core.count_item(p, pill)
+    if have <= 0:
+        return (head + "\n　你身上没有【%s】（五品丹，宝库有售）。\n"
+                "　还差 %d 点可养满，每枚 +%d。"
+                % (pill, info["left"], info["gain"]))
+    res = pc.feed_soul(cur, min(want, have))
+    if not res.get("ok"):
+        # 上面两道闸已挡住 maxed/none；这里只兜不可达分支，如实报错不扣丹。
+        return head + "\n　这次没有可渡之物，丹一枚未动。"
+    used = int(res["used"])
+    core.take_item(p, pill, used)
+    await pstore.update_puppet(qq, cur["id"], soul_fed=int(res["fed"]))
+    await store.put_player(p)
+    after = pc.soul_feed_info(dict(cur, soul_fed=int(res["fed"])))
+    g0 = pc.guard_profile(cur, p, n_formation)
+    g1 = pc.guard_profile(dict(cur, soul_fed=int(res["fed"])), p, n_formation)
+    atk0 = int(pc.puppet_attack(cur, p))
+    atk1 = int(pc.puppet_attack(dict(cur, soul_fed=int(res["fed"])), p))
+    lines = [
+        "🧿 养魂：「%s」渡入【%s】×%d" % (pill, cur["name"], used),
+        "　灵魂强度 +%d（%d/%d）· 有效灵魂 %d"
+        % (used * int(res["gain"]), after["fed"], after["cap"], after["total"]),
+        # 数值必须给「看得见的落点」：灵魂不是独立的孤立数值，它同时喂攻击/气血/护甲。
+        "　护主气血 %d→%d　护甲 %d→%d" % (
+            g0["hp_max"], g1["hp_max"], g0["armor"], g1["armor"]),
+    ]
+    if atk1 > atk0:
+        lines.append("　肉身攻击 %d→%d" % (atk0, atk1))
+    else:
+        # 攻击已贴「不抢风头」封顶时如实说明，别让玩家以为养魂对攻击无效。
+        lines.append("　肉身攻击 %d（已贴封顶，养魂的进益落在气血与护甲上）" % atk0)
+    if res["maxed"]:
+        lines.append("　⭐ 已养满 %d 点，此傀魂魄圆满。" % after["cap"])
+    left = have - used
+    if left > 0:
+        lines.append("　余【%s】%d 枚%s" % (
+            pill, left, "（超出上限的部分没动）" if res["maxed"] else ""))
+    return "\n".join(lines)
 
 
 async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:

@@ -872,6 +872,15 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     # 越过 test_monster_scaled_tracks_player 的 3~8 回合设计窗口。
     delta = max(-0.2, min(0.2, (int(mon["lv"]) - lv) * cfg.LV_DELTA_STEP))
     m_def = max(20, int(st["防御"] * cfg.MON_DEF_RATIO))
+    # P3 远古人傀「灰白布条」（第1235章「即便是斗宗强者的全力一击，都是无法
+    # 震断这种奇异布条」）：布条把力道卸掉 ⇒ 额外防御。
+    # 🚨 必须加在 ``m_hp`` 之前：血条按同一个 mitigation 换算，于是「几回合打完」
+    #    仍由 k_rounds 决定，玩家看到的只是**每一击的数字变小**（布条真的卸力），
+    #    而不是被偷偷改了难度曲线 —— 与「面板只决定谁打得疼、不改几回合」同一条
+    #    契约。没写 cloth 的怪（全部旧怪）乘 0，数值逐字节不变。
+    _cloth = float(mon.get("cloth") or 0.0)
+    if _cloth > 0:
+        m_def = max(20, int(m_def * (1.0 + _cloth)))
 
     # 玩家打完需要几回合（等级差只影响时长，不影响难度）
     k_rounds = cfg.TTK_PLAYER * (1.0 + delta)
@@ -894,12 +903,19 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     # 2026-11-20 原著角色包：species 自带 character（九星突破 BOSS）时透传，
     # 野外/塔/周本按怪名查同一张表。供 fight() 渲染登场引言/台词、结算机制。
     # 纯展示与效果，不进数值反解（红线：难度只由层号/战力决定）。
-    _character = mon.get("character") or cfg.monster_character(mon["name"])
+    #
+    # 🚨 P3 修：遗迹段落的 dict 里 ``name`` 是**段名**（「斗圣主殿」）、
+    #    ``monster`` 才是物种名（「远古人傀」）。旧代码一律按 ``name`` 查角色包与
+    #    技能表，于是遗迹里的怪永远只能拿到 kind 兜底的通用技（boss → 魂殿秘技），
+    #    远古人傀「会施斗技」这条原著设定根本落不了地。物种优先、name 兜底，
+    #    不传 monster 的既有调用方逐字节不变。
+    _species = str(mon.get("monster") or mon.get("name") or "")
+    _character = mon.get("character") or cfg.monster_character(_species)
     # 怪物技能：species 自带 > 角色包专属 > 野外技能表 > kind 兜底。
     # 角色包优先于 SKILL_BY_KIND，塔层 BOSS 才能用「血刀」「摘星手」而不是
     # 千篇一律的「魂殿秘技」；数值口径仍沿用既有表，不重算面板。
     _skill = (mon.get("skill") or (_character or {}).get("skill")
-              or cfg.MONSTER_SKILLS.get(mon["name"]))
+              or cfg.MONSTER_SKILLS.get(_species))
     if not _skill:
         for _tok, _sk in cfg.SKILL_BY_KIND.items():
             if _tok in _kind:
@@ -3093,6 +3109,11 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
         is_material = bool(rec)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # P3 养魂（第757章 N08）：养魂涎是**渡进傀儡体内**的，不是口服丹。
+    # 🚨 必须拦在 take_item **之前**：旧兜底分支会先把丹扣掉再返回 unknown，
+    #    玩家看到的就是「丹没了，什么都没发生」—— 这正是要堵的洞。
+    if str(rec.get("effect") or "") == "puppet_soul":
+        return {"ok": False, "reason": "need_puppet", "pill": name}
     if not take_item(p, name, 1):
         return {"ok": False, "reason": "none"}
 
