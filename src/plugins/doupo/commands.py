@@ -50,6 +50,43 @@ async def _player(store, qq):
     return await store.get_player(str(qq))
 
 
+async def _puppet_ctx(qq, p):
+    """出战傀儡上下文（2026-11-20 第二轮）：五处战斗入口唯一取数口。
+
+    返回 ``(puppet, formation_n, flame_mult)``。没有出战傀儡时返回
+    ``(None, 0, 1.0)`` —— 这三个缺省值与「不传参」逐字节等价，所以调用方
+    可以无条件透传，不必写 if。
+
+    为什么必须走这里，而不是从玩家存档推：
+      * 傀儡存在**独立表** ``puppet_materials / puppets``（玩家数据禁 JSON blob），
+        只能由 ``PUPPET_STORE`` 异步取，不在 ``p`` 字典里。
+      * ``flame_mult`` 与 B 线异火同源：**同一个倍率**同时喂怪血反解与实战傀儡击
+        （红线）。漏传会让「卡面写的加成」与「实际打出来的伤害」变成两张皮。
+
+    用户原话（2026-11-20）：「其他战斗都要带上，不然炼制傀儡没有意义」。
+    任何新战斗入口都必须调本函数并透传三个参数，否则守门测试会红。
+    """
+    from . import flame_bonus as fb
+    from . import puppet_core as pc
+
+    qq = str(qq)
+    try:
+        pu = await DEFAULT_PUPPET_STORE.active_puppet(qq)
+    except Exception:
+        return (None, 0, 1.0)
+    if not pu:
+        return (None, 0, 1.0)
+    try:
+        n = pc.formation_count(await DEFAULT_PUPPET_STORE.list_puppets(qq))
+    except Exception:
+        n = 1
+    try:
+        flame_mult = 1.0 + float(fb.puppet_atk_bonus(p))
+    except Exception:
+        flame_mult = 1.0
+    return (pu, max(1, int(n)), float(flame_mult))
+
+
 def _bar(cur: int, mx: int, width: int = 10) -> str:
     if mx <= 0:
         return ""
@@ -570,7 +607,11 @@ async def cmd_break(store, qq, rng=None) -> str:
     # 战力快照只在 core 内部锁难度，**这里绝不渲染快照战力数字**（用户明确要求）。
     if core.is_nine_star_breakthrough(p):
         locked = await store.item_locks(str(qq))
-        br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked)
+        # 出战傀儡（2026-11-20 第二轮）：突破是唯一的境界关口，不带傀儡等于白炼。
+        _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+        br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked,
+                                        puppet=_pu, formation_n=_pu_n,
+                                        puppet_flame_mult=_pu_fm)
         await store.put_player(p)
         _ch = br.get("character") or {}
         _name = br.get("boss_name") or "强敌"
@@ -660,7 +701,10 @@ async def cmd_fight(store, qq) -> str:
     # 气血结转+小幅回复。回满斗气只能靠突破/升级。
     # 2026-11-19 自动服药：锁定物品绝不参与（用户硬要求）。
     locked = await store.item_locks(str(qq))
-    res = core.encounter(p, locked=locked)
+    # 出战傀儡（2026-11-20 第二轮）：野外遭遇是最主要的刷怪入口，必须带。
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+    res = core.encounter(p, locked=locked, puppet=_pu, formation_n=_pu_n,
+                         puppet_flame_mult=_pu_fm)
     # 2026-11-17：统一「战斗结束」落盘点。普通回包仍只给高光，完整 log 只落盘，
     # 玩家主动「战斗回看」时才展开，绝不把 1~5 敌的中间回合塞进普通回包。
     core.record_last_battle(
@@ -1923,7 +1967,13 @@ async def cmd_rob(store, qq, target) -> str:
     if int(vic.get("gold", 0)) <= 0:
         return "对方囊中空空。"
     # 掠夺也走四槽：双方各用自己上阵的 4 门斗技随机互殴（核心模块骨架）
-    res = core.duel(p, vic)
+    # 傀儡（2026-11-20 第二轮）：双方对称带出战傀儡——谁炼了谁受益，不是单向碾压。
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+    _vu, _vu_n, _vu_fm = await _puppet_ctx(str(target), vic)
+    res = core.duel(p, vic, puppet=_pu, formation_n=_pu_n,
+                    puppet_flame_mult=_pu_fm,
+                    vic_puppet=_vu, vic_formation_n=_vu_n,
+                    vic_flame_mult=_vu_fm)
     core.record_last_battle(
         p, "掠夺", res,
         opponent=str(vic.get("name") or f"道友{str(target)[-4:]}"),
@@ -2009,7 +2059,13 @@ async def cmd_duel_accept(store, qq, group) -> str:
         return "你没有待应的切磋（或已超时）。"
 
     # 发起方先手，复用现成 duel 内核：四槽自动随机放技，不改任何 hp/gold。
-    res = core.duel(rival, p)
+    # 傀儡（2026-11-20 第二轮）：双方对称带出战傀儡。
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(ch.challenger, rival)
+    _vu, _vu_n, _vu_fm = await _puppet_ctx(qq, p)
+    res = core.duel(rival, p, puppet=_pu, formation_n=_pu_n,
+                    puppet_flame_mult=_pu_fm,
+                    vic_puppet=_vu, vic_formation_n=_vu_n,
+                    vic_flame_mult=_vu_fm)
     a_name = str(rival.get("name") or f"道友{ch.challenger[-4:]}")
     b_name = str(p.get("name") or f"道友{str(qq)[-4:]}")
     # 无惩罚切磋：双方都留一份回看；发起方是 log 里的 who=p，应战方是 who=v。
@@ -2156,8 +2212,13 @@ async def cmd_tower(store, qq, arg="") -> str:
 
     st["floor"] = next_floor - 1
     rng = ts.STORE.rng(qq)
+    # 出战傀儡（2026-11-20 第二轮）：爬塔也带。怪血锚标尺（同层同一只怪），
+    # 傀儡击锚真人 —— 详见 core.tower_floor 的 docstring。
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
     r = core.tower_floor(p, st, rng,
-                         temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st))
+                         temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st),
+                         puppet=_pu, formation_n=_pu_n,
+                         puppet_flame_mult=_pu_fm)
     core.record_last_battle(
         p, "爬塔", r, opponent=f"第{r['floor']}层 {r['name']}",
         extra={"floor": int(r["floor"]), "kind_tag": str(r.get("kind") or "")},
@@ -2439,7 +2500,12 @@ async def cmd_weekly(store, qq) -> str:
 
     snap = core.weekly_snapshot(p, week)
     rng = ws.STORE.rng(qq)
-    r = core.weekly_floor(p, snap, st, rng)
+    # 出战傀儡（2026-11-20 第二轮）：周本也带。怪血锚当周快照（难度锁定），
+    # 傀儡击锚真人 —— 见 core.weekly_floor 的 docstring。
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+    r = core.weekly_floor(p, snap, st, rng,
+                          puppet=_pu, formation_n=_pu_n,
+                          puppet_flame_mult=_pu_fm)
     core.record_last_battle(
         p, "周副本", r, opponent=f"第{r['floor']}/7层 {r['name']}",
         extra={"floor": int(r["floor"]), "week": week, "kind_tag": str(r.get("kind") or "")},

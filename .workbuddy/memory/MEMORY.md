@@ -67,3 +67,14 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 **傀儡料只进 puppet_out 不进 out**：`_roll_drops(p,rng,mon,puppet_out=None)`，`out` 是「进背包的战利」，傀儡料落 `puppet_materials` 真实列（最高声明）。`puppet_out=None` 时整段跳过 → 老调用逐字节不变。遗迹扩到六段，野外 lv30~90 千分率 + 精英/BOSS 必掉一件。
 守门 `tests/test_doupo_puppet_recipes.py` 82 条 + `tmp/mut_pup_recipes.py` 12 组注入全被抓住；`tmp/pup_tiers_check.py` 宿主机可跑（puppet_core 不依赖 nonebot）。本地 `5735b09` → 远端 `2b5b36d9`，逐 blob 9/9 PASS，远端 +1347/−72 = 本地 diff。
 ⚠️ 改 `make_puppet` 档位后 `test_doupo_puppet.py` 的「首炼恒人级铜」断言已换成「材料决定档位」——那是修回原著，不是放水。
+
+## 14. 🚨 傀儡战力锚定 + 五处战斗接入（2026-11-20 第七轮）
+**旧口径是绝对常数，这是「低得离谱」的唯一根因**：`PUPPET_TIER_BASE=(120,900,4200)` 不跟等级走 → lv81 玩家每回合 36344、人级傀儡 224.7 = **0.62%**。四个旧常数 `PUPPET_TIER_BASE/CORE_K1/SOUL_K2/ATK_FACTOR` 已删，**别再引回来**（`tests/test_doupo_puppet_recipes.py` 的老档断言已改口径）。
+**新公式**：`傀儡输出 = 玩家每回合期望输出 × PUPPET_TIER_RATIO(0.15/0.30/0.50) × 材料系数`；`PUPPET_REF_LV=(35,65,80)` 无玩家上下文时走 `core.tower_ref_player`（不另造假玩家）；`_player_round_output` 用 `damage_schedule` 均值（只读属性/mp_max/skills，**不读当前 hp** → 同一 p 稳定，反解与实战不会错位）。
+**🚨 `PUPPET_ENEMY_COMP=0.55` 是「带傀儡有没有意义」的唯一开关**：`monster_scaled` 把 puppet_bonus 全额计入怪血（1.0）时，「多一个打手」与「怪血同步变厚」数学上完全对消，回合/胜率/承伤全不变 —— 数值修多大都白搭。0.55 → 带傀儡稳定快 1 回合。注入回 1.0 守门必红。
+**🚨 五处战斗的锚必须分清**：野外 `encounter` 锚真人 p；**爬塔 `tower_floor` 怪血锚标尺 `tower_ref_player(ref_lv)`、实战锚真人 fp**（否则同层怪血随打它的人变厚，破坏「同层同一只怪」）；**周本 `weekly_floor` 怪血锚周一快照画像**（当周新炼傀儡不使怪变厚=纯赚）；九星 `make_breakthrough_boss` 锚触发瞬间快照 snap；PVP `duel(p,vic,puppet=,vic_puppet=)` **双方对称**（被挑战方离线但仍可查傀儡表）。命令层唯一取数口 `commands._puppet_ctx(qq,p)→(puppet,formation_n,flame_mult)`，无傀儡返 `(None,0,1.0)` 与不传参逐字节等价；七处调用点全透传。`flame_mult` 必须同时喂反解与实战（漏传=卡面与伤害两张皮）。
+**结阵封顶 `PUPPET_FORMATION_MAX=3`**：`formation_count()` 数的是**拥有**的全部傀儡、原本无上限每具+15%，堆 5 具人级白拿+60%，叠新口径 = 天级 104%。封顶放在 `formation_count` 里（报的数必须与吃到的加成同一个数）。
+守门 `tests/test_doupo_puppet_anchor.py` **57 条** + `tmp/mut_pup_anchor.py` **11 组注入抓住 11 白守 0**。**两处曾白守的教训**：① 测试自己显式注入参数 → 抓不到 cfg 被改，必须另加「config 实际值区间」断言；② `>0.89` 这种宽松阈值抓不到「基准从 2 挪到 1」（只让 1.0→0.95），老档必须断言**精确等于 1.0**。
+**零回归硬证据**：`_balance.py` 全量 lv1~102×200 场 **本轮 vs HEAD `diff` 无差异**（lv49 100% 越界是 HEAD 基线，非本轮引入；211 场在 120~400 内）。回归约 1200 条全绿（回看 218/commands 124/多配方 87/e2e 77/菜单 75/anchor 57/duel 56/puppet 54/boss_cast 48/沉浸 43/flame_tiers 41/battle_depth 37/九星 36/core 31/hit_rate 25/存档 12/持久化 8…）。
+⚠️ **写塔/周本用例必须打深层**：第 1 层怪血仅 4000~8000（周本新玩家走 `ROOKIE_PROFILE` lv5），lv60 玩家先手秒杀 → 傀儡没机会出手，用例会假红/假绿。塔用 `{"floor":25}`，周本传 `wd_weekly.snapshot_profile(p)` 而不是 `core.weekly_snapshot`（后者对无本周快照的新玩家返 lv5 新手档）。
+⚠️ `tests/test_battle_encounter.py` 是 pytest 风格，镜像与宿主机都没有 pytest → **既有基线红**，与本轮无关。

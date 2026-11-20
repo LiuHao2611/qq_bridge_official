@@ -242,9 +242,17 @@ async def main() -> None:
           "hits=%d puppet=%s" % (len(hits), res.get("puppet")))
     src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
                encoding="utf-8").read()
+    # 意图：core.py 里**不许自己造傀儡输出公式**，只能调 puppet_core 的两个函数；
+    # 且两处（反解 monster_scaled / 实战 fight）都要调到。2026-11-20 第二轮改口径：
+    # 原来用字面串 `"pc.puppet_attack"`，只要换个别名（_pc0/_pc/_pcp）就假红——
+    # 断言改成「有调用、无定义」，对别名不敏感，才是真正要守的东西。
     check("战斗注入与反解都只调唯一输出函数",
-          "pc.puppet_attack" in src and "puppet_bonus" in src
-          and "def puppet_expected_damage" not in src, "")
+          "puppet_attack(" in src and "puppet_expected_damage(" in src
+          and "def puppet_attack" not in src
+          and "def puppet_expected_damage" not in src,
+          "attack=%s expdmg=%s defattack=%s defexpdmg=%s" % (
+              "puppet_attack(" in src, "puppet_expected_damage(" in src,
+              "def puppet_attack" in src, "def puppet_expected_damage" in src))
 
     # ---- 7. 结阵 / 雷淬 ----
     roster2 = await db.list_puppets(QQ)
