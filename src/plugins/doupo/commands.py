@@ -338,7 +338,7 @@ MENU_GROUPS = (
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
         ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂"),
-        ("傀儡遗迹", "每日副本六段：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿"),
+        ("傀儡遗迹", "每日副本六段自动连打至力竭：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿"),
     )),
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
@@ -360,7 +360,7 @@ MENU_GROUPS = (
         ("切磋 @某人", "无惩罚切磋：对方「应战」后自动随机放技，只记荣誉战绩"),
         ("应战", "接受本群道友的切磋邀请（1 分钟内有效）"),
         ("拒战", "婉拒切磋邀请"),
-        ("送 100 @某人", "赠金币"),
+        ("送 回灵丹 5 @某人", "赠金币 / 赠背包物品"),
     )),
 )
 
@@ -2136,6 +2136,89 @@ async def cmd_give(store, qq, target, amount) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 赠送背包物品（2026-11-20 用户「加一个新功能赠送，可以赠送其他玩家任意背包物品」）
+# ---------------------------------------------------------------------------
+def parse_gift(text: str):
+    """把「送」后面的正文解析成 ``(物品名, 数量)``；物品名为空 = 金币模式。
+
+    ``送 100``        → ("", 100)      金币（旧路径，必须继续能用）
+    ``送 回灵丹 5``    → ("回灵丹", 5)
+    ``送 回灵丹×5``    → ("回灵丹", 5)
+    ``送 回灵丹``      → ("回灵丹", 1)
+
+    **纯函数**：不碰 store、不读事件，专门为了能在测试里逐条钉死解析口径。
+    只认 ASCII 数字 —— 物品名里的「七阶魔核」「三纹青灵丹」是中文数字，撞不上。
+    """
+    s = re.sub(r"^\s*(?:赠送给|赠送|送给|送)", "", str(text or "")).strip()
+    s = s.strip("，,、。 ")
+    if not s:
+        return "", 0
+    if s.isdigit():
+        return "", int(s)
+    m = re.search(r"(?:[×xX*]\s*|\s)(\d+)\s*$", s)
+    if m:
+        name = s[:m.start()].strip(" ，,、×xX*")
+        if name:
+            return name, int(m.group(1))
+    # 「送回灵丹5」这种不带分隔符的写法也要认（物品名里没有 ASCII 数字，不会误切）
+    m = re.search(r"(\d+)\s*$", s)
+    if m:
+        name = s[:m.start()].strip(" ，,、×xX*")
+        if name:
+            return name, int(m.group(1))
+    return s, 1
+
+
+def _gift_item_name(p, name: str) -> str:
+    """把玩家输入对到**自己包裹里真实有的**物品名（先精确，再包含）。
+
+    与 ``_match_item_name`` 的区别：候选池取包裹本身而不是宝库目录，
+    所以「药渣」这类不在宝库清单里的物品也能送；同时天然挡掉「输入一个
+    你根本没有的东西」。
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    pool = [k for k, v in core.bag(p).items() if int(v) > 0]
+    if name in pool:
+        return name
+    hits = [x for x in pool if name in x or x in name]
+    return sorted(hits, key=len)[0] if hits else ""
+
+
+async def cmd_gift(store, qq, target, item, n=1) -> str:
+    """赠送一件背包物品。金币仍走 :func:`cmd_give`，两条路互不干扰。
+
+    「一处输出=一条消息」：成功/失败都只回一条纯文本，不另发卡片。
+    """
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    if not target:
+        return ("用法：送 回灵丹 5 @某人（赠物品）　｜　送 100 @某人（赠金币）")
+    if str(target) == str(qq):
+        return "不能赠送给自己。"
+    if int(n) <= 0:
+        return "数量无效。"
+    hit = _gift_item_name(p, item)
+    if not hit:
+        return ("包裹里没有【%s】。发「背包」看现有物品；"
+                "送金币用「送 100 @某人」。" % str(item or "").strip())
+    have = core.count_item(p, hit)
+    if have < int(n):
+        return "【%s】只有 %d 个，不够送 %d 个。" % (hit, have, int(n))
+    if await store.get_player(str(target)) is None:
+        return "对方尚未入道。"
+    ok = await store.transfer_item(str(qq), str(target), hit, int(n))
+    if not ok:
+        # 走到这里说明 get 与 transfer 之间状态变了（对方掉档 / 物品被别处扣掉）
+        return "赠送失败：对方存档或你的包裹已变动，请重试。"
+    left = core.count_item(p, hit)
+    return ("🎁 你赠予对方【%s】×%d，善缘结下。\n　包裹余 %d 个%s"
+            % (hit, int(n), left, "" if left else "（已送空）"))
+
+
+# ---------------------------------------------------------------------------
 # 爬塔副本（2026-11-17）—— 无限层冲榜 / 武器宝箱掉落 / 三选一
 # ---------------------------------------------------------------------------
 def _expired_settle_line(p, qq) -> str:
@@ -2789,7 +2872,15 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
                 "「虚空雷池」打赢守者取《天妖傀》竹简。")
 
     # ---- 1. 定配方 ----
-    if arg:
+    # 自定材料（2026-11-20 第九轮）：手里料多时不必被固定配方绑住。
+    # 只在这里造一条**临时配方**，后续判档/五闸/扣料/落库全部复用原路径 ——
+    # 重开一条自定分支是最容易把「木桶判档」和「门禁先于耗材」写漏的做法。
+    if arg.startswith("自定"):
+        rec, custom_err = pc.custom_recipe_from_arg(arg, p_view)
+        if rec is None:
+            return custom_err
+        lack = pc.missing_materials(mats, rec)
+    elif arg:
         rec = pc.recipe_by_name(arg)
         if not rec:
             return ("无此配方「%s」。现有 %d 条：%s\n　发「傀儡 配方」看每条的用料与缺什么。"
@@ -2820,7 +2911,9 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
     # ---- 2. 判档 + 五道资格 ----
     slots = pc.recipe_slots(rec, p_view)
     tier = pc.recipe_tier(slots)
-    nominal = pc.recipe_tier(pc.recipe_slots(rec))
+    # 自定配方的「标称火」没有意义（火本就按玩家实况取，不耗材），
+    # 若拿占位 B 火算 nominal 会误报「本可出 X 级但降档」。
+    nominal = tier if rec.get("custom") else pc.recipe_tier(pc.recipe_slots(rec))
     if tier < 0:
         return "❌ 配方「%s」五维不全，无法开炉。" % rec["name"]
     gate = pc.puppet_gate(p_view, tier, need_mp=True)
@@ -2875,14 +2968,23 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
 
 
 async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
-    """傀儡遗迹日副本：三段逐日推进，掉落进 puppet_materials 真实列。
+    """傀儡遗迹日副本：**自动逐段往下打，力竭为止**（2026-11-20 第九轮）。
+
+    旧版一次调用只打当前一段，玩家要点六次；现在一条口令连打到战败或全通。
+    ``fight`` 本来就原地改 p 的 hp/mp，所以连打天然实现「力竭」—— 不另造
+    气血/斗气归零的新判定（那两个字段在战斗里并不判负，斗气见底转普攻）。
 
     难度走 ``monster_scaled`` 反解；出战傀儡的期望输出同时进反解与 ``fight``
-    （``puppet_expected_damage`` 唯一口径），不会出现「带傀儡怪血不变」。
+    （``puppet_expected_damage`` 唯一口径，且两处都传真实 p）。
 
-    ``report``：可选 dict，出结果后把**结构化战况**写进去（段位/胜负/回合/掉落），
-    供 ``card.build_ruin_data`` 并进同一张进度卡。2026-11-18 用户明确要求
-    「点一次只出一条内容」——战报不能另发一条文字。不传 = 只回文本，行为不变。
+    ``pill_budget``（2026-11-20 第九轮补）：六段**共用一份**自动服药预算，
+    上限 ``cfg.PUPPET_RUIN_PILL_CAP``。默认 ``auto_pill=True`` 时每场都能吃 2 颗，
+    六段一趟能吞十几颗回灵丹且玩家毫不知情；而丹药管够时「力竭」永远不会到来，
+    连打就成了无限续杯。共用一个 dict 才能真的累计封顶（``fight`` 会就地累加
+    ``pill_used``），与 ``core`` 里多敌连战同一写法。
+
+    ``report``：写 ``runs`` 列表（每段一条），顶层保留**最后一段**的旧单段字段，
+    兼容既有卡片/测试。一处输出=一条消息，战报并卡不发多条。
     """
     from . import puppet_core as pc
     from . import flame_bonus as fb
@@ -2894,67 +2996,100 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
     day = date.today().isoformat()
     st = await pstore.ruin_state(qq, day)
     stages = cfg.PUPPET_RUIN_STAGES
-    if int(st["stage"]) >= len(stages):
+    total = len(stages)
+    if int(st["stage"]) >= total:
         if report is not None:
-            report.update({"cleared": True, "total": len(stages),
-                           "stage_idx": len(stages) - 1, "win": True})
-        return "⚔️ 今日傀儡遗迹已全通（%d/%d），明日再来。" % (len(stages), len(stages))
+            report.update({"cleared": True, "total": total,
+                           "stage_idx": total - 1, "win": True})
+        return "⚔️ 今日傀儡遗迹已全通（%d/%d），明日再来。" % (total, total)
+
     idx = int(st["stage"])
-    sg = stages[idx]
     roster = await pstore.list_puppets(qq)
     pu = await pstore.active_puppet(qq)
     n = pc.formation_count(roster)
     # B 线傀儡异火：一个 flame_mult 同时喂怪血反解与实战傀儡击（同源，红线）。
     flame_mult = 1.0 + fb.puppet_atk_bonus(p)
-    bonus = pc.puppet_expected_damage(pu, n, flame_mult=flame_mult)
-    mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
-    res = core.fight(p, mon, puppet=pu, formation_n=n, puppet_flame_mult=flame_mult)
-    core.record_last_battle(p, "傀儡遗迹", res, opponent=sg["monster"])
+    runs = []
+    text_rows = []
+    lore_gain = False
+    wild_id = 0
+    last = None
+    # 整趟共用一份服药预算：dict 被 fight 就地累加，跨段累计封顶。
+    pill_budget = {"hp": 0, "mp": 0, "cap": int(cfg.PUPPET_RUIN_PILL_CAP)}
+
+    while idx < total:
+        sg = stages[idx]
+        # ⚠️ 传真实 p：不传会让怪血按标尺玩家变厚、实战却按真人出手（两张皮）。
+        bonus = pc.puppet_expected_damage(pu, n, flame_mult=flame_mult, p=p)
+        mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
+        res = core.fight(p, mon, puppet=pu, formation_n=n,
+                         puppet_flame_mult=flame_mult, pill_budget=pill_budget)
+        core.record_last_battle(p, "傀儡遗迹", res, opponent=sg["monster"])
+        win = bool(res["win"])
+        drops = dict(sg["drops"]) if win else {}
+        run = {
+            "stage_idx": idx, "stage_name": sg["name"],
+            "monster": sg["monster"], "win": win,
+            "rounds": int(res["rounds"]),
+            "taken": int(res.get("taken") or 0),
+            "mon_hp_left": int(res.get("mon_hp_left") or 0),
+            "drops": drops,
+        }
+        runs.append(run)
+        last = run
+        if not win:
+            text_rows.append("❌ 第 %d 段 %s 力竭（%d 回合，敌余血 %d），今日仍在第 %d 段" % (
+                idx + 1, sg["name"], run["rounds"], run["mon_hp_left"], idx + 1))
+            break
+        text_rows.append("✅ 第 %d 段 %s（%d 回合，承伤 %d）—— %s" % (
+            idx + 1, sg["name"], run["rounds"], run["taken"],
+            "、".join("%s×%d" % (k, int(v)) for k, v in drops.items()) or "无掉落"))
+        for name, qty in drops.items():
+            await pstore.add_material(qq, name, int(qty))
+        if "天妖傀竹简" in drops:
+            await pstore.set_lore(qq, True)
+            lore_gain = True
+            wild = pc.make_puppet(
+                p, {"body_name": "残破傀儡躯", "body_realm": "斗宗", "body_star": 0,
+                    "body_fresh": True, "body_fresh_until": 0},
+                {"core_tier": 7, "core_attr": "火"},
+                {"soul_source": "无主残魂", "soul_strength": 600,
+                 "mind_stripped": True},
+                {"metal_name": "暗金玄铁", "metal_grade": 2},
+                {"fire_tier": 7, "fire_attr": "火"}, origin="wild")
+            wild_id = await pstore.add_wild_puppet(wild)
+        # 水位线只升不降（ruin_clear 内部 MAX），已通关的段不会被重复领奖。
+        await pstore.ruin_clear(qq, day, idx + 1)
+        idx += 1
+
+    # 连打跨场结转 hp/mp：只在最后写回一次，避免中间状态半落库。
     await store.put_player(p)
-    head = "【傀儡遗迹·%s】%s\n　%s" % (sg["name"], sg["desc"], sg["monster"])
-    if not res["win"]:
-        if report is not None:
-            report.update({"stage_idx": idx, "stage_name": sg["name"],
-                           "monster": sg["monster"], "win": False,
-                           "rounds": int(res["rounds"]),
-                           "mon_hp_left": int(res["mon_hp_left"]),
-                           "drops": {}})
-        return (head + "\n❌ 力竭（%d 回合，敌余血 %d）。今日仍在第 %d 段，"
-                "调息后可再来。" % (int(res["rounds"]), int(res["mon_hp_left"]), idx + 1))
-    for name, qty in sg["drops"].items():
-        await pstore.add_material(qq, name, int(qty))
-    if "天妖傀竹简" in sg["drops"]:
-        await pstore.set_lore(qq, True)
-    await pstore.ruin_clear(qq, day, idx + 1)
-    drops = "、".join("%s×%d" % (k, int(v)) for k, v in sg["drops"].items())
-    tail = ""
-    if "天妖傀竹简" in sg["drops"]:
-        wild = pc.make_puppet(
-            p, {"body_name": "残破傀儡躯", "body_realm": "斗宗", "body_star": 0,
-                "body_fresh": True, "body_fresh_until": 0},
-            {"core_tier": 7, "core_attr": "火"},
-            {"soul_source": "无主残魂", "soul_strength": 600, "mind_stripped": True},
-            {"metal_name": "暗金玄铁", "metal_grade": 2},
-            {"fire_tier": 7, "fire_attr": "火"}, origin="wild")
-        wid = await pstore.add_wild_puppet(wild)
-        tail = ("\n📜 得《天妖傀》竹简——傀儡之技已习得。"
-                "\n🩸 遗迹里还有一具无主残傀（id=%d），发「傀儡 收服 %d」可降服。" % (wid, wid))
+
     if report is not None:
-        report.update({"stage_idx": idx, "stage_name": sg["name"],
-                       "monster": sg["monster"], "win": True,
-                       "rounds": int(res["rounds"]),
-                       "taken": int(res.get("taken") or 0),
-                       "drops": dict(sg["drops"]),
-                       "lore": "天妖傀竹简" in sg["drops"],
-                       "wild_id": locals().get("wid"),
-                       "total": len(stages)})
-    return (head + "\n✅ %d 回合胜（承伤 %d）\n　掉落：%s\n　今日进度 %d/%d%s" % (
-        int(res["rounds"]), int(res.get("taken") or 0), drops,
-        idx + 1, len(stages), tail))
+        report.update({
+            "runs": runs,
+            # 以下为旧单段字段（顶层 = 最后一段），兼容既有卡片与守门测试。
+            "stage_idx": int(last["stage_idx"]) if last else idx,
+            "stage_name": str(last["stage_name"]) if last else "",
+            "monster": str(last["monster"]) if last else "",
+            "win": bool(last["win"]) if last else False,
+            "rounds": int(last["rounds"]) if last else 0,
+            "taken": int(last["taken"]) if last else 0,
+            "mon_hp_left": int(last["mon_hp_left"]) if last else 0,
+            "drops": dict(last["drops"]) if last else {},
+            "lore": lore_gain, "wild_id": wild_id or None,
+            "cleared": bool(idx >= total), "total": total,
+        })
+    tail = ""
+    if lore_gain:
+        tail = ("\n📜 得《天妖傀》竹简——傀儡之技已习得。"
+                "\n🩸 遗迹无主残傀（id=%d），发「傀儡 收服 %d」可降服。" % (wild_id, wild_id))
+    return ("【傀儡遗迹·自动连打】今日进度 %d/%d\n%s%s"
+            % (idx, total, "\n".join(text_rows) or "　未挑战", tail))
 
 
-#: 傀儡「真实列」白名单（与 PuppetStore.update_puppet 的 allowed 保持一致）。
-#: 派生字段（capped / formation / move …）只用于文案，绝不写库。
+
+
 _PUPPET_COLUMNS = frozenset({
     "name", "tier", "tier_name", "skin", "body_name", "body_realm", "body_star",
     "body_fresh", "body_fresh_until", "core_tier", "core_attr", "soul_source",

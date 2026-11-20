@@ -1330,7 +1330,10 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     #: 自动服药计数。多敌遭遇战由 encounter 传**同一份**预算进来，
     #: 否则 5 连战会每战各嗑 2 枚、一场吃掉 10 枚家底。
     pill_used = pill_budget if pill_budget is not None else {"hp": 0, "mp": 0}
-    pill_cap = int(pill_used.get("cap") or cfg.AUTO_PILL_MAX_PER_FIGHT)
+    # ⚠️ 不能用 `or`：cap=0 是「本场一颗都不许自动吃」的合法意图，而 0 是 falsy，
+    # 会静默回落成默认 2 颗（2026-11-20 第九轮：遗迹连打想封 0 时发现封不住）。
+    pill_cap = (int(pill_used["cap"]) if "cap" in pill_used
+                else int(cfg.AUTO_PILL_MAX_PER_FIGHT))
     fortune_left = 0
     fortune_seen = False
     fortune_round = 0       # 福利发放的回合号（当回合不递减，否则 1 回合福利只剩半程）

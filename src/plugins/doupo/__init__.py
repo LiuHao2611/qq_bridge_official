@@ -1045,8 +1045,17 @@ give = on_regex(_pat(r"(?:送|赠送)"), priority=PRI, block=True, rule=_mode_is
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, give)
+    # 2026-11-20 赠送扩到任意背包物品：`送 回灵丹 5 @某人` 走 cmd_gift，
+    # `送 100 @某人` 仍是金币（parse_gift 只认「整串是数字」）。
+    # 数字不再用 `_num(event)`：那条取全文第一个数字，官方通道把 @ 解析成
+    # openid 后容易把一串数字当成金额，这里统一从纯文本里解析。
+    item, n = commands.parse_gift(_plain(event))
+    target = _extract_at(event)
+    if item:
+        await give.finish(await commands.cmd_gift(
+            store, str(event.user_id), target, item, n))
     await give.finish(await commands.cmd_give(
-        store, str(event.user_id), _extract_at(event), _num(event)))
+        store, str(event.user_id), target, n or None))
 
 
 # ---------------------------------------------------------------------------

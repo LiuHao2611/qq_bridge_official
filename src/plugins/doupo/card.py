@@ -939,19 +939,50 @@ def build_ruin_data(state: dict, day: str = "", report: dict | None = None) -> d
         "title": "傀儡遗迹",
         "subtitle": "今日进度 %d/%d%s" % (done, len(stages), (" · " + day) if day else ""),
         "groups": groups,
-        "tip": "发「傀儡遗迹」逐段挑战 · 发「傀儡」看名录 · 发「炼制傀儡」开炉",
+        "tip": "发「傀儡遗迹」自动连打至力竭 · 发「傀儡」看名录 · 发「炼制傀儡」开炉",
     }
 
 
 def _ruin_report_rows(report: dict) -> list:
-    """本次挑战 → 卡片行（胜负/回合/承伤/掉落），与文本战报同一批字段。"""
+    """本次挑战 → 卡片行（胜负/回合/承伤/掉落），与文本战报同一批字段。
+
+    2026-11-20 第九轮：遗迹改为自动连打，``report["runs"]`` 一段一条。
+    老的单段 report（只有 stage_idx/win/rounds）仍照旧解析，兼容既有测试与外部调用。
+    """
     rep = report or {}
+    total = int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))
+    runs = list(rep.get("runs") or [])
+    if runs:
+        wins = [r for r in runs if r.get("win")]
+        loss = next((r for r in runs if not r.get("win")), None)
+        head = "本次自动挑战 · 连过 %d/%d 段" % (len(wins), total)
+        if loss is not None:
+            head += " · 第 %d 段力竭" % (int(loss.get("stage_idx") or 0) + 1)
+        elif len(wins) >= total:
+            head += " · 今日全通"
+        rows = [head]
+        for r in runs:
+            rows.append("第 %d 段 %s ｜ %s ｜ %d回合%s" % (
+                int(r.get("stage_idx") or 0) + 1,
+                str(r.get("stage_name") or "傀儡遗迹"),
+                "✅ 胜" if r.get("win") else "❌ 力竭",
+                int(r.get("rounds") or 0),
+                "" if r.get("win") else " · 敌余血 %s" % _fmt_hp(r.get("mon_hp_left"))))
+        agg: dict = {}
+        for r in runs:
+            for k, v in (r.get("drops") or {}).items():
+                agg[str(k)] = agg.get(str(k), 0) + int(v)
+        if agg:
+            rows.append("累计掉落：" + "、".join("%s×%d" % (k, v) for k, v in agg.items()))
+        if rep.get("lore"):
+            rows.append("📜 得《天妖傀》竹简 · 发「傀儡 收服」降服残傀")
+        return rows
+
     idx = int(rep.get("stage_idx") or 0)
     name = str(rep.get("stage_name") or "")
     mon = str(rep.get("monster") or "")
     if rep.get("cleared") and not rep.get("rounds"):
-        total = int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))
-        return ["今日三段已全通（%d/%d）· 明日再来" % (total, total),
+        return ["今日遗迹已全通（%d/%d）· 明日再来" % (total, total),
                 "已通关的段落不再掉材料，明天刷新后继续"]
     head = "第 %d 段 · %s ｜ %s" % (idx + 1, name or "傀儡遗迹", mon or "守关者")
     if not rep.get("win"):
@@ -962,8 +993,7 @@ def _ruin_report_rows(report: dict) -> list:
     drop_txt = "、".join("%s×%d" % (k, int(v)) for k, v in drops.items()) or "无"
     rows = [head + " ｜ ✅ 胜",
             "%d 回合 · 承伤 %s · 今日进度 %d/%d"
-            % (int(rep.get("rounds") or 0), _fmt_hp(rep.get("taken")), idx + 1,
-               int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))),
+            % (int(rep.get("rounds") or 0), _fmt_hp(rep.get("taken")), idx + 1, total),
             "实际掉落：" + drop_txt]
     if rep.get("lore"):
         rows.append("📜 得《天妖傀》竹简 · 遗迹残傀可发「傀儡 收服」降服")
