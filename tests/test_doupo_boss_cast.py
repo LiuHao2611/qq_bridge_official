@@ -291,8 +291,11 @@ def test_field_monsters_all_have_character_packs():
     elites = [(m["name"], cfg.monster_character(m["name"]))
               for m in cfg.MONSTERS if cfg.monster_character(m["name"]).get("elite")]
     bad = [(n, ch.get("name")) for n, ch in elites
-           if not ch.get("intro") or not (ch.get("mech") or {}).get("kind")]
-    check("野外精英均有登场引言+恶心机制", not bad, str(bad))
+           # 2026-11-20 起「登场」= 出场描写(appearance) + 台词(intro)，二者至少其一；
+           # 无台词的魔兽只靠 appearance 也满足沉浸要求。
+           if not (ch.get("appearance") or ch.get("intro"))
+           or not (ch.get("mech") or {}).get("kind")]
+    check("野外精英均有登场描写+恶心机制", not bad, str(bad))
     check("野外精英至少 8 只（不是只做 12 突破 BOSS）", len(elites) >= 8,
           "精英 %d 只" % len(elites))
 
@@ -308,9 +311,10 @@ def test_tower_and_weekly_bosses_have_packs():
               mon.get("skill", {}).get("name") == sk, str(mon.get("skill")))
     for n in wd.BOSS_NAME, wd.ELITE_NAME:
         ch = cfg.monster_character(n)
-        check("周本 %s 有技能+机制+引言" % n,
+        check("周本 %s 有技能+机制+登场描写" % n,
               bool(ch and ch.get("skill") and (ch.get("mech") or {}).get("kind")
-                   and ch.get("intro")), str(ch)[:90] if ch else "缺失")
+                   and (ch.get("appearance") or ch.get("intro"))),
+              str(ch)[:90] if ch else "缺失")
     check("周本普通塔卫有技能",
           bool(cfg.monster_character("塔卫").get("skill")),
           str(cfg.monster_character("塔卫"))[:90])

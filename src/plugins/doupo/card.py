@@ -327,12 +327,14 @@ def build_skills_data(p: dict) -> dict:
 
 
 def _origin_mark(e: dict) -> str:
-    """斗技来源标记：一眼分清本宗传承 / 通用基础 / 异火技 / 游戏自设。"""
+    """斗技来源标记：一眼分清本宗传承 / 通用基础 / 异火技。
+
+    2026-11-20 沉浸式铁律：不再追加「〔自设〕」。玩家不需要在卡面上被提醒
+    「这门斗技是补出来的」——那属于考据台账（skill_book.novel），不进玩家视野。
+    """
     origin = e.get("origin") or "本宗"
-    mark = {"本宗": "〔本宗〕", "通用": "〔通用〕", "异火": "〔异火〕"}.get(origin, f"〔{origin}〕")
-    if e.get("core"):
-        mark += "〔自设〕"
-    return mark
+    return {"本宗": "〔本宗〕", "通用": "〔通用〕", "异火": "〔异火〕"}.get(
+        origin, f"〔{origin}〕")
 
 
 def build_roster_data(p: dict) -> dict:
@@ -461,7 +463,7 @@ def build_roster_data(p: dict) -> dict:
                      f"上阵 {on}/{cfg.LOADOUT_SIZE}"),
         "groups": groups,
         "rows": rows,
-        "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看原著出处",
+        "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看招式来历",
     }
 
 
@@ -594,7 +596,7 @@ def build_flames_data(p: dict) -> dict:
                if int(fl.get(f["name"], 0)) > 0]
     if o_owned:
         rows.append({"title": "兽火 / 其他火焰", "right": "",
-                     "sub": "九星突破战胜原著强敌所得，按等级给加成；可喂药渣升级。", "note": ""})
+                     "sub": "九星突破战胜强敌所得，按等级给加成；可喂药渣升级。", "note": ""})
         for f in o_owned:
             name = f["name"]
             lv = int(fl.get(name, 0))

@@ -562,12 +562,15 @@ def make_breakthrough_boss(p, rng=random.random) -> dict:
     """
     snap = copy.deepcopy(p)   # 内部快照：触发瞬间锁定，战斗过程不再变化
     ch = cfg.break_boss_for_lv(int(snap.get("lv", 1)))
+    # 出场描写集中在 cfg.CHARACTER_APPEARANCE，避免角色包里各写一份
+    _ch = dict(ch)
+    _ch["appearance"] = str(ch.get("appearance") or cfg.character_appearance(ch["name"]) or "")
     species = {
         "name": ch["name"], "lv": int(snap["lv"]),
         "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": cfg.BOSS_BREAK_KIND,
         "skill": dict(ch["skill"]),
-        "character": dict(ch),
+        "character": _ch,
     }
     mon = monster_scaled(snap, species)
     mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
@@ -870,6 +873,12 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
         raw = st["力量"] * float(cfg.WEAPON_BASE_MULT)
         kind = "普攻"
     raw *= root   # 根基虚浮 → 实际输出打折；适量丹药 root=1 逐字节不变
+    # 2026-11-20 修真 bug：BOSS 的 debuff_atk 通过 fx.on_hit 挂到玩家的 fx_self，
+    # 但旧版只在怪出手时读 target_atk_mult(m_fx)，玩家出手从不读自己的 p_fx，
+    # 于是"降攻"只显示在文案里、不真降伤害。这里按 self 侧的降攻打折；
+    # 无降攻时倍率恒 1.0，普通战斗逐字节不变。
+    if fx_self is not None:
+        raw *= fx.target_atk_mult(fx_self)
 
     # 基础单击（未计破防/条件）：也是 DoT 的伤害基数
     # def_mult 是本次实际生效的防御减伤系数（破防会改写它）；回看卡据它算
@@ -1189,7 +1198,6 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     fortune_left = 0
     fortune_seen = False
     fortune_round = 0       # 福利发放的回合号（当回合不递减，否则 1 回合福利只剩半程）
-    poison_turns, poison_dmg = 0, 0
     exhausted = False
     _kind = str(mon.get("kind") or "")
 
@@ -1207,6 +1215,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         for _gain, _name in auto_pill_candidates(p, kind, locked_set):
             if not take_item(p, _name, 1):
                 continue
+            # 2026-11-20 减疗真落地：BOSS 的 debuff_heal 也压低自动服药回血量。
+            # 旧版只压吸血，而玩家主要靠服药回血 → "减疗"几乎无感，是假机制。
+            _gain = max(1, int(_gain * fx.heal_mult(p_fx)))
             actual = min(cap, cur + _gain) - cur
             if kind == "hp":
                 hp += actual
@@ -1240,16 +1251,32 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             entry["foe_hp_after"] = max(0, int(foe_hp))
         return entry
 
-    # 2026-11-20 原著 BOSS 登场引言：沉浸式"突如其来的惊喜/惊吓"。
-    # intro 角色包只在九星突破 BOSS 上存在（monster_scaled 透传），普通怪 None。
-    # 用 intro=True 标记，round=0、dmg=0 —— 不进任何伤害/回合统计，回看卡单独提成引言块。
+    # 2026-11-20 原著 BOSS 登场：沉浸式"突如其来的惊喜/惊吓"。
+    # 三段式（对齐原著写法与同类游戏惯例）：
+    #   ① 剪影 / 外貌气势（appearance，先让玩家看见"什么东西来了"）
+    #   ② 报身份称号（move = title，再让玩家知道"这是谁"）
+    #   ③ 接台词或动作引子（intro，最后听他说第一句话）
+    # 用 intro=True 标记，dmg=0 —— 不进任何伤害/回合统计，回看卡单独提成引言块。
     _character = mon.get("character")
-    if _character and str(_character.get("intro") or ""):
+    _appear = str((_character or {}).get("appearance") or "").strip()
+    if not _appear and _character:
+        # 双保险：角色包没挂 appearance 时（老档 log、手搓怪、PVP 拼出来的角色包）
+        # 统一回落到 CHARACTER_APPEARANCE 这张唯一真值表，避免「有的怪有出场描写、
+        # 有的没有」这种靠路径运气的不一致。
+        _appear = str(cfg.character_appearance(
+            _character.get("name") or mon.get("name")) or "").strip()
+    _intro = str((_character or {}).get("intro") or "").strip()
+    if _character and (_appear or _intro):
+        _notes = []
+        if _appear:
+            _notes.append(_appear)
+        if _intro and _intro != _appear:
+            _notes.append(_intro)
         dmg_log.append(_mark({
             "dmg": 0, "kind": "登场", "intro": True,
             "move": str(_character.get("title") or "强敌"),
             "speaker": str(_character.get("name") or mon.get("name") or "敌手"),
-            "notes": [str(_character["intro"])],
+            "notes": _notes,
         }))
 
     # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
@@ -1267,15 +1294,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     while not aid and rounds < int(cfg.HARD_ROUND_CAP) and m_hp > 0 and hp > 0:
         rounds += 1
         hp_before, mp_before, foe_hp_before = hp, mp, m_hp
-        # 怪物毒技能：每回合开始扣血（最多 2 回合），不写任何持久状态。
-        if poison_turns > 0:
-            hp -= poison_dmg
-            taken += poison_dmg
-            poison_turns -= 1
-            dmg_log.append(_mark({"dmg": poison_dmg, "kind": "中毒", "taken": True,
-                                  "dot": True, "move": "中毒"}))
-            if hp <= 0:
-                break
+        # 怪物毒技能：DoT 统一由 skill_effects 状态机结算（见下），
+        # 旧的 poison_turns 计数器已删除——两套并存会把两回合毒算成四回合。
         # 2026-11-20 原著 BOSS 机制：玩家回合开始结算挂在自己身上的 DoT / 眩晕。
         # 普通怪 p_fx 全空 → on_turn_start 返回全 0，既有战斗逐字节不变。
         _pfx_start = fx.on_turn_start(p_fx, rng)
@@ -1403,7 +1423,14 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                             mp = max(0, mp - _drain)
                             sk_note.append("%s！斗气被夺 -%d" % (sk_name, _drain))
                         elif _se == "poison":
-                            poison_turns, poison_dmg = 2, max(1, int(dealt * _sm))
+                            # 2026-11-20 修真 bug：旧版只算 poison_dmg 写进 notes，
+                            # 从没挂到 p_fx["dot"] —— 玩家根本不掉血，是假效果。
+                            # 现在真挂 DoT：base=本次毒伤，v=1.0，两回合各扣一次。
+                            # ⚠️ 只走 p_fx 一条路：旧 poison_turns 计数器会与 DoT
+                            # 叠加成 4 次扣血，已整段删除（见 on_turn_start 调用处）。
+                            poison_dmg = max(1, int(dealt * _sm))
+                            p_fx["dot"].append({"v": 1.0, "d": 2,
+                                                "kind": sk_name, "base": poison_dmg})
                             sk_note.append("%s！中毒 %d×2 回合" % (sk_name, poison_dmg))
                         else:
                             dealt = max(1, int(dealt * max(1.0, _sm)))
@@ -1421,9 +1448,12 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                 _mn = str(_mech.get("kind") or sk_name)
                                 _mech_eff = dict(_mech)
                                 _mech_eff["t"] = _mech.get("t") or "debuff_atk"
-                                # on_hit 的 base 伤害用本击 dealt；dot 的 base 取 mech.base 或 1
-                                if _mech_eff["t"] == "dot":
-                                    _mech_eff["base"] = max(1, int(_mech.get("base") or 1))
+                                # 2026-11-20 复核更正：这里原有一行
+                                #   if t == "dot": _mech_eff["base"] = ...
+                                # 是**死代码**——skill_effects.on_hit 的 dot 分支一律用
+                                # 本次命中伤害 dmg 作 base（"base": max(1, int(dmg))），
+                                # 根本不读 e["base"]。已删，避免以后有人当它是有效开关。
+                                # 真正保证"机制毒不是每回合掉 1 点"的是 on_hit 那行。
                                 if _mech_eff["t"] == "reflect":
                                     # 反伤要被玩家受击侧 on_incoming(p_fx) 读到：
                                     # fx.on_hit 把 reflect 写到 self_state，故这里

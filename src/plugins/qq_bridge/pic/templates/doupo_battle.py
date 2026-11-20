@@ -177,6 +177,32 @@ def _wrap(s: str, max_w: int) -> list[str]:
     return S.wrap_cjk(str(s), FS_BODY, "regular", max_w)
 
 
+def _wrap_no_orphan(s: str, max_w: int, min_last: int = 6) -> list[str]:
+    """折行后消「孤字 / 寡行」：末行不足 ``min_last`` 字时，从上一行末尾搬字过来。
+
+    登场引言是两段长文，末行掉一个「来。」这种单字行非常刺眼，属于
+    card-design 明确禁止的排版瑕疵。先试整段合并（上一行 + 末行不超宽），
+    合并不下就做**均衡搬运**（把上一行末尾几个字挪到末行开头），
+    搬运时跳过行首标点，避免行首出现「。」。
+    只作用于引言块，不动全站折行（不改其他卡尺寸）。
+    """
+    lines = _wrap(s, max_w)
+    if len(lines) < 2 or len(lines[-1]) >= min_last:
+        return lines
+    merged = lines[-2] + lines[-1]
+    if Canvas.text_width(merged, FS_BODY, "regular") <= max_w:
+        return lines[:-2] + [merged]
+    prev, last = lines[-2], lines[-1]
+    need = min_last - len(last)
+    move = prev[-need:] if need <= len(prev) else prev
+    while move and move[0] in getattr(S, "HEAD_PUNCT", ()):
+        move = move[1:]
+    if move and len(prev) > len(move):
+        lines[-2] = prev[:-len(move)]
+        lines[-1] = move + last
+    return lines
+
+
 # ---------------------------------------------------------------- 配色
 def _tone_color(p: dict, tone: str) -> str:
     """阵营配色：我方暖（朱红）/ 敌方冷（斗气蓝）/ 丹药药青 / 无伤害事件灰。"""
@@ -419,10 +445,16 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
     if v:
         blocks.append(("verdict", v, H_VERDICT + VERDICT_GAP))
 
-    # 2026-11-20 原著 BOSS 登场引言：紧跟胜负徽标，沉浸式一句。
+    # 2026-11-20 强敌登场：紧跟胜负徽标，沉浸式「先看见，再听他说」。
+    # appearance 与 intro 是两段，分段折行——挤成一段会变成一坨字，读不出层次。
     intro = data.get("intro") or {}
     if intro.get("quote"):
-        q_lines = _wrap(str(intro["quote"]), content_w - 16)
+        paras = [str(x) for x in (intro.get("paras") or []) if str(x).strip()]
+        if not paras:
+            paras = [str(intro["quote"])]
+        q_lines = []
+        for pa in paras:
+            q_lines.extend(_wrap_no_orphan(pa, content_w - 16))
         speaker = str(intro.get("speaker") or "")
         title = str(intro.get("title") or "")
         head = "【登场】%s%s" % (speaker, ("·" + title) if title else "")
