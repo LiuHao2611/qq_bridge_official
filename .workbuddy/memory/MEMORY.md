@@ -33,3 +33,9 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 玩家可见处（角色包 `intro`/`title`、`CHARACTER_APPEARANCE`、火焰 `desc`、斗技列表/详情、卡面来源标记、突破文案）**禁**出现 `未载/不代编/代编/游戏原创/游戏命名/游戏设定/语料/原文只有/非原著角色/原著无`；`source`/`novel`/`note` 是内部字段不扫描，正向引文（第X章「标题」）保留。守门 `tests/test_doupo_immersion_gate.py`（36 条）+ 反证 `tmp/mut_immersion.py`（14 组）。
 **登场三段式**（对齐原著写法/同类游戏）：剪影(appearance)→报名号(title)→台词(intro)。表 `cfg.CHARACTER_APPEARANCE` 唯一真值，`character_appearance()` 读；`fight()` 登场 log 写 `[appearance,intro]` 两条 notes（缺则回落查表）；`cmd_break` 第①段同序；`intro_text()` 返 `quote`+`paras`，模板按段折行 + `_wrap_no_orphan()` 消寡行。
 **技能效果别只看文案**：`poison` 必须挂 `p_fx["dot"]`（旧 `poison_turns` 计数器已删，两套并存=4 回合毒）；玩家出手必须读自己的 `fx_self`（`debuff_atk` 才真降伤）；`_try_auto_pill` 回血必须乘 `heal_mult`（否则减疗无感）。⚠️ mech 的 dot base 由 `skill_effects.on_hit` 用本次 `dmg` 决定，core 里 `_mech_eff["base"]` 是死代码（已删）。
+
+## 10. 零元说明要洗在数据层，不是渲染层（2026-11-20 第三轮）
+第一轮只洗 `commands.py` → 宗门卡还在漏（`FACTIONS` 被 cmd_faction/宗门卡/斗技池/名录卡/图鉴六处消费）。**唯一正确位置是数据层**：`factions._strip_cite_tags(FACTIONS)` 导入即剥 `[C1]/[G1]/[S4]/[原著]/[游戏原创]/[游戏核心]` 与 `（游戏自设）` 括注；剥前快照 `FACTION_CITE_LEDGER`（233 条，禁渲染）供门禁追溯；异火考据进 `FACTION_FLAME_EVIDENCE`（11 派 14 条），`flames` 只留世界观一句话；`cfg.OTHER_FLAME_CITES` 收十朵兽火章节。守门：`_verify_flames.py`（展示零引文+台账可核验，selftest 5/5）、`tests/test_doupo_immersion_gate.py` 43 条、`tmp/mut_immersion.py` 21 组反证。**审计靠 `tmp/audit_player_text.py` 真跑 53 条业务**，别逐字段猜。
+**技能效果必须逐型验落地**：`tests/test_doupo_skill_effects_land.py` 对 skill_book 声明的 16 种 effect 做同参数对照实验（带效果 vs 不带效果各打一场，只看日志数值）→ 23 条。新增 effect 类型必须同时在该文件补一条，否则等于只加描述。
+**目标侧闪避曾是死机制**：`_hit` 只算防御减伤，怪挂「身法」不闪 → 玩家 7 门「压闪避」压空气。现 `mon["dodge"]`→`m_fx["evade"]`，在 `on_hit` **之前**结算（闪过不挂毒不降攻），**`t_ev<=0` 绝不掷骰**（否则旧战斗 rng 序列全变，211 条回看测试会一起红）。已知弱点：控场是命中后挂，目标闪避>30% 时压闪避挂不上。
+**基线红清单已清空**：菜单 52 条 / 菜单卡 cap 3600（52 条实渲 3474）/ 异火面板改判「不许印」/ 火焰出处改判台账。
