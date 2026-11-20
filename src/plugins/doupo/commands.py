@@ -2684,7 +2684,11 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
-    atk = pc.puppet_attack(cur)
+    # atk 必须传 p（2026-11-20 第三轮修）：旧版 `puppet_attack(cur)` 不传 p 会走
+    # `_ref_player(tier)` 标尺玩家，卡面数字与实战（fight 传的是真实 p）就是两张皮。
+    atk = pc.puppet_attack(cur, p)
+    # 护主面板与 fight() 同源（同一个 guard_profile），结阵具数也走同一套封顶。
+    g = pc.guard_profile(cur, p, pc.formation_count(roster))
     core_name = pc.core_name_of(cur)
     core_txt = ("%s（%d阶%s系）" % (core_name, cur["core_tier"], cur["core_attr"] or "无")
                 if core_name else "%d阶%s系" % (cur["core_tier"], cur["core_attr"] or "无"))
@@ -2700,6 +2704,13 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         "　金属：%s　炼制之火：%s" % (cur["metal_name"] or "—", fire_word),
         "　锻法：%s" % (("%s（%s）" % (rec["name"], rec["note"])) if rec else "自定组合"),
         "　肉身攻击 %d（不吃斗气/斗技）" % int(atk),
+        # 护主三件事必须一起给出（2026-11-20 第三轮）：气血/护甲是能力，
+        # 挡伤概率是机制，大额线是「什么时候会触发」——缺一个就是隐式数值。
+        "　护主：气血 %d　护甲 %d（挡下伤害时减伤 %.0f%%）" % (
+            g["hp_max"], g["armor"],
+            (1.0 - core.mitigation(g["armor"])) * 100),
+        "　替主挡伤 %.0f%% 概率（单次伤害 ≥ %d 才算大额；挡下后你仍自担 %.0f%%）" % (
+            g["chance"] * 100, g["threshold"], g["leak"] * 100),
         "　雷淬纯度 %d%%%s" % (cur["purity"], "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
         "　%s%s" % ("已认主·永不背叛" if cur["bonded"] else "未认主",
                     "　有灵（北王式）" if cur["awakened"] else ""),

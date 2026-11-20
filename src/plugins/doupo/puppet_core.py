@@ -484,6 +484,70 @@ def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
     return atk * bonus * max(1.0, float(flame_mult))
 
 
+def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
+                  formation_n: int = 0) -> dict:
+    """傀儡护主面板（**唯一口径**）：气血 / 护甲 / 挡伤概率 / 大额阈值。
+
+    ``p`` 是**玩家**（拿他的气血上限与防御当基准），None 时回落该档标尺玩家
+    （与 ``puppet_attack`` 同一套 ``_ref_player``，不另造假玩家）。
+
+    卡面（`cmd_puppet`）与 ``core.fight()`` 必须都调本函数 —— 否则「卡面写的
+    挡伤概率」与「战斗里真掷的骰子」就是两张皮（与 ``puppet_expected_damage``
+    同一条红线，谁只改一处守门必红）。
+
+    返回值字段：
+      * ``hp_max``   傀儡气血上限（被挡下的伤害经护甲减免后从这里扣）
+      * ``armor``    傀儡护甲（喂 ``core.mitigation()`` 得受击乘数）
+      * ``chance``   本场每次「大额伤害」掷挡伤骰的命中率（已封顶）
+      * ``threshold``「大额」判定线（原始伤害 ≥ 此值才掷骰）
+      * ``leak``     挡下后玩家**自己仍承受**的比例（不抢风头）
+      * ``tier``     0/1/2
+    """
+    if not puppet:
+        return {"hp_max": 0, "armor": 0, "chance": 0.0,
+                "threshold": 0, "leak": 0.0, "tier": 0}
+    from . import core  # 延迟导入避免与 core 循环
+
+    tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
+    anchor = p if p is not None else _ref_player(tier)
+    st = core.stats(anchor)
+    mm = _material_mult(puppet)
+    hp_max = max(1, int(int(st["体力"]) * float(cfg.PUPPET_HP_RATIO[tier]) * mm))
+    # 护甲由**目标穿透率**反解，不按玩家防御比例放大（详见 cfg 里那段踩坑注释）：
+    #   take = MITIGATION_W/(MITIGATION_W+armor)  ⇒  armor = MITIGATION_W×(1/take − 1)
+    # 这样「挡一次吃掉多少」与玩家等级脱钩 —— lv10 与 lv81 的报废节奏一致，
+    # 而血量仍随玩家体力涨，档位越高越厚。
+    _take = float(cfg.PUPPET_ARMOR_TAKE[tier])
+    armor = max(0, int(float(cfg.MITIGATION_W) * (1.0 / max(1e-6, _take) - 1.0) * mm))
+    n_eff = min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), max(0, int(formation_n)))
+    chance = (float(cfg.PUPPET_GUARD_CHANCE[tier])
+              + max(0, n_eff - 1) * float(cfg.PUPPET_FORMATION_GUARD_STEP))
+    chance = min(float(cfg.PUPPET_GUARD_CAP), max(0.0, chance))
+    return {
+        "hp_max": hp_max, "armor": armor, "chance": chance,
+        "threshold": max(1, int(int(st["体力"]) * float(cfg.PUPPET_GUARD_THRESHOLD))),
+        "leak": float(cfg.PUPPET_GUARD_LEAK),
+        "tier": tier,
+    }
+
+
+def guard_note(puppet: dict, raw: int, soak: int, taken: int,
+               hp_left: int, hp_max: int) -> str:
+    """护主成功的一句战报文案（挂到「兽击」条目的 notes 上）。
+
+    **不新增 log kind**：回看卡的 kind 白名单与配色是按既有条目写的，
+    多一个 kind 要动渲染层与快照测试，收益为零。挂在兽击条目上，玩家看到的是
+    「这一下本来要打我 X，傀儡挡了 Y，我自己挨了 Z」——三个数都在，才不算隐式数值。
+
+    ⚠️ 文案内**不许用括号**：这段会整句塞进战报的 `招式（tags）` 里，再套一层
+    括号就成了 `兽击（…抢身挡下 6868（自损 5360））`，两层中文括号读起来像嵌套
+    报错。用逗号断句，外层括号只留一层。
+    """
+    return "%s 抢身挡下 %d，自损 %d，余血 %d/%d" % (
+        str(puppet.get("name") or "傀儡"), int(soak), int(taken),
+        max(0, int(hp_left)), int(hp_max))
+
+
 def formation_count(puppets: List[dict]) -> int:
     """E36/E38：同场傀儡数≥2 才算结阵。
 

@@ -80,3 +80,16 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 ⚠️ `tests/test_battle_encounter.py` 是 pytest 风格，镜像与宿主机都没有 pytest → **既有基线红**，与本轮无关。
 ⚠️ **傀儡库是独立库** `data/doupo/puppet_data.sqlite`（表 `puppets`/`puppet_materials`/`puppet_eligibility`），**不在** `doupo.sqlite`。`puppets` 无 `active` 列（出战看 `puppet_eligibility.active_id`）、无 `name` 列；`qq='wild'` 是遗迹残傀池，统计要排除。只读体检脚本 `tmp/probe_master_puppet.py`（挂 `data/doupo:/d:ro` → `cp` 到 `/tmp/probe` 再开，SQLite 只读挂载需写锁）。
 ⚠️ **验收标志串先 grep 再写**：本轮 `verify_anchor_remote.py` 因臆造 `PUPPET_ENEMY_COMP=0.55`（实际是表格 `| \`X\` | \`0.55\` |`）连假 MISS 两次。`git diff --numstat` 中文路径必须 `-c core.quotepath=false`，否则永远假「远端缺文件」。
+
+## 15. 🚨 傀儡护主挡伤（2026-11-20 第三轮）
+用户要：大额伤害时傀儡按**较低概率**替主挡；傀儡有**血量+护甲**，档位越高三者越高；**不抢风头也不能没用**。
+口径全在 `cfg` 护主段 + `puppet_core.guard_profile()`（唯一真源，卡面 `cmd_puppet`/`card.build_puppet_data` 与 `core.fight` 都调它）：`CHANCE=(0.18,0.25,0.32)` `CAP=0.40` `LEAK=0.35` `HP_RATIO=(0.25,0.40,0.55)` `ARMOR_TAKE=(0.78,0.68,0.58)` `THRESHOLD=0.06` `HURT_AT=0.30/HURT_MULT=0.5` `FORMATION_GUARD_STEP=0.06`。
+🚨 **护甲绝不能按玩家防御比例放大**（第一版 `ARMOR_RATIO=(0.60,1.00,1.50)`）：`mitigation=W/(W+d)` 是双曲线，玩家防御 lv10 570→lv81 8982（15.7 倍）→ 减伤 19.9%→79.7%，lv81 天级要挡 **33.6 次**才报废（一场最多挨 3 次）＝血量护甲全是死数据。反解发现低等级需 ratio≈0.98、高等级需 0.03，**固定比例数学上无解**。正解：锚「穿透率」反解 `armor = MITIGATION_W×(1/take−1)×材料系数`，`MITIGATION_W=800` 已提为 cfg 常量（`core.mitigation` 改读它，值不变）。改后减伤恒 22/32/42%，报废 2.2/3.8/6.1 次。守门有 `hasattr(cfg,"PUPPET_ARMOR_RATIO") must be False` 防回退。
+🚨 **吸满上限必须浮点 + ceil**：旧写法 `int(hp/mig)` 再 `int(soak×mig)` 两步向下取整，实测停在 `hp_left=1` **永远打不死**，`_pup_hp>0` 这道「报废即停手」的门形同虚设 → 傀儡 1 点血无限挡。守门钉死「任何一场不许 hp_left==1」。
+**rng 红线**：挡伤骰只在 `if puppet` 内消耗。护主统计 `res["puppet_guard"]` 也只在 `if puppet` 时挂键（否则 res 结构断言全红）。`test_battle_review` 218 条逐招快照是这条红线的守门，**别去"修"那些快照**。
+**文案三坑**：① 护主 note 必须 `notes.insert(0,…)`，`append` 会被 `TAG_LIMIT=4` 静默截掉（兽击条目已挂技能名+台词+机制三条）；② note 内**禁用括号**，否则塞进「招式（tags）」变两层中文括号；③ `battle_review._beat_tag` 加 `puppet_guard→"护主"` 进 `_BEAT_ORDER`，tone 必须 `mine`（按 taken 判会刷成敌方红）。
+**单场消耗、跨场满血**（`damaged`+`temper()` 雷淬是既有修复口，不做每场磨损）；卡面气血是**能力面板**不是状态条。
+守门 `tests/test_doupo_puppet_guard.py` **128 条** + `tmp/mut_pup_guard.py` **20 组注入抓住 20 白守 0**。**三处曾白守的教训**：① 「查第一场就 break」会撞上「最后一回合才报废」的场次 → 必须**逐场都查**；② `ceil` 与浮点 cap 是双保险，只坏一处抓不到 → 注入要一起改；③ 怪不放技能时 `sk_note` 为空、`append` 与 `insert(0)` 等价 → 测试怪必须 `chance=1.0` 强制放技能。
+⚠️ 测试里读 `guard_hp_left` **不能用 `or -1`**：0 是 falsy 会被吞，永远匹配不到「被打空」。
+⚠️ 护主分摊比（`soak/(soak+玩家实收)`）实测 40/42/44%，红线 50% —— **别再提概率**，会直接摸线。`test_boss_cast` 容器内 2 红是 `os.path.isfile(NOVEL)` 读 Windows 盘符路径，环境性、与本轮无关（也意味着那两条原著逐字守门在容器里一直空转）。
+考据 `docs/傀儡护主挡伤_原著考据与机制调研_2026-11-20.md`（原著第853/898/920/934/952/971/1047 处逐条引文 + 梦幻西游 20%/Crystal Saga 15%/PoE2 10%/Idol Guardians 80-60-40/ai-rpg-engine 第54章 Companion Interception 完整计分公式）。

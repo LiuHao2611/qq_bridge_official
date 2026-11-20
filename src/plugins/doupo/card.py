@@ -868,15 +868,21 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
         body = "%s（%s%s）" % (
             pu.get("body_name") or "—", pu.get("body_realm") or "凡躯",
             ("·%d星" % pu["body_star"]) if pu.get("body_star") else "")
+        # atk / 护主都传 p：与 ``core.fight`` 同一个 p、同一个 guard_profile，
+        # 卡面数字与实战掷的骰子是同一份（红线：只改一处必红）。
+        g = pc.guard_profile(pu, p, pc.formation_count(roster))
         out["puppets"].append({
             "name": str(pu.get("name") or "傀儡"),
             "badge": "%s · %s皮%s" % (tier_name, skin, " · 出战" if pu.get("id") == elig.get("active_id") else ""),
-            "atk": str(int(pc.puppet_attack(pu))),
+            "atk": str(int(pc.puppet_attack(pu, p))),
             "lines": [
                 "躯体 " + body,
                 "魔核 %d阶%s系 · 灵魂 %s" % (int(pu.get("core_tier", 0)),
                                               pu.get("core_attr") or "无",
                                               pu.get("soul_source") or "—"),
+                # 护主一行（2026-11-20 第三轮）：气血/护甲/挡伤率缺一个都是隐式数值
+                "护主 气血%d · 护甲%d · 挡伤%.0f%%" % (
+                    g["hp_max"], g["armor"], g["chance"] * 100),
                 "雷淬纯度 %d%% · %s%s" % (
                     int(pu.get("purity", 0)),
                     "已认主·永不背叛" if pu.get("bonded") else "未认主",
