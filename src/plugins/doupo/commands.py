@@ -569,11 +569,15 @@ async def cmd_break(store, qq, rng=None) -> str:
         _name = br.get("boss_name") or "强敌"
         _title = br.get("boss_title") or ""
         _intro = str(_ch.get("intro") or "").strip()
-        # 结算四段式（用户「结算乱七八糟」）：①登场引言 ②鏖战结果 ③原著台词收尾 ④突破/掉落。
+        _appear = str(_ch.get("appearance") or "").strip()
+        # 结算四段式（用户「结算乱七八糟」）：①登场（剪影→报名号→台词）②鏖战结果
+        # ③原著台词收尾 ④突破/掉落。出场描写与引言缺一不可（用户 2026-11-20 两次强调）。
         head = [f"⚡ 【{cfg.full_realm(lv)}】壁垒将破——"]
-        if _intro:
-            head.append(f"　{_intro}")
+        if _appear:
+            head.append(f"　{_appear}")
         head.append(f"　【{_name}】{'·' + _title if _title else ''}拦在突破之路上！")
+        if _intro and _intro != _appear:
+            head.append(f"　{_intro}")
         if not br["win"]:
             tail = [
                 f"　鏖战 {br['rounds']} 回合，终因火候不足而败（余血 {_fmt(br['hp_end'])}）。",
@@ -817,8 +821,7 @@ async def cmd_skills(store, qq) -> str:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             mark = "★上阵" if e["equipped"] else ("可学" if e["unlocked"] else "🔒未解锁")
             tag = "〔通用〕" if e.get("origin") == "通用" else ""
-            selfmade = "〔自设〕" if e.get("core") else ""
-            out.append(f"　{tag}{selfmade}{e['name']} Lv{lv}（lv{e['unlock']} 解锁·{mark}）")
+            out.append(f"　{tag}{e['name']} Lv{lv}（lv{e['unlock']} 解锁·{mark}）")
     flames = [e for e in pool if e.get("faction") == "异火"]
     if flames:
         out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
@@ -827,7 +830,7 @@ async def cmd_skills(store, qq) -> str:
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
     out.append("")
     out.append("上阵：" + "、".join(f"{e['name']}[{e['tier']}]" for e in lo))
-    out.append("　〔通用〕= 斗技堂/拍卖会流通的基础斗技，非本宗传承；〔自设〕= 原著无载的游戏补白")
+    out.append("　〔通用〕= 斗技堂/拍卖会流通的基础斗技，非本宗传承")
     out.append("　炼药、丹会、品阶考核、大长老院表决等是宗门典故，不是斗技，已不在此列")
     out.append("　斗气不足将强制武器普攻（伤害大减、持续掉血）")
     out.append(f"　升一级伤害 +20%，消耗 {cfg.SKILL_UP_ITEM}；用法：升级 <技名> / 上阵 <4 技名>")
@@ -877,7 +880,9 @@ async def cmd_skill_info(store, qq, name) -> str:
     out.append(hit.get("desc") or "（暂无说明）")
     if hit.get("source"):
         out += ["", f"出处：{hit['source']}"]
-    if hit.get("novel"):
+    if hit.get("novel") and not str(hit["novel"]).startswith("原著无载"):
+        # 2026-11-20 沉浸式铁律：只有真能对上原文的才印；
+        # 「原著无载 · 游戏自设」这类缺考据的声明一律不印（玩家不关心台账缺口）。
         out.append(f"原著：{hit['novel']}")
     out += ["", f"　升级 +20%/级（需 {cfg.SKILL_UP_ITEM}）｜ 用法：升级 {hit['name']}"]
     return "\n".join(out)

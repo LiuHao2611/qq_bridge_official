@@ -106,14 +106,22 @@ def _logs(battle: dict) -> list[dict]:
 
 
 def intro_text(battle: dict) -> dict:
-    """原著 BOSS 登场引言（2026-11-20）：{speaker, title, quote}，无则 {}。"""
+    """强敌登场引言（2026-11-20）：{speaker, title, quote}，无则 {}。
+
+    quote 是**出场描写 + 台词**两段拼接（core.fight() 按 appearance→intro 写入）：
+    先让玩家看见「什么东西来了」，再听他说第一句话。中间留一个空格即可，
+    卡面渲染层会自行折行。
+    """
     for it in (battle.get("log") or []):
         if isinstance(it, dict) and it.get("intro"):
-            notes = it.get("notes") or []
+            notes = [_s(n, "") for n in (it.get("notes") or [])]
+            notes = [n for n in notes if n]
             return {
                 "speaker": _s(it.get("speaker"), ""),
                 "title": _s(it.get("move"), ""),
-                "quote": _s(notes[0] if notes else "", ""),
+                # quote 给纯文本兜底（一条消息一段话），paras 给卡片分段渲染
+                "quote": "　".join(notes),
+                "paras": notes,
             }
     return {}
 
