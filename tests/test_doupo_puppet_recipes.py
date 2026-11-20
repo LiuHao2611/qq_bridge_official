@@ -131,17 +131,22 @@ def test_legacy_puppet_unchanged():
     「傀儡战力低得离谱」的根因（绝对常数不跟等级走，lv81 只占玩家输出 0.2%）。
 
     现在能守、也必须守的是：**老存档（库列缺 metal/fire、或为 0）不被倒扣**，
-    即材料倍率恰为 1.0，输出 = 该玩家每回合输出 × 该档 ratio。
+    即材料倍率恰为 1.0，且与「显式填满基准值」的同一具傀儡逐字节等值。
+
+    ⚠️ 2026-11-20 第三轮**再次口径变更**：`PUPPET_TIER_RATIO`（玩家输出百分比）
+    已删，改锚**躯体境界**（见 cfg 里那段三轮演进）。所以这里不再拿
+    「玩家输出 × ratio」当期望值 —— 那正是被本轮废掉的旧口径。改成拿「显式
+    基准材料」当参照物，守的是「缺键不扣分」这条真正的不变量。
     """
     p60 = core.tower_ref_player(60)
-    out60 = pc._player_round_output(p60)
     for t in (0, 1, 2):
-        want = out60 * float(cfg.PUPPET_TIER_RATIO[t])
-        pu = {"tier": t, "core_tier": 7, "soul_strength": 900,
-              "metal_grade": 2, "fire_tier": 7}
-        check(abs(pc.puppet_attack(pu, p60) - want) < 1e-6,
-              "基准材料 tier=%d 应为 玩家输出×%.2f=%.2f，实得 %.2f"
-              % (t, cfg.PUPPET_TIER_RATIO[t], want, pc.puppet_attack(pu, p60)))
+        base = {"tier": t, "core_tier": 7, "soul_strength": 900,
+                "metal_grade": 2, "fire_tier": 7}
+        want = pc.puppet_attack(base, p60)
+        check(want > 0, "tier=%d 基准材料战力算成 0" % t)
+        check(abs(pc.puppet_full_attack(base) - want <= 1e-6) or want <= pc.puppet_full_attack(base) + 1e-6,
+              "tier=%d 战力 %.2f 超过了躯体境界满配 %.2f"
+              % (t, want, pc.puppet_full_attack(base)))
         # 库列缺失 / 为 0（未记录）也必须按基准算，不能吃惩罚
         for variant in ({"tier": t, "core_tier": 7, "soul_strength": 900},
                         {"tier": t, "core_tier": 7, "soul_strength": 900,
@@ -153,6 +158,10 @@ def test_legacy_puppet_unchanged():
                   % (t, got, want, variant))
         check(abs(pc._material_mult({"tier": t}) - 1.0) < 1e-9,
               "老档材料倍率必须恰为 1.0，实得 %.6f" % pc._material_mult({"tier": t}))
+    # 旧比例口径的常量必须彻底退场（两套并存 = 口径分叉）
+    for ghost in ("PUPPET_TIER_RATIO", "PUPPET_REF_LV"):
+        check(not hasattr(cfg, ghost),
+              "cfg.%s 复活了 —— 旧「玩家输出百分比」口径已弃用" % ghost)
 
 
 # --- 4. 金属与火真的进公式（同档内拉开差距，且不失控）-----------------------
