@@ -157,16 +157,29 @@ async def render_panel(p: dict, tip: str | None = None) -> bytes | None:
         return None
 
 
+def menu_cmd_label(cmd: str) -> str:
+    """菜单卡口令标签：委托 pic.templates.doupo_menu（与门禁共用单一真值）。
+
+    先确保 pic 包已由 _load_pic() 注册到 sys.modules（importlib 独立加载，
+    不能用普通 import），再取其子模块；pic 不可用时降级为本地首词截取。
+    """
+    if _load_pic() is None:
+        return str(cmd).strip().split(" ", 1)[0]
+    mod = importlib.import_module(f"{_PKG_NAME}.templates.doupo_menu")
+    return mod.menu_cmd_label(cmd)
+
+
 def build_menu_data() -> dict:
     """口令菜单 → doupo_menu 模板参数。
 
     数据源是 commands.MENU_GROUPS（唯一源），与纯文本兜底同源，
     因此图片与文字永远不会「说的不是一回事」。
+    2026-11-20：口令列在卡片层用 menu_cmd_label 精简示例参数（两列并排省版面）。
     """
     return {
         "title": "斗破菜单",
         "groups": [
-            {"name": name, "rows": [[cmd, desc] for cmd, desc in rows]}
+            {"name": name, "rows": [[menu_cmd_label(cmd), desc] for cmd, desc in rows]}
             for name, rows in commands.MENU_GROUPS
         ],
         "tip": f"共 {commands.menu_total()} 条口令 · 纯中文，菜单是唯一切换口",
