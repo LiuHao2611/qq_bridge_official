@@ -364,6 +364,59 @@ class PuppetStore:
                 (str(qq), str(name))).fetchone()
         return int(row["qty"]) if row else 0
 
+    async def transfer_material(self, src_qq: str, dst_qq: str, name: str,
+                                n: int = 1) -> bool:
+        """把一种傀儡材料从 ``src`` 转给 ``dst``：两行写在同一事务里。
+
+        2026-11-20 第十轮（用户选「让傀儡材料也能送」）：
+        `puppet_materials` 是一张表、主键 `(qq, name)`，所以 A→B 转账**本来就
+        在同一个库里**，一个 `_tx()` 就能原子写完 —— 不需要把傀儡库并进
+        `doupo.sqlite`（并库只会动 `DATA_PATH` 单源红线，换不来任何原子性）。
+
+        返回 False = 前置条件不成立（数量不足 / 自己送自己 / 数量非正），
+        不是错误；真写库失败抛 :class:`PuppetStoreError` 并整笔回滚。
+        """
+        src_qq, dst_qq = str(src_qq), str(dst_qq)
+        name, n = str(name), int(n)
+        if n <= 0 or src_qq == dst_qq or not name:
+            return False
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    row = con.execute(
+                        "SELECT qty FROM puppet_materials WHERE qq=? AND name=?",
+                        (src_qq, name)).fetchone()
+                    if not row or int(row["qty"]) < n:
+                        return False
+                    left = int(row["qty"]) - n
+                    if left > 0:
+                        con.execute(
+                            "UPDATE puppet_materials SET qty=? WHERE qq=? AND name=?",
+                            (left, src_qq, name))
+                    else:
+                        # 送空就删行：留 qty=0 会让「材料面板」多出一行空条目
+                        con.execute(
+                            "DELETE FROM puppet_materials WHERE qq=? AND name=?",
+                            (src_qq, name))
+                    con.execute(
+                        "INSERT INTO puppet_materials(qq, name, qty) VALUES(?,?,?)"
+                        " ON CONFLICT(qq,name) DO UPDATE SET qty=qty+excluded.qty",
+                        (dst_qq, name, n))
+                    if name == cfg.PUPPET_LORE_MATERIAL:
+                        # 竹简 = 传承本身（遗迹掉落也是「进材料 + set_lore」一起做）。
+                        # 只给物品不给 lore，受赠者会拿到一张永远用不掉的废纸。
+                        # 同一事务内写，避免「物品到了、资格没到」的中间态。
+                        con.execute(
+                            "INSERT INTO puppet_eligibility(qq, lore, ready,"
+                            " active_id, updated_at) VALUES(?,1,0,0,?)"
+                            " ON CONFLICT(qq) DO UPDATE SET lore=1,"
+                            " updated_at=excluded.updated_at",
+                            (dst_qq, time.time()))
+            except Exception as e:  # noqa: BLE001
+                raise PuppetStoreError("赠送材料写盘失败，双方材料已回滚（%s）：%s"
+                                       % (type(e).__name__, str(e)[:200])) from e
+        return True
+
     async def take_materials(self, qq: str, cost: Dict[str, int]) -> bool:
         """原子扣料：任一不足则整笔不扣，返回 False。"""
         qq = str(qq)
