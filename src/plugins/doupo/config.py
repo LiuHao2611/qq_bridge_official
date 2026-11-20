@@ -1917,6 +1917,13 @@ PUPPET_TIER_UP_PURITY = (60, 100)
 PUPPET_TEMPER_COST = 800               # 每次雷淬金币 [调参]
 PUPPET_TEMPER_STONE = 1                # 每次雷淬消耗「雷淬石」枚数 [调参]
 PUPPET_TEMPER_PURITY = 12              # 每次雷淬 purity 增量 [调参]
+
+#: P1-1 战损（D05/N02/E42）：本场护甲被打空 → damaged=True 写库（跨场状态），
+#: 战损时攻击 ×0.8、护甲减半，直到一次雷淬令 temper() 清零修复。
+#: 乘在基数上、CAP 仍在 puppet_expected_damage 末端落一次 —— 战损只会更低，
+#: 不会顶破「不抢风头」的输出封顶。单场护甲 _pup_hp 每场重置，与此字段分离。
+PUPPET_DAMAGED_ATK_MULT = 0.80         # 战损攻击倍率 [调参]
+PUPPET_DAMAGED_ARMOR_MULT = 0.50       # 战损护甲倍率 [调参]
 #: 进阶玩法（E37/E43/E44）：收服无主残傀 / 熔入残魂生灵智（北王式）。
 PUPPET_CLAIM_COST = 600                # 收服金币 [调参]
 PUPPET_AWAKEN_COST = 1000              # 融魂金币 [调参]
