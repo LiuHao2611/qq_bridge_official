@@ -123,10 +123,19 @@ def test_key_factions_keep_authoritative_config():
 
 
 def test_game_original_skills_are_marked():
-    """游戏自造的绝学必须显式标注，不能被当原著设定。"""
-    blob = str(F.FACTIONS["yunlanzong"]) + str(F.FACTIONS["motie"])
-    for word in ("天道神雷剑诀", "寒冰屏障", "游戏原创"):
-        assert word in blob, "游戏原创标注丢失：%s" % word
+    """游戏自造的绝学必须留痕（进考据快照），但**不许印到玩家脸上**。
+
+    2026-11-20 第二轮：用户两次投诉「玩家能看到的地方一堆声明」。所以
+    ``[游戏原创]`` 这类标记从 FACTIONS 迁到 ``FACTION_CITE_LEDGER``（禁止渲染），
+    展示串只留技名。这条测试要双向成立：台账在，展示层干净。
+    """
+    ledger_blob = "".join(t for _, t in F.FACTION_CITE_LEDGER)
+    for word in ("寒冰屏障", "游戏原创"):
+        assert word in ledger_blob, "考据快照丢失：%s" % word
+    disp = str(F.FACTIONS["yunlanzong"]) + str(F.FACTIONS["motie"])
+    assert "寒冰屏障" in disp, "技名不该被顺手删掉"
+    for bad in ("[游戏原创]", "[游戏核心]", "[C1]", "游戏自设"):
+        assert bad not in disp, "展示层混进考据标记：%s" % bad
 
 
 def test_no_protagonist_gear_in_faction_starters():
@@ -139,10 +148,14 @@ def test_no_protagonist_gear_in_faction_starters():
 
 
 def test_community_sources_are_used():
-    """用户要求补全社区/论坛/大佬帖子数据：C1/C2/C3 必须真正进入数据。"""
-    blob = str(F.FACTIONS)
+    """用户要求补全社区/论坛/大佬帖子数据：C1/C2/C3 必须真正进入数据。
+
+    2026-11-20：这些标注只留在 ``FACTION_CITE_LEDGER``（内部考据快照），
+    展示串已净化 —— 玩家不该看见「这招出自哪份社区帖子」。
+    """
+    blob = "".join(t for _, t in F.FACTION_CITE_LEDGER)
     for tag in ("C1", "C2", "C3"):
-        assert ("[%s]" % tag) in blob, "社区来源 %s 未进入 factions 数据" % tag
+        assert ("[%s]" % tag) in blob, "社区来源 %s 未进入 factions 考据快照" % tag
     # 至少 50 处社区标注，证明不是空壳
     assert blob.count("[C") >= 50, "社区标注过少：%d" % blob.count("[C")
 
@@ -200,17 +213,21 @@ def test_no_cross_faction_high_tier_skills():
 
 
 def test_xiaojia_keeps_protagonist_core_only():
-    """萧家是用户豁免的默认主角门派，保留 4 个 [游戏核心] 主角战斗斗技；
-    其余 28 派一律按原著，不得再注入主角通用斗技（高级斗技不跨门派）。"""
+    """萧家是用户豁免的默认主角门派，保留 4 个主角战斗斗技；
+    其余 28 派一律按原著，不得再注入主角通用斗技（高级斗技不跨门派）。
+
+    2026-11-20：``[游戏核心]`` 标记已从展示串剥离（玩家不需要知道"这是给你的"），
+    这里改成按**技名**判定，语义不变。
+    """
     core = ["龙吟碎", "天火三玄变", "八极崩", "五轮离火法"]
     for c in core:
-        assert any(s == c + "[游戏核心]" for s in F.FACTIONS["xiaojia"]["skills"]), \
+        assert any(s == c for s in F.FACTIONS["xiaojia"]["skills"]), \
             "萧家缺少核心战斗斗技 %s" % c
     for fid, f in F.FACTIONS.items():
         if fid == "xiaojia":
             continue
         for c in core:
-            assert not any(s == c + "[游戏核心]" for s in f["skills"]), \
+            assert not any(s == c for s in f["skills"]), \
                 "%s 不应含有主角通用斗技 %s（违反高级斗技不跨门派）" % (fid, c)
 
 
@@ -232,10 +249,25 @@ def test_playable_factions_meet_minimum_bar():
         lore = f.get("lore", ())
         assert len(sp) + len(lore) >= 2, "%s 斗技/典故资料不足(%d)" % (fid, len(sp) + len(lore))
         assert len(it) >= 1, "%s 无特殊物品" % fid
+        # 2026-11-20 口径变更（用户两轮强调「玩家可见处禁声明」）：
+        #   * flames 会渲染到宗门卡「传承异火」区 → 只留世界观内的一句话；
+        #   * 章节引文/考据标记搬进 FACTION_FLAME_EVIDENCE（内部表，禁止渲染）。
+        # 所以这里改成双向断言：展示字段必须干净，考据台账必须还在。
         for e in fl:
-            assert cite.search(e), "%s 异火归属缺原著章节引用: %s" % (fid, e[:40])
+            assert not cite.search(e), \
+                "%s 异火展示文案混进了章节引文: %s" % (fid, e[:40])
+            assert not re.search(r"\[[A-Z]\d+\]|\[原著\]|\[游戏原创\]", e), \
+                "%s 异火展示文案混进了考据标记: %s" % (fid, e[:40])
             assert "[游戏原创]" not in e and "游戏自设" not in e, \
                 "%s 把游戏自造灵焰冒充原著异火: %s" % (fid, e[:40])
+            for w in ("原著", "语料", "未载", "考据"):
+                assert w not in e, "%s 异火展示文案出现出戏词「%s」: %s" % (fid, w, e[:40])
+        if fl:
+            ev = getattr(F, "FACTION_FLAME_EVIDENCE", {}).get(fid) or ()
+            assert len(ev) >= len(fl), \
+                "%s 异火考据台账缺失（%d 展示 / %d 考据）" % (fid, len(fl), len(ev))
+            for e in ev:
+                assert cite.search(e), "%s 考据台账缺章节引用: %s" % (fid, e[:40])
 
 
 # ---------------------------------------------------------------------------

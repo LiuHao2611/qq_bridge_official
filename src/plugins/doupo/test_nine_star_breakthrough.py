@@ -62,8 +62,14 @@ def main():
           and set(cfg.OTHER_FLAME_NAMES).issubset(set(cfg.OWNED_FLAME_NAMES)),
           str(cfg.OTHER_FLAME_NAMES))
     check("兽火 5 朵", sum(1 for f in cfg.OTHER_FLAMES if f["kind"] == "beast") == 5, "")
-    check("每朵都有原著出处（章）",
-          all("章" in f["desc"] for f in cfg.OTHER_FLAMES), "")
+    check("每朵都有原著出处（章）——存在内部台账，不印给玩家",
+          set(cfg.OTHER_FLAME_CITES) == set(cfg.OTHER_FLAME_NAMES)
+          and all("章「" in v for v in cfg.OTHER_FLAME_CITES.values()),
+          str([k for k, v in cfg.OTHER_FLAME_CITES.items() if "章「" not in v]))
+    check("其他火焰 desc 不印章节（玩家可见处零考据）",
+          not any("章「" in f["desc"] or "原著" in f["desc"] for f in cfg.OTHER_FLAMES),
+          str([f["name"] for f in cfg.OTHER_FLAMES
+               if "章「" in f["desc"] or "原著" in f["desc"]]))
     check("已知 23 异火不混进其他火焰",
           not (set(cfg.OTHER_FLAME_NAMES) & set(cfg.FLAME_TIER.keys())), "")
 
