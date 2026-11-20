@@ -1893,6 +1893,10 @@ PUPPET_ALCH_MIN = 6                      # ALCHEMIST 索引 6 = 七品（E22 触
 #: 控火闸（E16/E25）：累计炼药次数 / 高阶丹药炼成数门槛 [调参]
 PUPPET_CRAFT_COUNT_MIN = 20
 PUPPET_HIGH_GRADE_MIN = 1
+#: 多高阶算「高阶丹药」：成品品阶 ≥ 此档才计入 ``high_grade_crafts``。
+#: 2026-11-20 修：这两个字段以前**从没被写过**（只有测试手塞），控火闸永远不过 ——
+#: 现在 ``core.craft()/craft_batch()`` 每次开炉都真实累加。
+PUPPET_HIGH_GRADE_FROM = "五品"
 #: 斗气续航（E29/E30/E45）：全程消耗系数（挂 mp_max），[调参]
 PUPPET_MP_FACTOR = {0: 1.0, 1: 1.6, 2: 2.4}
 
