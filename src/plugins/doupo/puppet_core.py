@@ -709,6 +709,12 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     # 而血量仍随玩家体力涨，档位越高越厚。
     _take = float(cfg.PUPPET_ARMOR_TAKE[tier])
     armor = max(0, int(float(cfg.MITIGATION_W) * (1.0 / max(1e-6, _take) - 1.0) * mm))
+    # P1-2 天级雷纹（D03/Q4）：每层护甲 +12%（相对），只加护主、不碰输出 CAP。
+    # 层数由 purity 纯函数推导（单一真源），战损减半在其后叠 —— 两个倍率都作用在
+    # 反解护甲上，不进 hp/atk 反解，避免污染怪物标定。
+    _vein = vein_layers(puppet.get("purity", 0)) if tier >= 2 else 0
+    if _vein:
+        armor = int(armor * (1.0 + _vein * float(cfg.PUPPET_VEIN_ARMOR_STEP)))
     # P1-1：战损时护甲减半 —— 与攻击 ×0.8 同源于 puppet 的 damaged 字段。
     if puppet.get("damaged"):
         armor = int(armor * float(cfg.PUPPET_DAMAGED_ARMOR_MULT))
@@ -730,6 +736,8 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
         "awakened": bool(puppet.get("awakened")),
         # P1-1：战损透出，卡面据此显示「待雷淬修复」，战斗同源读 armor/atk。
         "damaged": bool(puppet.get("damaged")),
+        # P1-2：雷纹层数透出，卡面据此显示紫皮进度（护甲已含雷纹加成）。
+        "vein": int(_vein),
     }
 
 
@@ -816,24 +824,59 @@ def puppet_log_entry(puppet: dict, dmg: int, formation_n: int = 0) -> dict:
 # ---------------------------------------------------------------------------
 # 雷淬升级 / 修复（E07/E08/E41/E42）
 # ---------------------------------------------------------------------------
-def temper(puppet: dict, gold_ok: bool = True) -> dict:
-    """一次雷淬：purity += 增量，达阈值则升档；天级封顶。返回新字段 dict。
+def lei_power_gain(tier: int) -> int:
+    """P1-2 雷力档位增量（唯一口径）：人级丹雷+12 / 地级五色丹雷+25 / 天级黑魔雷+40。
 
-    2026-11-20 修 bug：``PUPPET_TIER_UP_PURITY[tier]`` 语义是「**从 tier 升到
-    tier+1** 所需的 purity」。旧表首元素是 0，导致 tier=0 时门槛为 0，第一次
-    雷淬（purity 12）就直接跳地级；现表为 ``(60, 100)``，与索引语义对齐。
-    同时改成 while 逐档判定：不再依赖「一次只升一档」的隐含假设。
+    按**当前档位**取 `cfg.PUPPET_LEI_POWER_GAIN[tier]`，确定性、不掷骰。
     """
-    cap = cfg.PUPPET_TIER_BY_IDX[2]
-    if int(puppet.get("tier", 0)) >= 2:
-        return {"purity": cfg.PUPPET_PURITY_MAX, "tier": 2,
-                "tier_name": cap[0], "skin": cap[1],
-                "damaged": False, "capped": True}
-    purity = min(cfg.PUPPET_PURITY_MAX,
-                 int(puppet.get("purity", 0)) + cfg.PUPPET_TEMPER_PURITY)
-    tier = int(puppet.get("tier", 0))
+    t = max(0, min(2, int(tier)))
+    return int(cfg.PUPPET_LEI_POWER_GAIN[t])
+
+
+def vein_layers(purity: int) -> int:
+    """P1-2 天级雷纹层数（唯一口径）：超量 purity 每 40 点折 1 层，最多 5 层。
+
+    只有天级才计雷纹；非天级恒 0。层数由 purity 纯函数推导，不另存字段 ——
+    单一真源，避免「purity 和层数两张皮」。
+    """
+    over = max(0, int(purity) - int(cfg.PUPPET_PURITY_MAX))
+    return min(int(cfg.PUPPET_VEIN_MAX), over // int(cfg.PUPPET_VEIN_PURITY))
+
+
+def purity_hard_max() -> int:
+    """纯度硬上限 = 100 + 雷纹层数上限×每层所需，雷纹满层后不再涨。"""
+    return int(cfg.PUPPET_PURITY_MAX) + int(cfg.PUPPET_VEIN_MAX) * int(cfg.PUPPET_VEIN_PURITY)
+
+
+def dye_bar(purity: int) -> str:
+    """P1-2 渐进染色（N06 第1160章「银掌转金」）：按纯度画银→金进度格。
+
+    单一真源，卡面名录卡/成卡都调它；纯展示，不参与任何数值。满格（purity≥100）
+    表示全身金。天级后再涨的纯度用于雷纹（另在卡面显示层数），不重复画染色。
+    """
+    # ⚠️ 用 ■(U+25A0)/□(U+25A1)：卡片字体的 emoji_safe 探测过这俩有真字形。
+    #    ◼/◻(U+25FC/25FB) 字体缺字形会被过滤 —— 曾导致染色条整条不显示。
+    steps = max(1, int(getattr(cfg, "PUPPET_DYE_STEPS", 10)))
+    filled = min(steps, max(0, int(purity) * steps // int(cfg.PUPPET_PURITY_MAX)))
+    return "■" * filled + "□" * (steps - filled)
+
+
+def temper(puppet: dict, gold_ok: bool = True) -> dict:
+    """一次雷淬：purity += 雷力增量，达阈值升档；天级转雷纹长线。返回新字段 dict。
+
+    2026-11-20 P1-2：雷力按当前档位分三档（丹雷/五色丹雷/黑魔雷，D04），
+    天级不再把 purity 封死 100 —— 继续按黑魔雷 +40 累加，每 40 点折 1 层雷纹，
+    最多 5 层（D03/Q4 紫皮长线）。雷纹只加护主护甲（`guard_profile`），不破输出 CAP。
+
+    ``capped`` 保留旧语义「已到天级、无法再升档」，供命令层文案与老测试消费；
+    新增 ``vein``（雷纹层数）与 ``maxed``（雷纹满层）供紫皮长线展示。
+    """
+    tier = max(0, min(2, int(puppet.get("tier", 0))))
+    gain = lei_power_gain(tier)
+    purity = min(purity_hard_max(), int(puppet.get("purity", 0)) + gain)
     while tier < 2 and purity >= cfg.PUPPET_TIER_UP_PURITY[tier]:
         tier += 1
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX[tier]
     return {"purity": purity, "tier": tier, "tier_name": tier_name, "skin": skin,
-            "damaged": False, "capped": tier >= 2}
+            "damaged": False, "capped": tier >= 2,
+            "vein": vein_layers(purity), "maxed": purity >= purity_hard_max()}

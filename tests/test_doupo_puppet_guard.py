@@ -674,6 +674,35 @@ def test_wrappers_forward_puppet_guard():
           "fight 的 puppet_guard 未携带真实 id")
 
 
+def test_vein_layers_only_add_armor_not_damage():
+    """P1-2 天级雷纹：只加护主护甲（有落点），不碰输出/概率/CAP（禁死字段）。"""
+    p = _p(81)
+    base = dict(PU_TIAN, purity=100)
+    # 雷纹层数由 purity 纯函数推导；0 层=100，满层=100+5×40=300
+    check(pc.vein_layers(100) == 0, "purity=100 不该有雷纹")
+    check(pc.vein_layers(100 + int(cfg.PUPPET_VEIN_PURITY)) == 1,
+          "超量 40 纯度应为 1 层雷纹")
+    check(pc.vein_layers(pc.purity_hard_max()) == int(cfg.PUPPET_VEIN_MAX),
+          "硬上限应为满层雷纹")
+    check(pc.vein_layers(pc.purity_hard_max() + 999) == int(cfg.PUPPET_VEIN_MAX),
+          "超过硬上限雷纹不该继续涨")
+    g0 = pc.guard_profile(base, p, 1)
+    g5 = pc.guard_profile(dict(base, purity=pc.purity_hard_max()), p, 1)
+    check(g5["armor"] > g0["armor"],
+          "满层雷纹护甲 %d 未超过 0 层 %d —— 紫皮长线没有落点"
+          % (g5["armor"], g0["armor"]))
+    check(g5["vein"] == int(cfg.PUPPET_VEIN_MAX), "guard_profile 未透出雷纹层数")
+    # 输出不因雷纹上涨（D03：不动伤害倍率，不破 CAP）
+    d0 = pc.puppet_expected_damage(base, 1, p=p)
+    d5 = pc.puppet_expected_damage(dict(base, purity=pc.purity_hard_max()), 1, p=p)
+    check(abs(d5 - d0) < 1e-6,
+          "雷纹改变了输出 %.2f→%.2f —— 违反「不动伤害倍率」" % (d0, d5))
+    # 概率/泄漏也不变（不抢风头）
+    check(abs(g5["chance"] - g0["chance"]) < 1e-9
+          and abs(g5["leak"] - g0["leak"]) < 1e-9,
+          "雷纹改动了挡伤概率/泄漏率")
+
+
 def test_writeback_failures_propagate():
     """源码级：写回失败必须上抛，不许 try/except 吞（用户最高声明禁止兜底）。"""
     import inspect
@@ -717,7 +746,8 @@ def _run():
                test_temper_repairs_damage,
                test_fight_guard_signal_carries_real_id,
                test_wrappers_forward_puppet_guard,
-               test_writeback_failures_propagate):
+               test_writeback_failures_propagate,
+               test_vein_layers_only_add_armor_not_damage):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
