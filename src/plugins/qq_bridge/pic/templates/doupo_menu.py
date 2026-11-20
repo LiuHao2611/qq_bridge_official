@@ -15,6 +15,14 @@
   * **不使用 emoji**（图片里 emoji 易缺字形变方框）；
   * 颜色复用 ``Theme.bg_overrides["doupo"]``（与人物卡同一卡片主题，编辑器改一次两卡同步）。
 
+2026-11-20 两列并排重写（用户「菜单太长，能两排就两排」）：
+  * 每个玩法分组内，口令两两配对成左右两个 cell（窄屏仍两列，cell 自适应半宽）；
+  * cell 内口令在上（真粗体首词）、说明在下（小字折行），半宽下说明最多折 3 行；
+  * 页面从单列 52 行压成两列 26 行，卡片高度约减半；
+  * 口令显示用 card.menu_cmd_label 去掉具体示例参数（「收服 火云水炎」→「收服」），
+    模板层只认传入的 data，命令系统真值 MENU_GROUPS 不动。
+  * ``layout()`` 仍是唯一布局入口，``_row_parts()`` 保留供门禁校验折行保字。
+
 2026-11-15 card-design 度量优先重写（用户「优化菜单，加粗字看着模糊」）：
   1. ``layout()`` 是**唯一布局入口**：build 与 ``layout_boxes()`` 自检共用同一份
      节点坐标，杜绝「高度按一种算法算、渲染按另一种画」的底部裁切。
@@ -51,9 +59,9 @@ FS_DESC = S.FS_SUB             # 17 说明
 FS_TIP = S.FS_LABEL            # 16 底部提示
 
 CMD_INSET = 14                 # 口令文字左缩进（与分组竖条对齐）
-COL_GAP = 24                   # 口令列 ↔ 说明列的固定列间距（>= 24px 字号的 10px 阈值）
-CMD_MIN_COL = 208              # 口令列下限（x0 起算）
-CMD_MAX_RATIO = 0.48           # 口令列上限：内容宽 48%，说明列至少留 52%
+COL_GAP = 24                   # 左右两列 cell 的固定列间距（>= 24px 字号的 10px 阈值）
+CMD_MIN_COL = 208              # 【兼容保留】旧单列口令列下限；门禁不直接读，勿删防外部引用
+CMD_MAX_RATIO = 0.48           # 【兼容保留】旧单列口令列上限
 ROW_GAP = 8                    # 行与行统一间距
 ROW_PAD = 12                   # 行内上下留白合计
 ROW_MIN = 48
@@ -62,6 +70,11 @@ DESC_LH = FS_DESC + 6          # 23（1.35×）——说明折行行高
 GROUP_GAP = 24                 # 分组之间统一间距
 HEAD_GAP = 12                  # 分组名 → 首行
 ICON_STYLE = "line"
+CELL_PAD = 8                   # cell 内上下留白
+CELL_CMD_W = 100               # 水平 cell 内口令列宽（精简后口令最长 4 字≈96px）
+CELL_GAP = 8                   # 水平 cell 内 口令列 ↔ 说明列 的间距
+CMD_DESC_GAP = 4               # 窄屏堆叠 cell 内 口令行 ↔ 说明块 的间距
+STACK_CELL_W = 260             # cell 宽低于此值改用堆叠（口令上/说明下），避免说明列过窄折行爆炸
 
 _DEFAULT_TIP = "与「修仙」重名的 商店/突破/任务/排行榜/炼丹 已统一让出，斗破一律 dp 前缀。"
 
@@ -75,6 +88,17 @@ _DEMO = [
      "rows": [["修炼", "结算离线修为（每分钟自动 +6）"],
               ["突破", "修为满时晋升一星；102 级九星斗圣冲斗帝看机缘"]]},
 ]
+
+
+def menu_cmd_label(cmd: str) -> str:
+    """菜单卡口令标签：带具体示例参数的只留首词口令。
+
+    ``收服 火云水炎`` → ``收服``、``买 血灵草 2`` → ``买``。示例参数只是
+    用法演示，说明列已写清玩法；卡面逐条印全名既占版面又像「只能这样用」。
+    只改**卡片显示**，命令系统真值 MENU_GROUPS 不动，口令仍可用。
+    放在 pic 层（纯函数无依赖），供 card.build_menu_data 与门禁共用单一真值。
+    """
+    return str(cmd).strip().split(" ", 1)[0]
 
 
 def _rows_of(g: dict) -> list:
@@ -100,15 +124,50 @@ def _cmd_col(groups: list, content_w: int) -> int:
     return max(CMD_MIN_COL, min(int(content_w * CMD_MAX_RATIO), want))
 
 
-def _row_parts(row, content_w: int, cmd_col: int) -> dict:
-    """单行内容：口令/说明各自折行 + 内容块高 + 行高（build 与自检共用）。"""
+def _cell_parts(row, cell_w: int) -> dict:
+    """单个 cell（半宽）内容，自适应两种模式（同源度量，build/门禁共用）：
+
+    * 宽屏（cell_w >= STACK_CELL_W）：口令在左窄列、说明在右宽列，同一水平行；
+      cell 高 = max(口令行, 说明折行)，最省高度。
+    * 窄屏（cell_w < STACK_CELL_W）：口令上、说明下堆叠，说明用满整个 cell 宽，
+      避免说明列过窄折行爆炸（窄屏水平会让卡高超过 4000px 门禁上限）。
+
+    返回 mode/desc_x 供 layout 与 build 定位；口令/说明折行保字由门禁校验。
+    """
     cmd = str(row[0]) if len(row) > 0 else ""
     desc = str(row[1]) if len(row) > 1 else ""
-    cmd_lines = Canvas.wrap(cmd, FS_CMD, "bold", max(1, cmd_col - CMD_INSET - COL_GAP)) or [""]
-    desc_lines = Canvas.wrap(desc, FS_DESC, "regular", max(1, content_w - cmd_col)) if desc else []
-    block_h = max(len(cmd_lines) * CMD_LH, len(desc_lines) * DESC_LH)
-    return {"cmd": cmd_lines, "desc": desc_lines, "block_h": block_h,
-            "rh": max(ROW_MIN, block_h + ROW_PAD)}
+    if cell_w >= STACK_CELL_W:
+        cmd_w = min(CELL_CMD_W, max(1, cell_w - CELL_GAP - CMD_INSET - 40))
+        desc_x = CMD_INSET + cmd_w + CELL_GAP
+        desc_w = max(1, cell_w - desc_x - CMD_INSET)
+        cmd_lines = Canvas.wrap(cmd, FS_CMD, "bold", cmd_w) or [""]
+        desc_lines = Canvas.wrap(desc, FS_DESC, "regular", desc_w) if desc else []
+        block_h = max(len(cmd_lines) * CMD_LH, len(desc_lines) * DESC_LH)
+        return {"mode": "h", "cmd": cmd_lines, "desc": desc_lines,
+                "block_h": block_h, "desc_x": desc_x,
+                "ch": max(ROW_MIN, block_h + CELL_PAD * 2)}
+    # 窄屏堆叠
+    text_w = max(1, cell_w - CMD_INSET - CMD_INSET)
+    cmd_lines = Canvas.wrap(cmd, FS_CMD, "bold", text_w) or [""]
+    desc_lines = Canvas.wrap(desc, FS_DESC, "regular", text_w) if desc else []
+    block_h = len(cmd_lines) * CMD_LH
+    if desc_lines:
+        block_h += CMD_DESC_GAP + len(desc_lines) * DESC_LH
+    return {"mode": "v", "cmd": cmd_lines, "desc": desc_lines,
+            "block_h": block_h, "desc_x": CMD_INSET,
+            "ch": max(ROW_MIN, block_h + CELL_PAD * 2)}
+
+
+def _row_parts(row, content_w: int, cmd_col: int) -> dict:
+    """【门禁兼容】按 cell 半宽校验折行保字。
+
+    门禁用 ``_row_parts(row, L['content_w'], L['cmd_col'])`` 检查口令/说明
+    折行后 ``''.join(lines) == 原文``（一个字都不丢）。两列布局下每个 cell
+    宽 = L['content_w']，故这里以 content_w 作 cell 宽度量；cmd_col 参数保留
+    兼容旧调用，语义为 cell 可用文字宽，缺省时按 content_w 推。
+    """
+    cell_w = max(1, int(cmd_col or content_w))
+    return _cell_parts(row, cell_w)
 
 
 def layout(data: dict | None = None, width: int | None = None) -> dict:
@@ -120,7 +179,10 @@ def layout(data: dict | None = None, width: int | None = None) -> dict:
     width = max(560, min(int(width or 720), 900))
     groups = _groups(data)
     content_w = width - PAD * 2
-    cmd_col = _cmd_col(groups, content_w)
+    # 两列：每个 cell 占半宽，中间 COL_GAP 分隔。cmd_col 兼容字段 = cell 宽，
+    # 供门禁 _row_parts(row, content_w, cmd_col) 按 cell 实宽度量折行保字。
+    cell_w = (content_w - COL_GAP) // 2
+    cmd_col = cell_w
     nodes: list[dict] = []
 
     y = PAD
@@ -136,21 +198,33 @@ def layout(data: dict | None = None, width: int | None = None) -> dict:
                       "cy": y + FS_GROUP // 2, "bar": (y + 3, y + FS_GROUP - 3)})
         y += FS_GROUP + HEAD_GAP
         rows = _rows_of(g)
-        for ri, r in enumerate(rows):
-            part = _row_parts(r, content_w, cmd_col)
-            rh, block_h = part["rh"], part["block_h"]
-            top = y + max(0, (rh - block_h) // 2)
-            cmd_top = top + max(0, (block_h - len(part["cmd"]) * CMD_LH) // 2)
-            desc_top = top + max(0, (block_h - len(part["desc"]) * DESC_LH) // 2)
-            nodes.append({
-                "k": "row", "y": y, "rh": rh,
-                "cmd": [(ln, cmd_top + i * CMD_LH + CMD_LH // 2)
-                        for i, ln in enumerate(part["cmd"])],
-                "desc": [(ln, desc_top + i * DESC_LH + DESC_LH // 2)
-                         for i, ln in enumerate(part["desc"])],
-            })
-            y += rh
-            if ri < len(rows) - 1:
+        # 两两配对：奇数最后一个 cell 独占左列（右列留白）
+        for pi in range(0, len(rows), 2):
+            pair = rows[pi:pi + 2]
+            parts = [_cell_parts(r, cell_w) for r in pair]
+            row_h = max(p["ch"] for p in parts)
+            for ci, part in enumerate(parts):
+                cx = PAD + ci * (cell_w + COL_GAP)
+                cmd_block_h = len(part["cmd"]) * CMD_LH
+                desc_block_h = len(part["desc"]) * DESC_LH
+                if part["mode"] == "h":
+                    # 水平：口令与说明块各自在 cell 竖直中轴居中
+                    cmd_top = y + CELL_PAD + max(0, (row_h - CELL_PAD * 2 - cmd_block_h) // 2)
+                    desc_top = y + CELL_PAD + max(0, (row_h - CELL_PAD * 2 - desc_block_h) // 2)
+                else:
+                    # 窄屏堆叠：口令在上、说明在下
+                    cmd_top = y + CELL_PAD
+                    desc_top = cmd_top + cmd_block_h + CMD_DESC_GAP
+                nodes.append({
+                    "k": "row", "y": y, "rh": row_h, "cx": cx, "cw": cell_w,
+                    "mode": part["mode"], "desc_x": part["desc_x"],
+                    "cmd": [(ln, cmd_top + i * CMD_LH + CMD_LH // 2)
+                            for i, ln in enumerate(part["cmd"])],
+                    "desc": [(ln, desc_top + i * DESC_LH + DESC_LH // 2)
+                             for i, ln in enumerate(part["desc"])],
+                })
+            y += row_h
+            if pi + 2 < len(rows):
                 nodes.append({"k": "divider", "y": y + ROW_GAP // 2, "strong": False})
                 y += ROW_GAP
         y += GROUP_GAP
@@ -188,14 +262,16 @@ def layout_boxes(L: dict) -> list[tuple]:
                           n["cy"] - FS_GROUP // 2, x0 + CMD_INSET + w,
                           n["cy"] + FS_GROUP // 2))
         elif k == "row":
+            cx = n["cx"]
             for j, (ln, cy) in enumerate(n["cmd"]):
                 w = Canvas.text_width(ln, FS_CMD, "bold")
-                boxes.append(("cmd.%d.%d" % (i, j), x0 + CMD_INSET,
-                              cy - CMD_LH // 2, x0 + CMD_INSET + w, cy + CMD_LH // 2))
+                boxes.append(("cmd.%d.%d" % (i, j), cx + CMD_INSET,
+                              cy - CMD_LH // 2, cx + CMD_INSET + w, cy + CMD_LH // 2))
+            desc_x = n["desc_x"]
             for j, (ln, cy) in enumerate(n["desc"]):
                 w = Canvas.text_width(ln, FS_DESC, "regular")
-                boxes.append(("desc.%d.%d" % (i, j), x0 + cmd_col,
-                              cy - DESC_LH // 2, x0 + cmd_col + w, cy + DESC_LH // 2))
+                boxes.append(("desc.%d.%d" % (i, j), cx + desc_x,
+                              cy - DESC_LH // 2, cx + desc_x + w, cy + DESC_LH // 2))
         elif k == "tip" and n["text"]:
             txt = _fit(n["text"], L["content_w"], FS_TIP, "regular")
             w = Canvas.text_width(txt, FS_TIP, "regular")
@@ -242,10 +318,12 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             S.key(c, (x0 + CMD_INSET, n["cy"]), n["name"],
                   size=FS_GROUP, color=p["accent_color"])
         elif k == "row":
+            cx = n["cx"]
+            desc_x = n["desc_x"]
             for ln, cy in n["cmd"]:
-                S.key(c, (x0 + CMD_INSET, cy), ln, size=FS_CMD, color=p["text_color"])
+                S.key(c, (cx + CMD_INSET, cy), ln, size=FS_CMD, color=p["text_color"])
             for ln, cy in n["desc"]:
-                S.small(c, (x0 + cmd_col, cy), ln, size=FS_DESC, color=p["dim_color"])
+                S.small(c, (cx + desc_x, cy), ln, size=FS_DESC, color=p["dim_color"])
         elif k == "tip":
             if n["text"]:
                 S.small(c, (x0, n["cy"]), n["text"], size=FS_TIP,
