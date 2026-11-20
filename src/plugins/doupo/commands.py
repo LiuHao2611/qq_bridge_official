@@ -2760,6 +2760,20 @@ async def cmd_pick(store, qq, n) -> str:
 # 傀儡系统（2026-11-18，考据见 docs/斗破傀儡_原文证据台账_2026-11-18.md）
 # 所有傀儡数据在独立 SQLite 真实列（puppet_store），绝不进 players.data 的 JSON blob。
 # ---------------------------------------------------------------------------
+# 子命令 = 「动作/清单回执」，回复必须是文本；不带子命令的「傀儡」才是出图口令。
+# ⚠️ 这张表是「出声 vs 出图」的唯一真值：命令层分派与 ``__init__`` 的 handler 分流
+# 都读它。此前 handler 无条件出傀儡卡，把淬炼/结阵/收服/融魂/配方的回执整条丢掉
+# ——玩家花了雷淬石和金币、只收到一张没变化的名录卡（2026-11-20 第十一轮，用户报
+# 「傀儡淬炼口令没触发」，真相是命令触发了、也真扣了料，只是回执被卡吞了）。
+PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂")
+
+
+def puppet_is_subcmd(arg) -> bool:
+    """该参数走子命令（文本回执）还是「看傀儡卡」（出图）。真值见上。"""
+    a = str(arg or "").strip()
+    return bool(a) and a.startswith(PUPPET_SUBCMDS)
+
+
 async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     """查看傀儡卡 / 子命令：淬炼、结阵、融魂、收服。
     不拦未开通者——展示差哪道资格，作引导。
@@ -2879,12 +2893,16 @@ def _puppet_recipe_text(p, mats: dict) -> str:
     return "\n".join(lines)
 
 
-async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
+async def cmd_craft_puppet(store, qq, pstore=None, arg="", report=None) -> str:
     """炼制傀儡：选配方 → 过五道资格 → 扣真实列材料 → 建真实列傀儡行。
 
     2026-11-20 多配方：``arg`` 是配方名（「炼制傀儡 地妖傀」）；留空则自动选
     「材料齐 + 境界够」的最高档。档位由五维材料木桶判定（原著第900/906章），
     不再是「首炼恒人级铜」——材料好就该出好傀。
+
+    ``report``（2026-11-20 第十一轮）：成傀时把结构化结果写进去，供 handler 出
+    「炼制成功卡」。**只有成功才写**——失败/引导类回复是逐条解释缺什么，天然是
+    文本，不能塞进卡片（一处输出=一条消息，成卡与失败文本互斥）。
     """
     from . import puppet_core as pc
     pstore = pstore or DEFAULT_PUPPET_STORE
@@ -2991,19 +3009,40 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
     if not elig["ready"]:
         await pstore.set_ready(qq, True)
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX[puppet["tier"]]
+    atk = int(pc.puppet_attack(puppet, p))
+    realm_label = pc.puppet_realm_label(puppet, p)
     fire_note = ""
+    downgrade = ""
     if int(puppet["tier"]) < int(nominal):
         fg_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(int(fg["grade"]), "兽火")
-        fire_note = ("\n　⚠ 此配方本可出%s，但你的炼制之火只到%s——降为%s。"
+        downgrade = ("此配方本可出%s，但你的炼制之火只到%s——降为%s"
                      % (cfg.PUPPET_TIER_BY_IDX[max(0, nominal)][0], fg_word, tier_name))
+        fire_note = "\n　⚠ " + downgrade + "。"
+    # 成卡取数（只有成功路径写；失败/引导回复保持文本，二者互斥）
+    if report is not None:
+        report.update({
+            "ok": True,
+            "name": puppet["name"], "recipe": rec["name"],
+            "custom": bool(rec.get("custom")), "pid": int(pid),
+            "tier": int(puppet["tier"]), "nominal_tier": int(nominal),
+            "tier_name": tier_name, "skin": skin,
+            "atk": atk, "realm_label": realm_label,
+            "cost": dict(cost), "need_mp": int(need_mp), "mp_left": int(p["mp"]),
+            "downgrade": downgrade,
+            "purity": int(puppet.get("purity") or 0),
+            "bonded": bool(puppet.get("bonded")),
+            "awakened": bool(puppet.get("awakened")),
+            "body_name": puppet.get("body_name") or "",
+            "body_realm": puppet.get("body_realm") or "",
+            "body_star": int(puppet.get("body_star") or 0),
+        })
     return ("⚗️ 炼制成功！【%s】%s·%s皮（%s，id=%d）\n"
             "　用料：%s\n"
             "　肉身攻击 %d　%s（不吃斗气/斗技）\n"
             "　斗气 -%d（余 %d）%s\n"
             "　发「傀儡」查看；雷淬可再升档。" % (
                 puppet["name"], tier_name, skin, rec["name"], pid,
-                "、".join(cost), int(pc.puppet_attack(puppet, p)),
-                pc.puppet_realm_label(puppet, p),
+                "、".join(cost), atk, realm_label,
                 need_mp, int(p["mp"]), fire_note))
 
 

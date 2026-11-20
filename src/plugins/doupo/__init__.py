@@ -945,14 +945,42 @@ async def _(event: Event):
         return
     if "炼制傀儡" in raw:
         # 2026-11-20 多配方：「炼制傀儡 <配方名>」按配方开炉；留空自动选最高档。
+        # 2026-11-20 第十一轮：成傀改出卡（用户明确要求）。
+        # 失败/引导仍是文本——那些回复要逐条说清缺什么料、卡在哪一道资格，
+        # 卡片塞不下也不该塞；成卡与失败文本互斥（一处输出=一条消息）。
         _m = re.search(r"炼制傀儡\s*(.*)", raw)
         _arg = (_m.group(1) if _m else "").strip()
-        await puppet_cmd.finish(
-            await commands.cmd_craft_puppet(store, qq, puppet_store_inst, _arg))
+        rep: dict = {}
+        txt = await commands.cmd_craft_puppet(
+            store, qq, puppet_store_inst, _arg, report=rep)
+        png = None
+        if rep.get("ok"):
+            try:
+                png = await card.render_craft_for(rep)
+            except Exception as e:  # noqa: BLE001
+                logger.error("傀儡炼制卡渲染失败（拒绝静默降级）：%s: %s",
+                             type(e).__name__, e)
+        if png:
+            await finish_card(puppet_cmd, event, png, "craft", "doupo_craft.png")
+            return
+        if rep.get("ok"):
+            # 真炼成了但图没出：成卡内容必须仍然让玩家看到（炼一炉不可逆、
+            # 材料与斗气已经扣掉），绝不能让「成了什么」静默消失。
+            await puppet_cmd.finish(
+                "⚠️ 炼制卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
+            return
+        await finish_text(puppet_cmd, event, txt)
         return
     m = re.search(r"傀儡\s*(.*)", raw)
     arg = (m.group(1) if m else "").strip()
     txt = await commands.cmd_puppet(store, qq, arg, puppet_store_inst)
+    if commands.puppet_is_subcmd(arg):
+        # 子命令是**动作回执**，必须原样发出：淬炼当场扣雷淬石与金币，收服/融魂
+        # 改的是真实列。此前这里无条件出傀儡卡，把这些回执整条吞掉——玩家花了
+        # 材料只收到一张没有变化的名录卡，于是「傀儡淬炼」看起来像没触发
+        # （2026-11-20 第十一轮实锤：命令真跑了、料真扣了、回执被卡吞了）。
+        await finish_text(puppet_cmd, event, txt)
+        return
     try:
         p = await store.get_player(qq)
     except Exception as e:  # noqa: BLE001
