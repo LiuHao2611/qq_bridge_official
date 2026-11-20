@@ -2850,7 +2850,11 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
                      % len(cfg.PUPPET_RECIPES))
         return "\n".join(lines)
     if arg.startswith("淬炼"):
-        return await _cmd_puppet_temper(store, qq, p, roster, elig, pstore)
+        # P1-2 批量雷淬（Q1）：「傀儡 淬炼 5」一次结算 5 次，消除重复点击疲劳。
+        _cnt = arg[len("淬炼"):].strip()
+        _times = int(_cnt) if _cnt.isdigit() else 1
+        return await _cmd_puppet_temper(store, qq, p, roster, elig, pstore,
+                                        times=max(1, min(50, _times)))
     if arg.startswith("结阵"):
         return await _cmd_puppet_formation(qq, roster, elig, pstore)
     if arg.startswith("收服"):
@@ -2892,7 +2896,10 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
             (1.0 - core.mitigation(g["armor"])) * 100),
         "　替主挡伤 %.0f%% 概率（单次伤害 ≥ %d 才算大额；挡下后你仍自担 %.0f%%）" % (
             g["chance"] * 100, g["threshold"], g["leak"] * 100),
-        "　雷淬纯度 %d%%%s" % (cur["purity"], "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
+        "　雷淬纯度 %d%% %s%s%s" % (
+            cur["purity"], pc.dye_bar(int(cur["purity"])),
+            (" 紫纹%d层" % g["vein"]) if g.get("vein") else "",
+            "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
         "　%s%s" % ("已认主·永不背叛" if cur["bonded"] else "未认主",
                     "　有灵（北王式）" if cur["awakened"] else ""),
     ]
@@ -3217,41 +3224,57 @@ _PUPPET_COLUMNS = frozenset({
 })
 
 
-async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
+async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore, times: int = 1) -> str:
+    """雷淬（P1-2 批量）：一次结算 ``times`` 次，原子扣费、单次判档语义不变。
+
+    批量 = 连续开炉各判各的，不是一炉多丹；N 次共享一次 CD（这里无 CD）与一次
+    写库。雷淬石/金币按 N 倍一次性校验并扣取，任何一步失败整笔不扣（禁兜底）。
+    """
     from . import puppet_core as pc
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
-    if cur["tier"] >= 2 and cur["purity"] >= cfg.PUPPET_PURITY_MAX:
-        return "【%s】已是天级金，此界上限，无需再淬。" % cur["name"]
+    times = max(1, int(times))
+    # 天级雷纹满层（purity 到硬上限）才拒绝；天级未满层仍可淬（黑魔雷长线）。
+    if cur["tier"] >= 2 and int(cur.get("purity", 0)) >= pc.purity_hard_max():
+        return "【%s】雷纹已满（%d 层），此界圆满，无需再淬。" % (
+            cur["name"], int(cfg.PUPPET_VEIN_MAX))
     # 2026-11-20 修 bug：雷淬石以前**永不消耗**（只扣金币），掉落的石头毫无用处。
-    # 现在每淬一次扣 PUPPET_TEMPER_STONE 枚，缺料先说清楚去哪取。
+    # P1-2：按 times 倍一次性校验总消耗，绝不「扣一半中断留烂摊子」。
     mats = await pstore.materials(qq)
-    stone_need = int(cfg.PUPPET_TEMPER_STONE)
+    stone_need = int(cfg.PUPPET_TEMPER_STONE) * times
     stone_have = int(mats.get("雷淬石", 0))
     if stone_have < stone_need:
-        return "雷淬石不足（有 %d，需 %d）——去「傀儡遗迹」第三段「虚空雷池」取。" % (
-            stone_have, stone_need)
-    if int(p.get("gold", 0)) < cfg.PUPPET_TEMPER_COST:
-        return "金币不足，雷淬需 %d 金。" % cfg.PUPPET_TEMPER_COST
+        return "雷淬石不足（有 %d，%d 次需 %d）——去「傀儡遗迹」第三段「虚空雷池」取。" % (
+            stone_have, times, stone_need)
+    gold_need = int(cfg.PUPPET_TEMPER_COST) * times
+    if int(p.get("gold", 0)) < gold_need:
+        return "金币不足，%d 次雷淬需 %d 金。" % (times, gold_need)
     # 先扣料再扣金：料被并发取走时直接中断，不会白扣金币。
     if not await pstore.take_materials(qq, {"雷淬石": stone_need}):
         return "雷淬石在校验后被取用，雷淬中断、金币未扣。"
-    p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_TEMPER_COST
+    p["gold"] = int(p.get("gold", 0)) - gold_need
     await store.put_player(p)
-    new = pc.temper(cur)
-    # 2026-11-20 修 bug：temper() 会带出 capped 这类**派生标记**（不是库列），
-    # 原样 **new 塞给 update_puppet 会撞字段白名单 → 抛 PuppetStoreError，
-    # 玩家点「淬炼」直接报错。这里只把真列挑出来写库。
+
+    # 逐次开炉：每次按**当前档位**取雷力增量，各判各的升档；派生标记不入写库 payload。
+    new = dict(cur)
+    tier_ups = []
+    for i in range(times):
+        step = pc.temper(new)
+        if step.get("tier", cur["tier"]) > int(new.get("tier", 0)):
+            tier_ups.append((i + 1, step["tier_name"], step["skin"]))
+        new = dict(new, **step)
     payload = {k: v for k, v in new.items() if k in _PUPPET_COLUMNS}
     await pstore.update_puppet(qq, cur["id"], **payload)
-    if new.get("capped"):
-        return "⚡ 雷霆淬炼圆满！【%s】进化为【%s】（%s皮）——已至天妖傀上限。" % (
-            cur["name"], new["tier_name"], new["skin"])
-    nxt = new["tier"] + 1
-    toward = ("晋【%s】还需纯度 %d" % (cfg.PUPPET_TIER_BY_IDX[nxt][0],
-                                    cfg.PUPPET_TIER_UP_PURITY[new["tier"]])) \
-        if new["tier"] < 2 else "已至上限"
-    return "⚡ 雷霆淬炼：纯度 %d%%，当前 %s·%s皮（%s）。" % (
-        new["purity"], new["tier_name"], new["skin"], toward)
+
+    # 回执：批量只出汇总 + 每次升档节点（消除 15~24 次重复点击的刷屏）。
+    lei = ["丹雷", "五色丹雷", "黑魔雷"][max(0, min(2, int(cur["tier"])))]
+    vein = int(new.get("vein", 0))
+    vein_txt = ("　紫纹 %d 层" % vein) if vein else ""
+    if tier_ups:
+        ups = "、".join("第%d次→【%s】%s皮" % (i, n, s) for i, n, s in tier_ups)
+        return "⚡ 雷霆淬炼×%d（%s）：%s；当前纯度 %d%%，%s·%s皮%s。" % (
+            times, lei, ups, int(new["purity"]), new["tier_name"], new["skin"], vein_txt)
+    return "⚡ 雷霆淬炼×%d（%s）：纯度 %d%%，当前 %s·%s皮%s。" % (
+        times, lei, int(new["purity"]), new["tier_name"], new["skin"], vein_txt)
 
 
 async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:

@@ -887,8 +887,11 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
                 # 护主一行（2026-11-20 第三轮）：气血/护甲/挡伤率缺一个都是隐式数值
                 "护主 气血%d · 护甲%d · 挡伤%.0f%%" % (
                     g["hp_max"], g["armor"], g["chance"] * 100),
-                "雷淬纯度 %d%% · %s%s%s" % (
+                "雷淬纯度 %d%% %s%s · %s%s%s" % (
                     int(pu.get("purity", 0)),
+                    # P1-2 渐进染色（N06）：按纯度画银→金进度格
+                    pc.dye_bar(int(pu.get("purity", 0))),
+                    (" 紫纹%d层" % int(g["vein"])) if int(g.get("vein") or 0) else "",
                     "已认主·永不背叛" if pu.get("bonded") else "未认主",
                     " · 有灵" if pu.get("awakened") else "",
                     # P1-1：战损在 PNG 名录卡上可见（此前只有文本名录卡有）
@@ -1027,6 +1030,7 @@ def build_craft_data(report: dict | None) -> dict:
 
     没有 ``ok`` 标记时返回空 dict：失败 / 引导类回复本来就是逐条文本，不该出卡。
     """
+    from . import puppet_core as pc  # 局部导入：本函数作用域没有 pc（勿依赖别处的 import）
     rep = dict(report or {})
     if not rep.get("ok"):
         return {}
@@ -1046,7 +1050,8 @@ def build_craft_data(report: dict | None) -> dict:
     state = "已认主·永不背叛" if rep.get("bonded") else "未认主"
     if rep.get("awakened"):
         state += "　有灵（北王式）"
-    head.append("雷淬纯度 %d%%　%s" % (int(rep.get("purity") or 0), state))
+    head.append("雷淬纯度 %d%% %s　%s" % (
+        int(rep.get("purity") or 0), pc.dye_bar(int(rep.get("purity") or 0)), state))
 
     cost = rep.get("cost") or {}
     groups = [

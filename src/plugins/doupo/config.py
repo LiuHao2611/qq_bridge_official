@@ -1924,6 +1924,22 @@ PUPPET_TEMPER_PURITY = 12              # 每次雷淬 purity 增量 [调参]
 #: 不会顶破「不抢风头」的输出封顶。单场护甲 _pup_hp 每场重置，与此字段分离。
 PUPPET_DAMAGED_ATK_MULT = 0.80         # 战损攻击倍率 [调参]
 PUPPET_DAMAGED_ARMOR_MULT = 0.50       # 战损护甲倍率 [调参]
+
+#: P1-2 雷力三档（D04/N06，第1531章「黑魔雷半月一星」）：按**当前档位**决定
+#: 每次雷淬的纯度增量，索引=tier。人级丹雷 +12（沿用现状）、地级五色丹雷 +25、
+#: 天级黑魔雷 +40。确定性分档，不掷骰、不新增材料 —— 忠于「养成链全确定」契约
+#: 与 D04「+12/+25/+40 单调扩展」。tier=2 的 +40 喂给天级雷纹长线（见下）。
+PUPPET_LEI_POWER_GAIN = (12, 25, 40)
+#: 天级雷纹长线（D03/Q4/N07）：天级 purity 不再封死 100，继续按黑魔雷累加；
+#: 每 PUPPET_VEIN_PURITY 点纯度折 1 层雷纹，每层护甲 +PUPPET_VEIN_ARMOR_STEP
+#: （相对值，喂给 guard_profile 反解前的护甲），上限 PUPPET_VEIN_MAX 层。
+#: 🚨 雷纹只加护主护甲/耐久（有落点）；「命中」在本作傀儡击是必中固定伤害、
+#:    没有命中判定，加了就是死字段 —— 如实不实现，不伪造机制。
+PUPPET_VEIN_PURITY = 40                # 每层雷纹所需超量 purity [调参]
+PUPPET_VEIN_MAX = 5                    # 雷纹层数上限 [调参]
+PUPPET_VEIN_ARMOR_STEP = 0.12          # 每层护甲相对增量 [调参]
+#: 渐进染色（N06 第1160章「最后一只银掌转金」）：名录卡按 purity 画银→金进度格数。
+PUPPET_DYE_STEPS = 10                  # 染色进度格数（0..10）[调参]
 #: 进阶玩法（E37/E43/E44）：收服无主残傀 / 熔入残魂生灵智（北王式）。
 PUPPET_CLAIM_COST = 600                # 收服金币 [调参]
 PUPPET_AWAKEN_COST = 1000              # 融魂金币 [调参]

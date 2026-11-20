@@ -341,12 +341,93 @@ async def _e2e():
           "配方列表应含条数：%s" % lst[:100])
 
 
+def test_lei_power_three_tiers():
+    """P1-2 雷力三档（D04）：丹雷+12 / 五色丹雷+25 / 黑魔雷+40，按当前档位单调。"""
+    check(tuple(cfg.PUPPET_LEI_POWER_GAIN) == (12, 25, 40),
+          "雷力三档增量不是 12/25/40：%s" % (cfg.PUPPET_LEI_POWER_GAIN,))
+    gains = [pc.lei_power_gain(t) for t in (0, 1, 2)]
+    check(gains[0] < gains[1] < gains[2],
+          "雷力增量未随档位递增：%s（丹雷慢、黑魔雷快）" % gains)
+    # temper 真用这个增量：各档雷淬一次的 purity 增量必须等于档位增益
+    for tier in (0, 1):
+        pu = {"name": "测试", "tier": tier, "purity": 0, "damaged": False}
+        got = pc.temper(pu)["purity"] - 0
+        check(got == pc.lei_power_gain(tier),
+              "tier%d 雷淬增量 %d ≠ 雷力档位 %d" % (tier, got, pc.lei_power_gain(tier)))
+    # 越界档位钳制到 2，不许 IndexError
+    check(pc.lei_power_gain(99) == 40 and pc.lei_power_gain(-1) == 12,
+          "雷力档位越界未钳制")
+
+
+def test_tian_tier_vein_longline():
+    """P1-2 天级长线（Q4）：不再封死 100，黑魔雷继续涨、折雷纹、护甲增、输出不破 CAP。"""
+    hard = pc.purity_hard_max()
+    check(hard == int(cfg.PUPPET_PURITY_MAX)
+          + int(cfg.PUPPET_VEIN_MAX) * int(cfg.PUPPET_VEIN_PURITY),
+          "纯度硬上限公式错：%d" % hard)
+    # 天级连续雷淬，purity 必须能突破 100 并到硬上限
+    cur = {"name": "天妖傀", "tier": 2, "tier_name": "天级傀儡", "skin": "金",
+           "purity": 100, "damaged": False}
+    for _ in range(10):
+        cur = dict(cur, **pc.temper(cur))
+    check(cur["purity"] == hard, "天级雷淬未累到硬上限：%d≠%d" % (cur["purity"], hard))
+    check(cur.get("maxed") is True, "满层未标 maxed")
+    check(int(cur.get("vein") or 0) == int(cfg.PUPPET_VEIN_MAX),
+          "满层雷纹层数错：%s" % cur.get("vein"))
+    # 战损修复在长线阶段仍生效
+    check(pc.temper(dict(cur, damaged=True)).get("damaged") is False,
+          "天级雷纹满层后雷淬不清战损")
+
+
+def test_dye_bar_uses_renderable_glyphs():
+    """P1-2 渐进染色（N06）：进度条必须用卡片字体真有的字形。
+
+    ◼/◻(U+25FC/25FB) 字体缺字形会被 emoji_safe 过滤 → 整条不显示（本轮真机截图
+    抓到）；■/□(U+25A0/25A1) 有真字形。格数与 PUPPET_DYE_STEPS 一致。
+    """
+    steps = int(cfg.PUPPET_DYE_STEPS)
+    b0 = pc.dye_bar(0)
+    bfull = pc.dye_bar(int(cfg.PUPPET_PURITY_MAX))
+    check(len(b0) == steps and len(bfull) == steps,
+          "染色条格数 %d/%d ≠ %d" % (len(b0), len(bfull), steps))
+    check("■" in bfull and "□" in b0,
+          "染色条没用 ■/□（字体有真字形）；当前 full=%s empty=%s" % (bfull, b0))
+    check("◼" not in bfull and "◻" not in b0,
+          "染色条用了 ◼/◻ —— 卡片字体缺字形会被过滤，玩家看不到")
+    # 单调：纯度越高实心越多
+    check(pc.dye_bar(0).count("■") < pc.dye_bar(50).count("■")
+          < pc.dye_bar(100).count("■"),
+          "染色条实心格数未随纯度单调增")
+
+
+def test_batch_temper_atomic():
+    """P1-2 批量雷淬（Q1）：N 次=N 倍扣费、各判各档、单次失败整笔不扣。"""
+    import inspect
+    src = inspect.getsource(commands._cmd_puppet_temper)
+    # 源码钉：按 times 倍校验/扣费，不是每次循环里扣（后者会有半途失败烂摊子）
+    check("stone_need = int(cfg.PUPPET_TEMPER_STONE) * times" in src,
+          "批量雷淬石头未按 times 倍一次性校验")
+    check("gold_need = int(cfg.PUPPET_TEMPER_COST) * times" in src,
+          "批量雷淬金币未按 times 倍一次性校验")
+    check("for i in range(times)" in src,
+          "批量雷淬没有逐次开炉循环")
+    # 天级门禁必须用硬上限，不能退回封死 100（否则雷纹长线入口被堵死）
+    check(">= pc.purity_hard_max()" in src,
+          "天级雷淬门禁未用 purity_hard_max —— 长线入口被 purity=100 堵死")
+    # 分发处把次数传进来了
+    cmd_src = inspect.getsource(commands.cmd_puppet)
+    check("_cmd_puppet_temper(store, qq, p, roster, elig, pstore," in cmd_src,
+          "cmd_puppet 未把批量次数传给 _cmd_puppet_temper")
+
+
 def main():
     for fn in (test_trough_picks_weakest, test_material_names_are_novel,
                test_legacy_puppet_unchanged, test_metal_and_fire_enter_formula,
                test_fire_grade_from_player, test_missing_and_best_recipe,
                test_nominal_vs_actual_tier, test_no_deadlock_regressions,
-               test_puppet_drops_not_in_bag):
+               test_puppet_drops_not_in_bag, test_lei_power_three_tiers,
+               test_tian_tier_vein_longline, test_dye_bar_uses_renderable_glyphs,
+               test_batch_temper_atomic):
         fn()
     asyncio.run(_e2e())
     for m in _FAILS:
