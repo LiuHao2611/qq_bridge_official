@@ -1806,7 +1806,9 @@ async def cmd_tasks(store, qq) -> str:
     out = ["📜 任务"]
     m = core.current_main(p)
     if m:
-        cur = int(p.get("main_progress", 0))
+        # 2026-11-20：进度必须走 core.main_value —— 武器类是「状态要求」，
+        # 玩家在任务轮到之前就练满时事件计数恒 0（用户反馈的真 bug）。
+        cur = core.main_value(p)
         out.append(f"【主线·{m['name']}】{m['desc']}")
         out.append(f"　进度 {cur}/{m['target']}　{_bar(cur, m['target'])}")
         rw = m["reward"]
@@ -1815,7 +1817,7 @@ async def cmd_tasks(store, qq) -> str:
         out.append("【主线】已全部完成。")
     t = p.get("task")
     if t:
-        cur = int(t.get("progress", 0))
+        cur = core.task_value(p)
         out.append(f"【支线·{t['name']}】{t['desc']}")
         out.append(f"　进度 {cur}/{t['target']}　{_bar(cur, t['target'])}")
     else:
@@ -1831,7 +1833,7 @@ async def cmd_task_accept(store, qq) -> str:
     await store.put_player(p)
     if not res.get("ok"):
         t = res["task"]
-        return f"你手上还有支线未交：{t['name']}（{t.get('progress', 0)}/{t['target']}）"
+        return f"你手上还有支线未交：{t['name']}（{core.task_value(p)}/{t['target']}）"
     t = res["task"]
     return f"📌 接取支线【{t['name']}】：{t['desc']}（0/{t['target']}）"
 
@@ -1845,7 +1847,7 @@ async def cmd_task_submit(store, qq) -> str:
         if res.get("reason") == "none":
             return "你没有在做的支线。发送「接任务」接一条。"
         t = res["task"]
-        return f"尚未完成：{t['name']}（{t.get('progress', 0)}/{t['target']}）"
+        return f"尚未完成：{t['name']}（{core.task_value(p)}/{t['target']}）"
     rw = res["reward"]
     # 2026-11-19：提交必须存档（此前只在内存改 p，重启丢奖励）；A 线惊喜在此揭晓。
     await store.put_player(p)
@@ -2566,15 +2568,21 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     elig = await pstore.eligibility(qq)
     roster = await pstore.list_puppets(qq)
     if not roster:
-        gate = pc.puppet_gate(p, 0, need_mp=False)
         lines = ["【傀儡】你尚未拥有傀儡。", "炼一具须先过五道资格（挂已有养成）："]
         checks = [
             ("境界", pc.gate_realm(p, 0)), ("灵魂境界", pc.gate_soul(p)),
             ("控火", pc.gate_fire_ctrl(p)), ("异火", pc.gate_flame(p)),
+            ("斗气", pc.mp_endurance_ok(p, 0)),
         ]
         for name, (ok, reason) in checks:
             lines.append("  %s %s%s" % ("✅" if ok else "❌", name,
                                         "" if ok else "（" + reason + "）"))
+        # 2026-11-20：材料与竹简一次列全（玩家问「到底要什么」时不用猜）
+        mats = await pstore.materials(qq) or {}
+        need = {"强者躯体": 1, "火属性魔核": 1, "无主灵魂": 1, "暗金玄铁": 1}
+        lines.append("  📦 开炉材料：%s" % "、".join(
+            "%s %d/%d" % (n, int(mats.get(n, 0) or 0), q) for n, q in need.items()))
+        lines.append("  📜 傀儡之技：%s" % ("已习得" if elig["lore"] else "未习得（须先得「天妖傀竹简」）"))
         lines.append("资格齐后发「炼制傀儡」。发「傀儡遗迹」攒材料。")
         return "\n".join(lines)
     if arg.startswith("淬炼"):

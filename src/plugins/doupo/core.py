@@ -2673,6 +2673,13 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     for mat, n in rec["need"].items():
         take_item(p, mat, n)
     p["last_craft"] = now_ts
+    # 2026-11-20 修：傀儡资格③「控火闸」读 ``craft_count`` / ``high_grade_crafts``，
+    # 但这两个字段**以前从没被生产代码写过**（只有测试手塞）→ 控火闸永远不过，
+    # 傀儡炼制永久不可能。每开一炉都计一次（成败都算，原著「烧药得经验」）；
+    # 成品品阶 ≥ ``PUPPET_HIGH_GRADE_FROM`` 才计「高阶丹药」。
+    p["craft_count"] = int(p.get("craft_count", 0) or 0) + 1
+    _is_high = (cfg.alch_grade_idx(rec.get("grade", ""))
+                >= cfg.alch_grade_idx(cfg.PUPPET_HIGH_GRADE_FROM))
 
     # 2026-11-18 原著口径：成功率随「炼药师品阶 vs 丹药品阶」变化，不再所有丹药一个值。
     # diff>0 越阶衰减（第495章四品勉强炼五品「成功率太小」），diff<=0 够格用基础率。
@@ -2681,6 +2688,8 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         flame_bonus=_flame_bonus.alchemy_rate_bonus(p))
     if rng() < rate:
         add_item(p, name, 1)
+        if _is_high:
+            p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
         up = _alch_level_up(p)
         return {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
@@ -2750,6 +2759,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     n_done = n_ok = n_fail = 0
     exp = 0
     limited = ""
+    _is_high = (grade_idx >= cfg.alch_grade_idx(cfg.PUPPET_HIGH_GRADE_FROM))
     for _ in range(n):
         # 药材不足 → 按实际可炼炉数收炉，整批其余不结算
         if any(count_item(p, mat) < qty for mat, qty in rec["need"].items()):
@@ -2763,9 +2773,13 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
             take_item(p, mat, qty)
         p["mp"] = int(p.get("mp", 0)) - mp_per
         n_done += 1
+        # 控火闸计数（口径同单发 craft）：每炉一次，高阶成品另计
+        p["craft_count"] = int(p.get("craft_count", 0) or 0) + 1
         if rng() < rate:
             add_item(p, name, 1)
             n_ok += 1
+            if _is_high:
+                p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
             exp += int(cfg.CRAFT_EXP * exp_factor)
         else:
             add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
@@ -3240,11 +3254,49 @@ def current_main(p) -> dict | None:
     return cfg.MAIN_TASKS[idx]
 
 
+def _weapon_task_value(p) -> int:
+    """武器类任务的**状态值**：当前强化等级。
+
+    2026-11-20 真 bug（用户反馈「主线卡在升级玄重尺，我其实早就升级过，已经满级」）：
+    进度只由 ``advance_task('weapon')`` 事件累加，而这条事件只在**真的点强化时**触发。
+    玩家在轮到该任务之前就把武器练满，之后满级再也强化不了 → 进度永远 0 → 主线永久卡死。
+
+    「强化玄重尺至 5 级」是**状态要求**（到没到 5 级），不是次数要求；
+    只看事件计数等于要求玩家「先读到这条任务、再去强化」，顺序错了就死。
+    """
+    return max(0, int(p.get("weapon", 0) or 0))
+
+
+def main_value(p) -> int:
+    """当前主线的**有效进度**：事件计数与状态值取大（渲染与提交都用它）。"""
+    t = current_main(p)
+    if not t:
+        return 0
+    n = int(p.get("main_progress", 0))
+    if t.get("kind") == "weapon":
+        n = max(n, _weapon_task_value(p))
+    return n
+
+
+def task_value(p) -> int:
+    """当前支线的有效进度（口径同 ``main_value``）。"""
+    t = p.get("task")
+    if not t:
+        return 0
+    n = int(t.get("progress", 0))
+    if t.get("kind") == "weapon":
+        n = max(n, _weapon_task_value(p))
+    return n
+
+
 def task_accept(p, rng=random.random) -> dict:
     if p.get("task"):
         return {"ok": False, "reason": "busy", "task": p["task"]}
-    t = rng_choice(cfg.SIDE_TASK_POOL, rng)
-    t = dict(t)
+    # 已经达成的武器类支线不再发（否则「接一次交一次」就是白刷金币）。
+    pool = [t for t in cfg.SIDE_TASK_POOL
+            if not (t.get("kind") == "weapon"
+                    and _weapon_task_value(p) >= int(t.get("target", 1)))]
+    t = dict(rng_choice(pool or cfg.SIDE_TASK_POOL, rng))
     t["progress"] = 0
     p["task"] = t
     return {"ok": True, "task": t}
@@ -3262,7 +3314,7 @@ def task_submit(p) -> dict:
     t = p.get("task")
     if not t:
         return {"ok": False, "reason": "none"}
-    if int(t.get("progress", 0)) < int(t.get("target", 1)):
+    if task_value(p) < int(t.get("target", 1)):
         return {"ok": False, "reason": "unfinished", "task": t}
     rw = t["reward"]
     p["gold"] = int(p.get("gold", 0)) + int(rw.get("gold", 0))
@@ -3290,9 +3342,9 @@ def main_submit(p) -> dict:
     t = current_main(p)
     if not t:
         return {"ok": False, "reason": "done"}
-    if int(p.get("main_progress", 0)) < int(t["target"]):
+    if main_value(p) < int(t["target"]):
         return {"ok": False, "reason": "unfinished", "task": t,
-                "progress": int(p.get("main_progress", 0))}
+                "progress": main_value(p)}
     rw = t["reward"]
     p["gold"] = int(p.get("gold", 0)) + int(rw.get("gold", 0))
     p["exp"] = int(p.get("exp", 0)) + int(rw.get("exp", 0))

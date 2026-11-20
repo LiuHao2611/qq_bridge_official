@@ -37,17 +37,44 @@ def gate_soul(p: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def craft_floor(p: dict) -> int:
+    """该玩家**必然**至少开过几炉（由炼药师品阶反推的下限）。
+
+    晋阶吃掉的炼药经验是可查的：从一品升到当前品阶共需
+    ``sum(ALCHEMIST[:alch][1])`` 点，而每炉至少给 ``CRAFT_EXP``（失败给一半，
+    所以真实炉数只会更多）。再加上当前档位未消化的 ``alch_exp``。
+
+    2026-11-20 之前生产代码**从没写过** ``p['craft_count']``（只有测试手塞），
+    老档这个字段是空的 —— 直接读 0 会让所有老玩家永远卡在「火候不济」。
+    用这个下限兜住，不需要改存档、也不需要给谁补数据。
+    """
+    total = int(p.get("alch_exp", 0) or 0)
+    for idx in range(0, int(p.get("alch", 0) or 0)):
+        try:
+            total += int(cfg.ALCHEMIST[idx][1])
+        except IndexError:
+            break
+    return total // max(1, int(cfg.CRAFT_EXP))
+
+
 def gate_fire_ctrl(p: dict) -> tuple[bool, str]:
     """③ 控火闸（E16/E25）：靠多炼药练出，读炼药次数/高阶丹药记录。
 
     不新增字段：从 ``p['craft_count']`` / ``p['high_grade_crafts']`` 读，
     老档无这两个键视为 0（引导去炼药，不白送）。
     """
-    cnt = int(p.get("craft_count", 0) or 0)
+    # 炉数取「真实计数」与「品阶下限」的较大者：下限是能证明的，不会被老档吃掉。
+    cnt = max(int(p.get("craft_count", 0) or 0), craft_floor(p))
     high = int(p.get("high_grade_crafts", 0) or 0)
+    if "high_grade_crafts" not in p and int(p.get("alch", 0) or 0) >= cfg.PUPPET_ALCH_MIN:
+        # 老档无法回溯「高阶丹」明细（该字段历史上从没写过）。但走到七品必须
+        # 累计 238 炉以上，火候本身已被证明 —— 视为满足，只有明细数未知。
+        high = max(high, cfg.PUPPET_HIGH_GRADE_MIN)
     if cnt < cfg.PUPPET_CRAFT_COUNT_MIN or high < cfg.PUPPET_HIGH_GRADE_MIN:
-        return False, "火候不济，须多炼药（累计炼制 %d 次 / 高阶丹药 %d 枚）" % (
-            cfg.PUPPET_CRAFT_COUNT_MIN, cfg.PUPPET_HIGH_GRADE_MIN)
+        # 2026-11-20：把「差多少」写出来（旧版只写「须多炼药」，玩家看不出还差几次）。
+        return False, "火候不济，须多炼药（累计炼制 %d/%d 次，%s以上丹药 %d/%d 枚）" % (
+            cnt, cfg.PUPPET_CRAFT_COUNT_MIN, cfg.PUPPET_HIGH_GRADE_FROM,
+            high, cfg.PUPPET_HIGH_GRADE_MIN)
     return True, ""
 
 

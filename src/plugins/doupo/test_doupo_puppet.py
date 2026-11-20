@@ -112,7 +112,7 @@ async def main() -> None:
     for key, mutate in (
         ("境界", lambda d: d.update(lv=1)),
         ("灵魂境界", lambda d: d.update(alch=0)),
-        ("控火", lambda d: d.update(craft_count=0)),
+        # 「控火」不再在这里 —— 见下方：七品者炉数下限已 ≥ 门槛，②过则③必过。
         ("异火", lambda d: d.update(flames={})),
         ("斗气", lambda d: d.update(mp=0)),
     ):
@@ -122,6 +122,22 @@ async def main() -> None:
     for key, res in cases:
         check("五道资格-%s 独立报红" % key,
               (not res["ok"]) and key in res["missing"], str(res))
+
+    # ---- 2b. 控火闸（2026-11-20 修）----
+    # 真 bug：craft_count / high_grade_crafts 生产代码从没写过 → 控火闸永远不过。
+    # 修后炉数取「真实计数」与「品阶下限」的较大者；七品必然 ≥238 炉，
+    # 所以灵魂境界闸过 ⇒ 控火闸必过（② ⊃ ③，这是设计冗余，不是 bug）。
+    low = dict(p)
+    low.update(alch=0, craft_count=0, high_grade_crafts=0)
+    ok_low, why_low = pc.gate_fire_ctrl(low)
+    check("控火闸对新手独立报红", (not ok_low) and "火候不济" in why_low, why_low)
+    legacy = dict(p)
+    legacy.pop("craft_count", None)
+    legacy.pop("high_grade_crafts", None)
+    ok_legacy, why_legacy = pc.gate_fire_ctrl(legacy)
+    check("老档（无这两个字段）不被永久卡死", ok_legacy, why_legacy)
+    check("七品者炉数下限已过控火门槛",
+          pc.craft_floor(p) >= cfg.PUPPET_CRAFT_COUNT_MIN, str(pc.craft_floor(p)))
     big = pc.gate_realm(p, 1)
     check("大斗师以下不得炼地级", (not pc.gate_realm({"lv": 28}, 1)[0]) and big[0],
           "大斗师=%s 斗宗=%s" % (pc.gate_realm({"lv": 28}, 1), big))
