@@ -266,12 +266,17 @@ def damage_bars(battle: dict) -> list[dict]:
 
 # ---------------------------------------------------------------- 关键节点
 #: 优先级顺序：越靠前越值得占一个位置（心火/踉跄是 2026-11-19 新增战斗逻辑）
-_BEAT_ORDER = ("机缘", "心火", "踉跄", "暴击", "服药", "被控", "反伤")
+_BEAT_ORDER = ("机缘", "护主", "心火", "踉跄", "暴击", "服药", "被控", "反伤")
 
 
 def _beat_tag(it: dict) -> str:
     if it.get("aid"):
         return "机缘"
+    # 傀儡护主（2026-11-20 第三轮）：本场最戏剧性的一刻之一，必须进关键节点。
+    # 放在「暴击」之前——一条兽击既是护主又是暴击时，玩家更想知道「谁替我挡了」，
+    # 「打得多狠」次之。
+    if it.get("puppet_guard"):
+        return "护主"
     if it.get("fortune") or _s(it.get("kind")) == "心火共鸣":
         return "心火"
     if it.get("mishap"):
@@ -292,6 +297,10 @@ def _beat_text(tag: str, it: dict) -> str:
     if tag == "机缘":
         return "%s %s（%s）" % (_move(it), _num(it.get("dmg")),
                                _s(it.get("helper"), "无名斗皇"))
+    if tag == "护主":
+        # 文案已在 core 侧生成并放在 notes[0]；渲染层不再重算，
+        # 否则「挡了多少」会出现两个版本（卡面一个、战斗一个）。
+        return notes[0] if notes else "傀儡抢身挡下一击"
     if tag == "心火":
         return notes[0] if notes else "心火翻涌，攻势自涨"
     if tag == "踉跄":
@@ -326,7 +335,10 @@ def beats(battle: dict, limit: int = BEAT_LIMIT) -> list[dict]:
                 "round": rmap[pos] if pos < len(rmap) else pos + 1,
                 "tag": tag,
                 "text": _beat_text(tag, it),
-                "tone": "foe" if it.get("taken") else "mine",
+                # 护主用「我方」色：它虽然挂在受击条目上，但对玩家是好事，
+                # 按 taken 判会给它刷成敌方色的红色，读起来像「你被打了」。
+                "tone": "mine" if (it.get("puppet_guard")
+                                   or not it.get("taken")) else "foe",
             }))
     chosen.sort(key=lambda x: x[0])
     return [b for _, b in chosen]

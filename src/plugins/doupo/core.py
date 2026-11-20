@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import random
 import re
 import time
@@ -710,9 +711,14 @@ def _refill(p) -> None:
 # 战斗
 # ---------------------------------------------------------------------------
 def mitigation(defence: int) -> float:
-    """减伤系数：防御 800 时减半。"""
+    """减伤系数：防御 = ``cfg.MITIGATION_W`` 时减半。
+
+    2026-11-20：把魔法数 800 提到 config（值未变，逐字节相同），因为傀儡护主
+    要「反解护甲」—— 反解用的半值点必须与这里同一个常量，不能各写一个 800。
+    """
+    w = float(cfg.MITIGATION_W)
     d = max(0, int(defence))
-    return 800.0 / (800.0 + d)
+    return w / (w + d)
 
 
 def pick_monster(p, rng=random.random) -> dict:
@@ -1429,10 +1435,22 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     # 是循环不变量 → 提到循环外算一次。锚定玩家输出（puppet_attack(puppet, p)），
     # 与命令层喂给 monster_scaled 的 puppet_bonus 用**同一个 p 与同一个函数**。
     _pup_atk = 0.0
+    # 傀儡护主面板（2026-11-20 第三轮）：气血/护甲/挡伤概率，同样循环不变量。
+    # 🚨 红线：挡伤骰**只在 `if puppet` 分支内消耗 rng**。不传傀儡的战斗一次都
+    #    不多掷 —— 否则 218 条逐招回看快照会整片翻红（含 test_battle_review）。
+    _pup_prof = {"hp_max": 0, "armor": 0, "chance": 0.0,
+                 "threshold": 0, "leak": 0.0, "tier": 0}
+    _pup_hp = 0
+    # 护主累计（只供 res 展示；不带傀儡时恒为 0，且不会写进 res）
+    _guard_n = 0
+    _guard_soak_sum = 0
+    _guard_taken_sum = 0
     if puppet:
         from . import puppet_core as _pc0  # 延迟导入避免与 core 环
         _pup_atk = (_pc0.puppet_attack(puppet, p)
                     * max(1.0, float(puppet_flame_mult)))
+        _pup_prof = _pc0.guard_profile(puppet, p, formation_n)
+        _pup_hp = int(_pup_prof["hp_max"])
 
     # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
     # 多敌 encounter 传 roll_aid=False + 传入整场预掷的 aid，把掷骰权上收到
@@ -1490,9 +1508,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 傀儡击：玩家出手后常驻追击一次（E32/E33/E35，非概率外援）。
         # 肉身伤害不吃 mp/斗技、不吃暴击加成；用同一 mitigation 减伤；
         # log 字段齐 .get() 消费（2026-11-16 回包事故）。
-        if puppet and m_hp > 0:
+        if puppet and _pup_hp > 0 and m_hp > 0:
             from . import puppet_core as pc  # 延迟导入避免与 core 环
             # 2026-11-20 第二轮：锚定玩家输出，故传入 p（与反解同一个锚）。
+            # 2026-11-20 第三轮：`_pup_hp > 0` —— 被轰到报废的傀儡不能再出手
+            # （原著第952处「已经不能够再用来抗敌」）。
             p_atk = _pup_atk
             p_dmg = max(1, int(p_atk * mitigation(m_def)))
             p_dmg = min(p_dmg, m_hp)
@@ -1637,6 +1657,42 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 # 命中对冲：怪物的命中同样压玩家的**临时**闪避（技能给的身法），
                 # 否则「命中」只对基础闪避生效，留一个白嫖洞。
                 inc = fx.on_incoming(p_fx, dealt, rng, hit=m_hit / 100.0)
+                # 傀儡护主（2026-11-20 第三轮）：只挡**大额**伤害，且挡下后玩家仍吃不
+                # 低于 PUPPET_GUARD_LEAK 的漏伤 —— 挡伤是减伤不是免疫，不抢主角风头。
+                # 🚨 rng 只在 `if puppet` 分支内消耗：不带傀儡的战斗随机序列逐字节不变。
+                # 用**实收**（inc["final"]）判大额，不用原始 dealt：玩家自己闪掉/减掉的
+                # 部分不需要傀儡再拿肉身去填（否则傀儡白挨，观感更假）。
+                _guard_soak = 0
+                _guard_take = 0
+                if (puppet and _pup_hp > 0
+                        and int(inc["final"]) >= int(_pup_prof["threshold"])):
+                    _gch = float(_pup_prof["chance"])
+                    if _pup_hp < float(_pup_prof["hp_max"]) * float(cfg.PUPPET_GUARD_HURT_AT):
+                        # 自己快报废时反而护不住（原著第952处：频临报废就不能再抗敌）
+                        _gch *= float(cfg.PUPPET_GUARD_HURT_MULT)
+                    if rng() < _gch:
+                        _g_raw = int(inc["final"])
+                        _g_mig = mitigation(int(_pup_prof["armor"]))
+                        _g_leak = max(1, int(_g_raw * float(_pup_prof["leak"])))
+                        # 傀儡倾尽剩余气血能吸收的原始伤害量（护甲越高吸得越多）。
+                        # 🚨 上限必须走**浮点**：初版写 int(_pup_hp / _g_mig) 再
+                        # int(soak×mig)，两步向下取整让「刚好吸满」永远差 1 点 ——
+                        # 实测 lv60 人级挡到 hp_left=1 就再也不动，`_pup_hp > 0`
+                        # 这道「报废即停手」的门形同虚设，傀儡会以 1 点血无限挡下去。
+                        _g_cap = float(_pup_hp) / max(1e-6, _g_mig)
+                        _g_soak = int(min(float(max(0, _g_raw - _g_leak)), _g_cap))
+                        if _g_soak > 0:
+                            # ceil：吸满时正好把最后 1 点血扣掉（宁可多扣 1 点，
+                            # 也不能出现「余 1 血」这种既不死也不活的僵尸态）。
+                            _g_take = min(_pup_hp,
+                                          max(1, int(math.ceil(_g_soak * _g_mig))))
+                            _pup_hp -= _g_take
+                            _guard_take = _g_take
+                            _guard_soak = _g_soak
+                            _guard_n += 1
+                            _guard_soak_sum += _g_soak
+                            _guard_taken_sum += _guard_take
+                            inc["final"] = max(1, _g_raw - _g_soak)
                 hp -= inc["final"]
                 taken += inc["final"]
                 log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True,
@@ -1648,10 +1704,28 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                              # 纯展示字段，不参与结算（旧行为逐字节不变）。
                              "atk_raw": int(dealt_atk_raw),
                              "def_cut": max(0, int(dealt_atk_raw - dealt0)),
-                             "absorbed": max(0, int(dealt - inc["final"])),
+                             "absorbed": max(0, int(dealt - inc["final"] - _guard_soak)),
                              # 降攻生效展示：原始攻击被降攻压低（纯展示，不参与结算）
                              "atk_debuff": max(0, atk_raw - dealt_atk_raw)}
+                # 傀儡护主（纯展示字段，结算已在上面做完）：让玩家看清「这一下本来
+                # 要打我多少、傀儡替我扛了多少、它自己掉了多少血」——三个数缺一个就是
+                # 隐式数值，玩家会以为挡伤是玄学。
+                if _guard_soak > 0:
+                    log_entry["guard_raw"] = int(_g_raw)
+                    log_entry["guard_soak"] = int(_guard_soak)
+                    log_entry["guard_taken"] = int(_guard_take)
+                    log_entry["guard_hp_left"] = max(0, int(_pup_hp))
+                    log_entry["guard_hp_max"] = int(_pup_prof["hp_max"])
+                    log_entry["puppet_guard"] = True
                 notes = list(sk_note) + list(inc["notes"] or [])
+                if _guard_soak > 0:
+                    from . import puppet_core as _pcg
+                    # 🚨 必须插到**最前面**：回看卡的逐招明细只取 notes[:TAG_LIMIT]（4 条），
+                    # 而 sk_note 里可能已经装了「技能名 + 原著台词 + 机制」三条，append
+                    # 到末尾会被静默截掉 —— 玩家一辈子看不见护主，等于机制没做。
+                    notes.insert(0, _pcg.guard_note(puppet, _g_raw, _guard_soak,
+                                                    _guard_take, _pup_hp,
+                                                    int(_pup_prof["hp_max"])))
                 if notes:
                     log_entry["notes"] = notes
                 if sk_name:
@@ -1735,6 +1809,18 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 原著「战斗中夺取火能」：由命令层写进 alchemy_tower 表（真实列）。
         "fire_energy_gain": max(1, int(mon.get("lv", 1)) // int(cfg.TOWER_ENERGY_PER_LV)),
     }
+    # 护主战果（只在**真的带了傀儡**时才挂这个键）：不带傀儡时 res 的键集与旧版
+    # 逐字节相同 —— 否则所有断言 res 结构的回看/结算测试会一起红。
+    if puppet:
+        res["puppet_guard"] = {
+            "count": int(_guard_n),          # 本场替主挡下的次数
+            "soak": int(_guard_soak_sum),    # 累计替主挡下的伤害
+            "taken": int(_guard_taken_sum),  # 傀儡自身累计受损
+            "hp_left": max(0, int(_pup_hp)),
+            "hp_max": int(_pup_prof["hp_max"]),
+            # 傀儡被打到不能再战（原著第952处「不能够再用来抗敌」）
+            "broken": bool(_pup_hp <= 0),
+        }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1
         exp = int(mon["exp"] * flame_exp_mult(p))
