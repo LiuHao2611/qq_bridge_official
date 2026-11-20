@@ -117,15 +117,19 @@ def test_boss_drops_both_heal_pills():
 
 
 def test_elite_drops_both_heal_pills():
-    """精英层（kind 含「精英」）同样必掉两件。"""
+    """精英层必掉两件 —— 三种 kind 写法都算精英。
+
+    2026-11-20 修：本条旧版把「``塔·elite`` 不该掉」写成了断言，等于把 bug 钉成
+    正确（塔/周本传进来的 kind 就是 ``"塔·elite"`` / ``"周本·elite"``，旧判定只认
+    「精英」二字 → 精英层的硬仗保底药全程没发）。现在必须同时认 ``elite``。
+    """
+    for kind in ("塔·elite", "周本·elite", "精英·赤炎狼", "精英"):
+        p = _p(40)
+        drops = core._roll_drops(p, _always(0.99), _mon(40, kind=kind))
+        assert set(_heal_of(drops)) == HEAL_NAMES, (kind, _heal_of(drops))
+    # 普通层不能白送（别把「有 elite 字样就送」写成「啥都送」）
     p = _p(40)
-    drops = core._roll_drops(p, _always(0.99), _mon(40, kind="塔·elite"))
-    # 单测口径：kind 里出现「精英」才算精英，塔的标记是 elite，这里补一条中文标记
-    p2 = _p(40)
-    drops2 = core._roll_drops(p2, _always(0.99), _mon(40, kind="精英·赤炎狼"))
-    assert set(_heal_of(drops2)) == HEAL_NAMES, _heal_of(drops2)
-    # 「塔·elite」这种英文标记不该被误当精英而白送
-    assert _heal_of(drops) == [], _heal_of(drops)
+    assert _heal_of(core._roll_drops(p, _always(0.99), _mon(40, kind="塔·normal"))) == []
 
 
 def test_old_path_no_mon_still_unchanged():
