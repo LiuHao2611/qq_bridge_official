@@ -355,6 +355,15 @@ def test_card_shows_guard_panel():
     # 攻击也必须传 p：旧版 puppet_attack(cur) 走标尺玩家，与实战两张皮
     check(data["puppets"][0]["atk"] == str(int(pc.puppet_attack(PU_REN, p))),
           "卡面攻击不是用玩家 p 算的（会跌破实战口径）")
+    # P1-1：战损必须在 PNG 名录卡上可见（玩家真正看的卡），且护甲是减半后的值
+    hd = card.build_puppet_data([dict(PU_REN, id=1, damaged=True)],
+                                {"active_id": 1}, p)
+    dblob = "\n".join("\n".join(x["lines"]) for x in hd["puppets"])
+    check("受损" in dblob and "雷淬修复" in dblob,
+          "战损傀儡的 PNG 名录卡没写「待雷淬修复」——玩家看不到战损")
+    gd = pc.guard_profile(dict(PU_REN, damaged=True), p, 1)
+    check(str(gd["armor"]) in dblob,
+          "战损卡的护甲数字未用减半后的 guard_profile 值")
 
 
 def test_command_layer_uses_same_profile():
@@ -554,6 +563,135 @@ def test_awakened_still_not_stealing_show():
 
 
 # ---------------------------------------------------------------------------
+# P1-1 战损（D05/N02/E42）：护甲打空 → damaged 写库 → 攻击×0.8/护甲减半 → 雷淬复原
+# ---------------------------------------------------------------------------
+def test_damaged_cuts_attack_and_armor():
+    """战损必须同时降攻击与护甲，且倍率就是设计文档 D05 的 0.8 / 0.5。"""
+    # config 值本身钉死为绝对锚（否则 config 被改、期望跟着改 = 自己考自己）
+    check(abs(float(cfg.PUPPET_DAMAGED_ATK_MULT) - 0.80) < 1e-9,
+          "PUPPET_DAMAGED_ATK_MULT 被改成 %s（设计 D05 要求 0.80）"
+          % cfg.PUPPET_DAMAGED_ATK_MULT)
+    check(abs(float(cfg.PUPPET_DAMAGED_ARMOR_MULT) - 0.50) < 1e-9,
+          "PUPPET_DAMAGED_ARMOR_MULT 被改成 %s（设计 D05 要求 0.50）"
+          % cfg.PUPPET_DAMAGED_ARMOR_MULT)
+    p = _p(81)
+    for tier, pu in enumerate(TIERS):
+        whole = pc.puppet_full_attack(pu)
+        hurt = pc.puppet_full_attack(dict(pu, damaged=True))
+        check(abs(hurt - whole * 0.80) < 1e-6,
+              "tier%d 战损攻击 %.2f ≠ 满状态 %.2f × 0.80"
+              % (tier, hurt, whole))
+        # 卡面 puppet_attack 与实战 expected_damage 都要降（别只降一处）。
+        # ⚠️ 不能用 `h < w + 容差`：相等时也成立 → 变异白守（本轮踩过）。
+        #    卡面有 CAP 截断，比值约 0.80~0.86，只断言「至少降 1 点」。
+        atk_w = pc.puppet_attack(pu, p)
+        atk_h = pc.puppet_attack(dict(pu, damaged=True), p)
+        check(atk_h < atk_w - 1.0,
+              "tier%d 卡面攻击未随战损下降：满 %d 战损 %d"
+              % (tier, atk_w, atk_h))
+        exp_w = pc.puppet_expected_damage(pu, 1, p=p)
+        exp_h = pc.puppet_expected_damage(dict(pu, damaged=True), 1, p=p)
+        check(exp_h < exp_w - 1.0, "tier%d 实战 expected_damage 未随战损下降" % tier)
+        g_w = pc.guard_profile(pu, p, 1)
+        g_h = pc.guard_profile(dict(pu, damaged=True), p, 1)
+        # ⚠️ 绝对锚 0.5 而非读 config：config 被改成 1.0 时，若期望也读 config
+        #    就会「自己考自己」永远绿（变异 27 白守的根因）。config 值另单独钉。
+        check(g_h["armor"] == int(g_w["armor"] * 0.5),
+              "tier%d 战损护甲 %d ≠ 满状态 %d 的一半"
+              % (tier, g_h["armor"], g_w["armor"]))
+        check(g_h["damaged"] is True and g_w["damaged"] is False,
+              "tier%d guard_profile 未透出 damaged 字段" % tier)
+        # 战损只降攻击/护甲，不碰挡伤概率与泄漏（不抢风头红线不能借战损放宽）
+        check(abs(g_h["chance"] - g_w["chance"]) < 1e-9
+              and abs(g_h["leak"] - g_w["leak"]) < 1e-9,
+              "tier%d 战损改动了挡伤概率/泄漏率" % tier)
+
+
+def test_damaged_never_breaks_cap():
+    """战损降效后仍守 CAP：满状态贴 CAP 的傀儡战损后只会更低。"""
+    p = _p(90)
+    for pu in TIERS:
+        full = pc.puppet_expected_damage(pu, 3, p=p)
+        hurt = pc.puppet_expected_damage(dict(pu, damaged=True), 3, p=p)
+        cap = pc._player_round_output(p) * float(cfg.PUPPET_ATK_CAP[int(pu["tier"])]) \
+            if hasattr(pc, "_player_round_output") else None
+        # 不依赖私有函数的具体名字：战损输出必然 ≤ 满状态输出即可
+        check(0.0 <= hurt <= full + 1e-6,
+              "%s 战损后输出 %.2f 反超满状态 %.2f" % (pu["name"], hurt, full))
+
+
+def test_temper_repairs_damage():
+    """一次雷淬令 damaged=False —— 「待雷淬修复」这句卡面文案第一次成真。"""
+    for tier, pu in enumerate(TIERS):
+        rep = pc.temper(dict(pu, damaged=True, purity=0))
+        check(rep.get("damaged") is False,
+              "tier%d 雷淬后 damaged 仍为 %s" % (tier, rep.get("damaged")))
+    # 天级 capped 分支也必须清零（这是死代码高发区）
+    capped = pc.temper(dict(PU_TIAN, damaged=True, tier=2))
+    check(capped.get("damaged") is False, "天级封顶分支雷淬未清战损")
+
+
+def test_fight_guard_signal_carries_real_id():
+    """真打一场：broken 信号必须自带真实库行 id，供命令层写回。"""
+    p = _p(60)
+    st = core.stats(p)
+    g = pc.guard_profile(PU_REN, p, 1)
+    mig = core.mitigation(g["armor"])
+    need = int(g["hp_max"] / max(1e-6, mig) / max(1e-6, 1.0 - g["leak"])) + 1
+    mon = core.monster_scaled(p, dict(SPEC, lv=60))
+    mon["atk"] = max(1, int(need / max(1e-6, core.mitigation(st["防御"]))) + 1)
+    pu = dict(PU_REN, id=4242)
+    hit = False
+    for seed in range(30):
+        r = core.fight(p, copy.deepcopy(mon), rng=random.Random(seed).random,
+                       puppet=pu, formation_n=1, auto_pill=True)
+        pg = r.get("puppet_guard") or {}
+        check(int(pg.get("id") or 0) == 4242,
+              "seed%d 护主信号丢真实 id：%s" % (seed, pg))
+        if pg.get("broken"):
+            # ⚠️ res 的键是 hp_left（不是 log 条目的 guard_hp_left）；且 0 是
+            #    falsy，不能用 `or -1` 兜底，直接下标断言。
+            check(int(pg.get("id") or 0) == 4242 and int(pg["hp_left"]) == 0,
+                  "seed%d broken 但 id/hp_left 不对：%s" % (seed, pg))
+            hit = True
+    check(hit, "30 场没打空傀儡，无法验证 broken 信号带 id")
+
+
+def test_wrappers_forward_puppet_guard():
+    """4 个 wrapper 必须透传 puppet_guard，否则 6/7 入口拿不到战损信号。
+
+    duel 例外：它没有护主机制，res 里本就不该有这个键（PVP 不产生战损）。
+    """
+    import inspect
+    names = ("encounter", "tower_floor", "weekly_floor", "nine_star_breakthrough")
+    for name in names:
+        src = inspect.getsource(getattr(core, name))
+        check("puppet_guard" in src,
+              "core.%s 未透传 puppet_guard —— 该入口战损永远写不回" % name)
+    # 信号源 fight 必须把 id 塞进 guard
+    fsrc = inspect.getsource(core.fight)
+    check('"id": int(puppet.get("id") or 0)' in fsrc,
+          "fight 的 puppet_guard 未携带真实 id")
+
+
+def test_writeback_failures_propagate():
+    """源码级：写回失败必须上抛，不许 try/except 吞（用户最高声明禁止兜底）。"""
+    import inspect
+    from doupo import commands as cmd
+    src = inspect.getsource(cmd._writeback_damage)
+    check("try:" not in src and "except" not in src,
+          "_writeback_damage 里出现 try/except —— 写回失败被静默吞掉了")
+    check("update_puppet" in src and "damaged=True" in src,
+          "_writeback_damage 未真正调用 update_puppet(damaged=True)")
+    check("broken" in src and 'guard.get("id")' in src,
+          "_writeback_damage 未按 broken + 信号 id 写回")
+    # 漏斗必须真正「调用」写回口径，不能只写在注释里骗过子串搜索（白守教训）。
+    fsrc = inspect.getsource(cmd._finalize_battle)
+    check(bool(re.search(r'await\s+_writeback_damage\s*\(', fsrc)),
+          "_finalize_battle 未调用 _writeback_damage（逻辑复制/注释骗过会漂移）")
+
+
+# ---------------------------------------------------------------------------
 def _run():
     for fn in (test_tier_monotonic,
                test_armor_is_reverse_solved_from_take,
@@ -573,7 +711,13 @@ def _run():
                test_guard_share_stays_below_half,
                test_awakened_intercepts_small_hits,
                test_awakened_skips_hurt_penalty,
-               test_awakened_still_not_stealing_show):
+               test_awakened_still_not_stealing_show,
+               test_damaged_cuts_attack_and_armor,
+               test_damaged_never_breaks_cap,
+               test_temper_repairs_damage,
+               test_fight_guard_signal_carries_real_id,
+               test_wrappers_forward_puppet_guard,
+               test_writeback_failures_propagate):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

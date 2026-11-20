@@ -887,10 +887,12 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
                 # 护主一行（2026-11-20 第三轮）：气血/护甲/挡伤率缺一个都是隐式数值
                 "护主 气血%d · 护甲%d · 挡伤%.0f%%" % (
                     g["hp_max"], g["armor"], g["chance"] * 100),
-                "雷淬纯度 %d%% · %s%s" % (
+                "雷淬纯度 %d%% · %s%s%s" % (
                     int(pu.get("purity", 0)),
                     "已认主·永不背叛" if pu.get("bonded") else "未认主",
-                    " · 有灵" if pu.get("awakened") else ""),
+                    " · 有灵" if pu.get("awakened") else "",
+                    # P1-1：战损在 PNG 名录卡上可见（此前只有文本名录卡有）
+                    " · ⚠受损待雷淬修复" if pu.get("damaged") else ""),
             ],
             "active": bool(pu.get("id") == elig.get("active_id")),
         })

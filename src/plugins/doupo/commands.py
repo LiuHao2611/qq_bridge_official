@@ -91,6 +91,35 @@ async def _puppet_ctx(qq, p):
     return (pu, max(1, int(n)), float(flame_mult))
 
 
+async def _writeback_damage(qq, res: dict, puppet: dict = None) -> None:
+    """按护主战果写回傀儡战损（P1-1 唯一写回口径）。
+
+    「信号自带 id」（`res["puppet_guard"]["id"]`）保证写回的是真实库行，而非
+    结阵升档临时副本。duel 无护主机制、res 里没有 puppet_guard，自然跳过。
+
+    🚨 纪律：写回失败**如实上抛**（用户最高声明禁止兜底/静默吞）。不让一场
+    战斗「看似成功、战损却没记上」——那会让玩家带着满状态傀儡去送死。
+    """
+    guard = res.get("puppet_guard") or {}
+    if guard.get("broken"):
+        pid = int(guard.get("id") or (puppet or {}).get("id") or 0)
+        if pid:
+            await DEFAULT_PUPPET_STORE.update_puppet(str(qq), pid, damaged=True)
+
+
+async def _finalize_battle(p: dict, qq, res: dict, kind: str,
+                           opponent: str = "", extra: dict = None,
+                           puppet: dict = None) -> None:
+    """战斗结束唯一漏斗：先同步落回看，再写回傀儡战损（P1-1）。
+
+    写回与「这场战斗真的打完了」绑定：凡是调 ``record_last_battle`` 的入口都
+    改调本函数，就不会漏写回。突破战走自己的渲染、不落回看，单独调
+    ``_writeback_damage`` —— 两者共用同一个写回口径，不复制逻辑。
+    """
+    core.record_last_battle(p, kind, res, opponent=opponent, extra=extra)
+    await _writeback_damage(qq, res, puppet)
+
+
 def _bar(cur: int, mx: int, width: int = 10) -> str:
     if mx <= 0:
         return ""
@@ -617,6 +646,8 @@ async def cmd_break(store, qq, rng=None) -> str:
                                         puppet=_pu, formation_n=_pu_n,
                                         puppet_flame_mult=_pu_fm)
         await store.put_player(p)
+        # P1-1：突破战不落回看（走自己的四段式渲染），但护甲打空同样要写回战损。
+        await _writeback_damage(qq, br, _pu)
         _ch = br.get("character") or {}
         _name = br.get("boss_name") or "强敌"
         _title = br.get("boss_title") or ""
@@ -711,8 +742,9 @@ async def cmd_fight(store, qq) -> str:
                          puppet_flame_mult=_pu_fm)
     # 2026-11-17：统一「战斗结束」落盘点。普通回包仍只给高光，完整 log 只落盘，
     # 玩家主动「战斗回看」时才展开，绝不把 1~5 敌的中间回合塞进普通回包。
-    core.record_last_battle(
-        p, "遭遇", res, opponent="、".join(str(x) for x in (res.get("enemies") or []))
+    await _finalize_battle(
+        p, qq, res, "遭遇", opponent="、".join(str(x) for x in (res.get("enemies") or [])),
+        puppet=_pu,
     )
     p["last_fight"] = now
     chance = None
@@ -1978,9 +2010,10 @@ async def cmd_rob(store, qq, target) -> str:
                     puppet_flame_mult=_pu_fm,
                     vic_puppet=_vu, vic_formation_n=_vu_n,
                     vic_flame_mult=_vu_fm)
-    core.record_last_battle(
-        p, "掠夺", res,
+    await _finalize_battle(
+        p, qq, res, "掠夺",
         opponent=str(vic.get("name") or f"道友{str(target)[-4:]}"),
+        puppet=_pu,
     )
     seq = res["log"]
     show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
@@ -2073,8 +2106,8 @@ async def cmd_duel_accept(store, qq, group) -> str:
     a_name = str(rival.get("name") or f"道友{ch.challenger[-4:]}")
     b_name = str(p.get("name") or f"道友{str(qq)[-4:]}")
     # 无惩罚切磋：双方都留一份回看；发起方是 log 里的 who=p，应战方是 who=v。
-    core.record_last_battle(rival, "切磋", res, opponent=b_name)
-    core.record_last_battle(p, "切磋", res, opponent=a_name)
+    await _finalize_battle(rival, ch.challenger, res, "切磋", opponent=b_name)
+    await _finalize_battle(p, qq, res, "切磋", opponent=a_name)
     seq = res["log"]
     show = seq[:4] + (["..."] if len(seq) > 6 else []) + (seq[-2:] if len(seq) > 6 else [])
     lines = [
@@ -2346,9 +2379,10 @@ async def cmd_tower(store, qq, arg="") -> str:
                          temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st),
                          puppet=_pu, formation_n=_pu_n,
                          puppet_flame_mult=_pu_fm)
-    core.record_last_battle(
-        p, "爬塔", r, opponent=f"第{r['floor']}层 {r['name']}",
+    await _finalize_battle(
+        p, qq, r, "爬塔", opponent=f"第{r['floor']}层 {r['name']}",
         extra={"floor": int(r["floor"]), "kind_tag": str(r.get("kind") or "")},
+        puppet=_pu,
     )
     st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
     if r["win"]:
@@ -2633,9 +2667,10 @@ async def cmd_weekly(store, qq) -> str:
     r = core.weekly_floor(p, snap, st, rng,
                           puppet=_pu, formation_n=_pu_n,
                           puppet_flame_mult=_pu_fm)
-    core.record_last_battle(
-        p, "周副本", r, opponent=f"第{r['floor']}/7层 {r['name']}",
+    await _finalize_battle(
+        p, qq, r, "周副本", opponent=f"第{r['floor']}/7层 {r['name']}",
         extra={"floor": int(r["floor"]), "week": week, "kind_tag": str(r.get("kind") or "")},
+        puppet=_pu,
     )
 
     kind_tag = {"normal": "普通", "elite": "精英", "boss": "BOSS"}[r["kind"]]
@@ -3107,7 +3142,8 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
         mon = core.monster_scaled(p, sg, puppet_bonus=bonus)
         res = core.fight(p, mon, puppet=pu, formation_n=n,
                          puppet_flame_mult=flame_mult, pill_budget=pill_budget)
-        core.record_last_battle(p, "傀儡遗迹", res, opponent=sg["monster"])
+        await _finalize_battle(p, qq, res, "傀儡遗迹",
+                               opponent=sg["monster"], puppet=pu)
         win = bool(res["win"])
         drops = dict(sg["drops"]) if win else {}
         run = {

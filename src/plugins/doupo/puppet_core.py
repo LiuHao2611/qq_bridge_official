@@ -579,6 +579,18 @@ def _material_mult(puppet: dict) -> float:
     return max(0.5, float(m))
 
 
+def _damage_atk_mult(puppet: Optional[dict]) -> float:
+    """P1-1 战损攻击倍率（唯一口径）：damaged 时 ×0.8，否则 1.0。
+
+    卡面 ``puppet_attack`` 与战斗 ``puppet_full_attack`` 都乘它 —— 两处同源，
+    避免「卡面写着受损降攻、实战照旧满伤」两张皮。战损乘在基数上，CAP 仍在
+    ``puppet_expected_damage`` 末端落一次，降效只会更低、不会顶破封顶。
+    """
+    if puppet and puppet.get("damaged"):
+        return float(cfg.PUPPET_DAMAGED_ATK_MULT)
+    return 1.0
+
+
 def puppet_attack(puppet: Optional[dict], p: Optional[dict] = None) -> float:
     """傀儡肉身攻击（E32/E33/E35）：不吃 mp/斗技，纯躯体+魔核+灵魂+材料。
 
@@ -607,7 +619,7 @@ def puppet_attack(puppet: Optional[dict], p: Optional[dict] = None) -> float:
     #    乘在后面会让好材料把「不抢风头」的封顶撑破（实测天级 core9/soul2400
     #    /metal4/fire9 的 1.31 倍直接把 100% 顶成 131%）。
     realm_out = _player_round_output(_ref_player(tier, puppet)) \
-        * _material_mult(puppet)
+        * _material_mult(puppet) * _damage_atk_mult(puppet)
     if p is None:
         return realm_out
     return min(realm_out,
@@ -624,7 +636,8 @@ def puppet_full_attack(puppet: Optional[dict]) -> float:
     if not puppet:
         return 0.0
     tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
-    return _player_round_output(_ref_player(tier, puppet)) * _material_mult(puppet)
+    return _player_round_output(_ref_player(tier, puppet)) \
+        * _material_mult(puppet) * _damage_atk_mult(puppet)
 
 
 def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
@@ -681,7 +694,8 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     """
     if not puppet:
         return {"hp_max": 0, "armor": 0, "chance": 0.0,
-                "threshold": 0, "leak": 0.0, "tier": 0, "awakened": False}
+                "threshold": 0, "leak": 0.0, "tier": 0, "awakened": False,
+                "damaged": False}
     from . import core  # 延迟导入避免与 core 循环
 
     tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
@@ -695,6 +709,9 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     # 而血量仍随玩家体力涨，档位越高越厚。
     _take = float(cfg.PUPPET_ARMOR_TAKE[tier])
     armor = max(0, int(float(cfg.MITIGATION_W) * (1.0 / max(1e-6, _take) - 1.0) * mm))
+    # P1-1：战损时护甲减半 —— 与攻击 ×0.8 同源于 puppet 的 damaged 字段。
+    if puppet.get("damaged"):
+        armor = int(armor * float(cfg.PUPPET_DAMAGED_ARMOR_MULT))
     n_eff = min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), max(0, int(formation_n)))
     chance = (float(cfg.PUPPET_GUARD_CHANCE[tier])
               + max(0, n_eff - 1) * float(cfg.PUPPET_FORMATION_GUARD_STEP))
@@ -711,6 +728,8 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
         # P0-2：有灵行为由战斗侧读取（小额也拦、残血不打折），卡面也读同一个
         # 字段做说明，避免「写了 awakened 却只改卡面」的白守。
         "awakened": bool(puppet.get("awakened")),
+        # P1-1：战损透出，卡面据此显示「待雷淬修复」，战斗同源读 armor/atk。
+        "damaged": bool(puppet.get("damaged")),
     }
 
 

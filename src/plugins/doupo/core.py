@@ -651,6 +651,8 @@ def nine_star_breakthrough(p, rng=random.random, locked=None,
         "boss_title": str(mon.get("boss_title") or ""),
         "character": dict(mon.get("character") or {}),
         "log": list(res.get("log") or []),
+        # P1-1：透传护主战果，供命令层写回战损。
+        "puppet_guard": res.get("puppet_guard"),
     }
     if not res.get("win"):
         out["leveled"] = False
@@ -1838,6 +1840,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     # 逐字节相同 —— 否则所有断言 res 结构的回看/结算测试会一起红。
     if puppet:
         res["puppet_guard"] = {
+            # P1-1：信号自带真实库行 id（formation_burst 浅拷贝保留 id），
+            # 命令层据此写回 damaged，绝不用 active_id 另查避免升档副本错位。
+            "id": int(puppet.get("id") or 0),
             "count": int(_guard_n),          # 本场替主挡下的次数
             "soak": int(_guard_soak_sum),    # 累计替主挡下的伤害
             "taken": int(_guard_taken_sum),  # 傀儡自身累计受损
@@ -2025,6 +2030,8 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
         "downed": bool(_last.get("downed")),
         "exhausted": bool(_last.get("exhausted")),
         "fortune": bool(_last.get("fortune")),
+        # P1-1：透传最后一战的护主战果（含 broken/id），供命令层写回战损。
+        "puppet_guard": _last.get("puppet_guard"),
         # 2026-11-19：整场夺取的火能（仅胜利累加）+ 自动服药总数（供文案）
         "fire_energy_gain": int(fire_gain),
         "auto_pills": {"hp": int(pill_budget.get("hp", 0)),
@@ -2325,6 +2332,8 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
         "affixes": affixes, "rounds": int(r["rounds"]), "taken": int(r["taken"]),
         "hp": hp_after, "mp": int(fp.get("mp", 0)), "rest_heal": rest,
         "log": r["log"], "mon": mon, "hero_aid": r.get("hero_aid"),
+        # P1-1：透传护主战果，供命令层写回战损。
+        "puppet_guard": r.get("puppet_guard"),
     }
 
 
@@ -2498,6 +2507,8 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random,
         "hp": hp_after, "mp": int(fp.get("mp", 0)), "rest_heal": rest,
         "log": r["log"], "mon": mon, "hero_aid": r.get("hero_aid"),
         "reward": wd_weekly.floor_reward(floor),
+        # P1-1：透传护主战果，供命令层写回战损。
+        "puppet_guard": r.get("puppet_guard"),
     }
 
 
