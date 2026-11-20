@@ -1331,7 +1331,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     #: 否则 5 连战会每战各嗑 2 枚、一场吃掉 10 枚家底。
     pill_used = pill_budget if pill_budget is not None else {"hp": 0, "mp": 0}
     # ⚠️ 不能用 `or`：cap=0 是「本场一颗都不许自动吃」的合法意图，而 0 是 falsy，
-    # 会静默回落成默认 2 颗（2026-11-20 第九轮：遗迹连打想封 0 时发现封不住）。
+    # 会静默回落成默认 2 颗（2026-11-20 第十轮：遗迹连打想封 0 时发现封不住）。
     pill_cap = (int(pill_used["cap"]) if "cap" in pill_used
                 else int(cfg.AUTO_PILL_MAX_PER_FIGHT))
     fortune_left = 0

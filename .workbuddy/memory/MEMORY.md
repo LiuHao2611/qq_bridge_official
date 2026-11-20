@@ -49,3 +49,9 @@
 
 ## 9. 源码问答沙盒
 `doupo_code_ask`→`POST qq-doupo-agent:8765/ask`，底座锁 **openai-agents 禁换 smolagents**（丢 tool_calls→多轮退化）。四硬约束：`mkdir -p /repo`；**一进程一事件循环**；`AGENT_MAX_TOOLS=10`；`max_retries=0` 回 500+原因**绝不回空答案**。答案禁 Markdown。
+
+## 10. 自选炼制 / 遗迹连打 / 赠送（2026-11-20 第十轮）
+**自选材料**：`炼制傀儡 自定 <躯体> <魔核> <灵魂> <金属>` 只造一条 `custom=True` 临时配方，判档/五闸/`craft_checks`/扣料/落库**全走原链路**（新开分支必漏木桶判档）。**火不自选**：按 `fire_grade(p)` 写进 `rec["fire"]`，占位 B 会把判档凭空拉低一档；`nominal` 对 custom 直接取 `tier`。错名必须报错禁静默回落。守门 `test_doupo_puppet_custom.py`33 / `tmp/mut_pup_custom.py`9。
+**遗迹连打**：`while idx < total`，`fight` 原地改 hp/mp 即「力竭」。三防刷：`drops if win else {}`、`ruin_clear(idx+1)` 只在胜场、全通先返回。反解与实战都传真实 p。**服药必须整趟共用一份 `pill_budget`**（`cfg.PUPPET_RUIN_PILL_CAP=2`，建在循环里=每段重置），否则六段吞十几颗且玩家不知情、「力竭」永不发生。顺带修 `core.pill_cap` 的 `or` falsy 坑（cap=0 被回落成 2）。守门 `test_doupo_puppet_ruin_auto.py` / `tmp/mut_ruin_auto.py`7。
+**赠送**：`Store.transfer_item()` **一个 `_tx()` 写两行**（两次 `put_player` 各自 commit，第二步失败即吞物品），失败 `clear()+update()` 就地回滚（禁换 dict 对象，`get_player` 返活字典）。候选池取包裹真实键（药渣也能送），`parse_gift` 纯函数只认「整串数字=金币」。入口 `if item:` 分流（`if False:` 能静默变死代码，必须钉条件本身）。**傀儡材料在独立库不能送**（跨库无同事务）。守门 `test_doupo_gift.py`48 / `tmp/mut_gift.py`14。
+**全量回归工具** `tmp/run_all_doupo.py`：**每文件一个 QQ_DATA_DIR**，共用会互相污染（前一个文件吃光回灵丹 → 后一个「锁定 回灵丹」报包裹里没有）。基线红只剩：镜像无 pytest ×3 文件 + `test_doupo_boss_cast` 2 条（读盘符语料）。
