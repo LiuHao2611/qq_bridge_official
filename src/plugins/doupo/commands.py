@@ -2872,7 +2872,7 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
                 "「虚空雷池」打赢守者取《天妖傀》竹简。")
 
     # ---- 1. 定配方 ----
-    # 自定材料（2026-11-20 第九轮）：手里料多时不必被固定配方绑住。
+    # 自定材料（2026-11-20 第十轮）：手里料多时不必被固定配方绑住。
     # 只在这里造一条**临时配方**，后续判档/五闸/扣料/落库全部复用原路径 ——
     # 重开一条自定分支是最容易把「木桶判档」和「门禁先于耗材」写漏的做法。
     if arg.startswith("自定"):
@@ -2968,7 +2968,7 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
 
 
 async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
-    """傀儡遗迹日副本：**自动逐段往下打，力竭为止**（2026-11-20 第九轮）。
+    """傀儡遗迹日副本：**自动逐段往下打，力竭为止**（2026-11-20 第十轮）。
 
     旧版一次调用只打当前一段，玩家要点六次；现在一条口令连打到战败或全通。
     ``fight`` 本来就原地改 p 的 hp/mp，所以连打天然实现「力竭」—— 不另造
@@ -2977,7 +2977,7 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
     难度走 ``monster_scaled`` 反解；出战傀儡的期望输出同时进反解与 ``fight``
     （``puppet_expected_damage`` 唯一口径，且两处都传真实 p）。
 
-    ``pill_budget``（2026-11-20 第九轮补）：六段**共用一份**自动服药预算，
+    ``pill_budget``（2026-11-20 第十轮补）：六段**共用一份**自动服药预算，
     上限 ``cfg.PUPPET_RUIN_PILL_CAP``。默认 ``auto_pill=True`` 时每场都能吃 2 颗，
     六段一趟能吞十几颗回灵丹且玩家毫不知情；而丹药管够时「力竭」永远不会到来，
     连打就成了无限续杯。共用一个 dict 才能真的累计封顶（``fight`` 会就地累加
