@@ -226,6 +226,60 @@ def recipe_by_name(name: str) -> Optional[dict]:
     return cfg.PUPPET_RECIPE_BY_NAME.get(str(name or ""))
 
 
+# ---------------------------------------------------------------------------
+# 自选材料炼制（2026-11-20 第九轮）
+#
+# 玩家手里攥着好几具躯体和魔核时，固定配方不够用：他要用**自己指定的**
+# 四样材料开炉。这里只做「文本 → 临时配方」的解析，判档仍走 recipe_tier、
+# 耗材仍走 recipe_materials、落库仍走 make_puppet —— 三条红线一个都不能绕。
+# ---------------------------------------------------------------------------
+CUSTOM_KINDS = ("body", "core", "soul", "metal")
+CUSTOM_LABELS = ("躯体", "魔核", "灵魂", "金属")
+
+
+def custom_material_help() -> str:
+    """「炼制傀儡 自定」的帮助：列出四维可选材料与档位。"""
+    lines = ["自定炼制：炼制傀儡 自定 <躯体> <魔核> <灵魂> <金属>"]
+    for kind, label in zip(CUSTOM_KINDS, CUSTOM_LABELS):
+        tbl = _tier_table(kind)
+        names = "、".join("%s(%d档)" % (n, int(v[0])) for n, v in tbl.items())
+        lines.append("　%s：%s" % (label, names))
+    lines.append("　炼制之火按你已收服的最高档自动取，不消耗。")
+    return "\n".join(lines)
+
+
+def custom_recipe_from_arg(arg: str, p: Optional[dict] = None) -> tuple[Optional[dict], str]:
+    """解析「自定 <躯体> <魔核> <灵魂> <金属>」→ (临时配方, 错误/帮助)。
+
+    ``err`` 非空且 ``recipe`` 为空：要么是帮助文本（以「自定炼制：」开头），
+    要么是错误提示 —— 命令层直接回给玩家，不许继续走到扣料。
+    ``p`` 只用于火档（与 ``recipe_slots(rec, p)`` 同一口径）；火不耗材、不自选。
+    """
+    tail = str(arg or "").strip()
+    parts = tail.split()
+    if parts and parts[0] in ("自定", "自定?", "自定？"):
+        parts = parts[1:]
+    if not parts or parts[0] in ("?", "？", "帮助"):
+        return None, custom_material_help()
+    if len(parts) != 4:
+        return None, ("自定炼制需按序给 4 样材料：躯体 魔核 灵魂 金属。"
+                      "发「炼制傀儡 自定」看清单。")
+    for kind, name, label in zip(CUSTOM_KINDS, parts, CUSTOM_LABELS):
+        if slot_tier(kind, name) <= 0:
+            return None, ("「%s」不是有效的%s材料。发「炼制傀儡 自定」看清单。"
+                          % (name, label))
+    # ⚠️ 火档必须写玩家实况，不能用占位 B：recipe_slots(rec) 在没有 p 的调用
+    #    （如单测/卡面反查）会读这个字母，占位 B 会把木桶判档凭空拉低一档。
+    g = int(fire_grade(p)["grade"]) if p else 0
+    letter = "S" if g >= 3 else ("A" if g == 2 else "B")
+    rec = {
+        "name": "自定·%s" % str(parts[0])[:2],
+        "body": parts[0], "core": parts[1], "soul": parts[2], "metal": parts[3],
+        "fire": letter, "note": "自选材料", "custom": True,
+    }
+    return rec, ""
+
+
 def missing_materials(mats: Dict[str, int], recipe: dict) -> List[str]:
     """缺哪些料（带数量），用于「缺 寒铁×1、七阶魔核×1」这类如实提示。"""
     lack = []

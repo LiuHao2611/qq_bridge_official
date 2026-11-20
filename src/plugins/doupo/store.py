@@ -482,6 +482,58 @@ class Store:
                                  % (type(e).__name__, str(e)[:200])) from e
             self._snap["players"][qq] = s
 
+    async def transfer_item(self, src_qq: str, dst_qq: str, name: str,
+                            n: int = 1) -> bool:
+        """把背包里的一件物品从 ``src`` 转给 ``dst``，**两行写在同一个事务里**。
+
+        为什么不能用两次 ``put_player``（2026-11-20 赠送功能踩过）：
+        ``put_player`` 每次都自开事务、各自 commit。先扣后加，若第二步抛
+        ``StoreError``（盘满/库锁/WAL 故障），第一步已经落库 —— 物品凭空
+        消失，日志里只有一个异常，玩家只看到「送失败」。反过来也一样能刷。
+        这里一个 ``_tx()`` 写两行：要么都成，要么都回滚。
+
+        返回 ``False`` 表示**前置条件不成立**（任一方没入道、或物品不够），
+        不是错误；真正写库失败会抛 :class:`StoreError`。
+
+        ⚠️ 内存里改的是 ``get_player()`` 发出去的那两个**活字典**（项目里 36 个
+        调用点都依赖这个语义），所以失败回滚必须就地 ``clear()+update()``，
+        不能替换成新 dict —— 替换会让别人手里的引用永远停在旧内容上。
+        """
+        src_qq, dst_qq = str(src_qq), str(dst_qq)
+        n = int(n)
+        if n <= 0 or src_qq == dst_qq:
+            return False
+        async with self._lock:
+            players = self._data["players"]
+            a, b = players.get(src_qq), players.get(dst_qq)
+            if a is None or b is None:
+                return False
+            bag_a = a.setdefault("bag", {})
+            if int(bag_a.get(name, 0)) < n:
+                return False
+            bag_b = b.setdefault("bag", {})
+            before_a, before_b = dict(bag_a), dict(bag_b)
+            bag_a[name] = int(bag_a.get(name, 0)) - n
+            if bag_a[name] <= 0:
+                bag_a.pop(name, None)
+            bag_b[name] = int(bag_b.get(name, 0)) + n
+            sa, sb = _dumps(a), _dumps(b)
+            now = time.time()
+            try:
+                with self._tx() as con:
+                    self._upsert_player(con, src_qq, a, sa, now)
+                    self._upsert_player(con, dst_qq, b, sb, now)
+            except Exception as e:  # noqa: BLE001
+                bag_a.clear()
+                bag_a.update(before_a)
+                bag_b.clear()
+                bag_b.update(before_b)
+                raise StoreError("赠送写盘失败，双方包裹已回滚（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+            self._snap["players"][src_qq] = sa
+            self._snap["players"][dst_qq] = sb
+            return True
+
     async def all_players(self, group: Optional[str] = None) -> List[dict]:
         async with self._lock:
             ps = list(self._data["players"].values())
