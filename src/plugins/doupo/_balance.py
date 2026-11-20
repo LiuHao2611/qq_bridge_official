@@ -76,8 +76,14 @@ def make(lv: int, weapon: int | None = None) -> dict:
 
 
 def species_pool(lv: int) -> list:
-    """与 core.pick_monster 同口径（±2 级）。"""
-    return [m for m in cfg.MONSTERS if abs(m["lv"] - lv) <= 2] or cfg.MONSTERS[-2:]
+    """与 core.pick_monster 同口径：同境界窗口 → 最近 3 只。
+
+    ⚠️ 2026-11-20 修：旧版写「±2 级，取不到就退到全表最后两只」，而物种表最低是
+    lv9 的嗜血鼠 —— 1~6 级新手会被判成「打 lv102 魂殿执事」，体检报告里
+    lv1-6 那 35%~52% 的胜率是假的。判据必须与生产一致，否则工具本身在骗人。
+    """
+    window = [m for m in cfg.MONSTERS if abs(int(m["lv"]) - lv) <= cfg.LV_PER_REALM]
+    return sorted(window or cfg.MONSTERS, key=lambda m: abs(int(m["lv"]) - lv))[:3]
 
 
 def run_level(p: dict, rnd) -> tuple:
