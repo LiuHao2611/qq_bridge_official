@@ -5,7 +5,7 @@
   * 🚨 最高声明：傀儡数据全在 SQLite **真实列**，players.data 的 JSON 里
     不许出现任何 puppet 字段；
   * 五道资格（境界 / 灵魂境界 / 控火 / 异火 / 斗气续航）逐道可独立报红；
-  * 首炼恒人级铜（原著事实，非材料定档）；
+  * 档位由五维材料木桶决定（原著第900/906章：等级之差取决炼制材料以及炼制之火）；
   * 战斗同源：fight 注入与 damage_schedule/monster_scaled 反解共用
     puppet_expected_damage，带傀儡怪血同步变厚；
   * 雷淬升档、结阵、收服无主傀儡、北王式融魂；
@@ -142,13 +142,30 @@ async def main() -> None:
     check("大斗师以下不得炼地级", (not pc.gate_realm({"lv": 28}, 1)[0]) and big[0],
           "大斗师=%s 斗宗=%s" % (pc.gate_realm({"lv": 28}, 1), big))
 
-    # ---- 3. 首炼恒人级铜（原著事实）----
-    high_fire = pc.make_puppet(
-        p, {"body_name": "斗尊尸躯"}, {"core_tier": 8}, {"soul_strength": 9999},
-        {"metal_name": "金", "metal_grade": 3}, {"fire_tier": 9})
-    check("首炼恒人级铜，不被高档材料顶上去",
-          high_fire["tier"] == 0 and high_fire["tier_name"] == "人级傀儡"
-          and high_fire["skin"] == "铜", str((high_fire["tier"], high_fire["skin"])))
+    # ---- 3. 档位由五维材料木桶决定（原著第900/906章）----
+    # 2026-11-20 口径变更：旧断言是「首炼恒人级铜」，与原著第900章「妖傀分三等，
+    # 天地人，等级之差，取决炼制材料以及炼制之火」相反。现改为木桶判档：
+    # 最弱一环决定档位，材料好就该出好傀。
+    low_mat = pc.make_puppet(
+        p, {"body_name": "强者躯体"}, {"core_name": "火属性魔核", "core_tier": 4},
+        {"soul_source": "无主灵魂", "soul_strength": 900},
+        {"metal_name": "精铁", "metal_grade": 1}, {"fire_tier": 7})
+    check("五维全一档 → 人级铜",
+          low_mat["tier"] == 0 and low_mat["skin"] == "铜",
+          str((low_mat["tier"], low_mat["skin"])))
+    high_mat = pc.make_puppet(
+        p, {"body_name": "斗尊强者之躯"}, {"core_name": "高阶魔核", "core_tier": 9},
+        {"soul_source": "斗尊强者之魂", "soul_strength": 2400},
+        {"metal_name": "焰陨玄铁", "metal_grade": 4}, {"fire_tier": 9})
+    check("五维全三档 → 天级金",
+          high_mat["tier"] == 2 and high_mat["skin"] == "金",
+          str((high_mat["tier"], high_mat["skin"])))
+    mixed = pc.make_puppet(
+        p, {"body_name": "斗尊强者之躯"}, {"core_name": "火属性魔核", "core_tier": 4},
+        {"soul_source": "斗尊强者之魂", "soul_strength": 2400},
+        {"metal_name": "焰陨玄铁", "metal_grade": 4}, {"fire_tier": 9})
+    check("躯体/火再顶级，魔核拖后腿仍是人级（木桶）",
+          mixed["tier"] == 0, mixed["tier"])
 
     # ---- 4. 未过资格 / 无传承无材料必须拦 ----
     p0 = dict(p)
@@ -167,16 +184,20 @@ async def main() -> None:
     for n, q in _mats(db).items():
         await db.add_material(QQ, n, q)
     mp_before = int(p["mp"])
+    # 无参炼制 = 自动选「材料齐 + 境界够」的最高档；本画像（斗宗 + A 火）
+    # 能到的最高是地级，最高档里最省的一条是「地妖傀」。
     made = await cmds.cmd_craft_puppet(store, QQ, db)
     roster = await db.list_puppets(QQ)
     check("炼制成功且落库", "炼制成功" in made and len(roster) == 1, made[:80])
     check("资格表 ready 置位", (await db.eligibility(QQ))["ready"], "")
     left = [await db.material_qty(QQ, n) for n in _mats(db)]
-    cost_names = {"强者躯体", "火属性魔核", "无主灵魂", "暗金玄铁"}
+    auto = pc.best_recipe({**p, "puppet_lore": True}, _mats(db))
+    cost_names = set(pc.recipe_materials(auto["recipe"])) if auto else set()
     spend_ok = all(
         (int(q) == 2 if n in cost_names else int(q) == 3)
         for n, q in zip(_mats(db), left))
-    check("材料按真实列扣除（仅扣四主材）", spend_ok, str(list(zip(_mats(db), left))))
+    check("材料按真实列扣除（只扣该配方用料）", spend_ok,
+          "%s cost=%s" % (list(zip(_mats(db), left)), sorted(cost_names)))
     p_after = await store.get_player(QQ)
     check("斗气续航消耗", int(p_after["mp"]) < mp_before,
           "%d -> %d" % (mp_before, p_after["mp"]))
@@ -187,8 +208,14 @@ async def main() -> None:
                 if "puppet" in k.lower()
                 or "傀儡" in json.dumps(v, ensure_ascii=False)]
     check("最高声明：玩家 JSON 无任何傀儡字段", not bad_keys, str(bad_keys))
-    check("傀儡本体取自真实列", roster[0]["core_tier"] == 7 and roster[0]["bonded"],
-          str(roster[0])[:160])
+    check("傀儡本体取自真实列（配方决定魔核阶）",
+          bool(roster) and roster[0]["core_tier"] == 7 and roster[0]["bonded"]
+          and roster[0]["soul_source"] == "斗宗强者之魂",
+          (made[:200] if not roster else str(roster[0])[:160]))
+    if not roster:
+        # 出了问题也要把剩下的断言跑完（否则一条 IndexError 吞掉全部结果）
+        print("⚠️ 炼制未产出傀儡，回包：\n" + made)
+        return
 
     # ---- 6. 战斗同源 ----
     pu = await db.active_puppet(QQ)

@@ -920,7 +920,8 @@ def build_ruin_data(state: dict, day: str = "", report: dict | None = None) -> d
         drops = "、".join("%s×%d" % (k, int(v))
                          for k, v in (sg.get("drops") or {}).items())
         groups.append({
-            "name": "%s · %s" % ("一二三"[i] if i < 3 else str(i + 1), sg["name"]),
+            "name": "%s · %s" % ("一二三四五六七八九十"[i] if i < 10 else str(i + 1),
+                                 sg["name"]),
             "rows": [str(sg.get("desc") or ""),
                      "%s ｜ 掉 %s ｜ %s" % (sg["monster"], drops, status)],
         })

@@ -299,9 +299,9 @@ MENU_GROUPS = (
         ("收服 火云水炎", "主动收服异火：数值火可直接收，大后期火须境界+主线达标；隐藏彩蛋火不在此列"),
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
-        ("炼制傀儡", "集齐传承+三主材+金属，炼一具人级铜傀儡（须先过五道资格）"),
-        ("傀儡", "查看傀儡卡（出图）；子命令 淬炼/结阵/收服/融魂"),
-        ("傀儡遗迹", "每日副本：魔炎谷库房→天墓能量之层→虚空雷池，掉三主材与传承竹简"),
+        ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
+        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂"),
+        ("傀儡遗迹", "每日副本六段：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿"),
     )),
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
@@ -685,6 +685,14 @@ async def cmd_fight(store, qq) -> str:
         tst = await store.tower_state(str(qq))
         core.tower_add_energy(tst, fire_gain)
         await store.set_tower_state(str(qq), tst)
+    # 2026-11-20 傀儡多配方材料：野外/周本掉的料进**傀儡库真实列**（puppet_materials），
+    # 不进 players.data 的 bag（最高声明）。写失败不静默——在回包里如实说出来。
+    pup_fail: list = []
+    for _nm, _n in (res.get("puppet_drops") or []):
+        try:
+            await DEFAULT_PUPPET_STORE.add_material(str(qq), _nm, int(_n))
+        except Exception as e:  # noqa: BLE001
+            pup_fail.append("%s（%s）" % (_nm, type(e).__name__))
     # 用户硬要求：敌人 1~5 随机，但字数/行数不能随敌人数膨胀；中间回合全折叠。
     # 故不再「每敌一节」，而是整场只取 1 条最强高光 + 固定几行结算数据。
     # 1 敌与 5 敌的骨架完全相同，只有「代表名等N名」处差几个字。
@@ -727,6 +735,12 @@ async def cmd_fight(store, qq) -> str:
     if drops:
         gain += " · " + "、".join(f"{n}×{c}" for n, c in drops[:3])
     lines.append(gain)
+    # 傀儡料单独一行：不进 bag、直接落傀儡库，与上面「战利」不是同一本账。
+    pup = list(res.get("puppet_drops") or [])
+    if pup:
+        lines.append("🧩 傀儡料 " + "、".join("%s×%d" % (n, int(c)) for n, c in pup))
+    if pup_fail:
+        lines.append("⚠️ 傀儡料未入傀儡库：" + "、".join(pup_fail))
     # ② 代价（「防御」字样固定出现：属性↔战斗强关联的稳定锚点）
     auto = res.get("auto_pills") or {}
     _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
@@ -2570,6 +2584,9 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     arg = (arg or "").strip()
     elig = await pstore.eligibility(qq)
     roster = await pstore.list_puppets(qq)
+    # 「傀儡 配方」随时可看（不必先有傀儡）——多配方后玩家第一句总是「要什么料」
+    if arg.startswith("配方") or arg.startswith("谱"):
+        return _puppet_recipe_text(p, await pstore.materials(qq) or {})
     if not roster:
         lines = ["【傀儡】你尚未拥有傀儡。", "炼一具须先过五道资格（挂已有养成）："]
         checks = [
@@ -2582,11 +2599,13 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
                                         "" if ok else "（" + reason + "）"))
         # 2026-11-20：材料与竹简一次列全（玩家问「到底要什么」时不用猜）
         mats = await pstore.materials(qq) or {}
-        need = {"强者躯体": 1, "火属性魔核": 1, "无主灵魂": 1, "暗金玄铁": 1}
-        lines.append("  📦 开炉材料：%s" % "、".join(
-            "%s %d/%d" % (n, int(mats.get(n, 0) or 0), q) for n, q in need.items()))
+        rec0 = cfg.PUPPET_RECIPE_BY_NAME.get("铜尸傀") or cfg.PUPPET_RECIPES[0]
+        need = pc.recipe_materials(rec0)
+        lines.append("  📦 开炉材料（%s）：%s" % (rec0["name"], "、".join(
+            "%s %d/%d" % (n, int(mats.get(n, 0) or 0), q) for n, q in need.items())))
         lines.append("  📜 傀儡之技：%s" % ("已习得" if elig["lore"] else "未习得（须先得「天妖傀竹简」）"))
-        lines.append("资格齐后发「炼制傀儡」。发「傀儡遗迹」攒材料。")
+        lines.append("资格齐后发「炼制傀儡」。发「傀儡 配方」看全部 %d 条配方。"
+                     % len(cfg.PUPPET_RECIPES))
         return "\n".join(lines)
     if arg.startswith("淬炼"):
         return await _cmd_puppet_temper(store, qq, p, roster, elig, pstore)
@@ -2600,13 +2619,20 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
     atk = pc.puppet_attack(cur)
+    core_name = pc.core_name_of(cur)
+    core_txt = ("%s（%d阶%s系）" % (core_name, cur["core_tier"], cur["core_attr"] or "无")
+                if core_name else "%d阶%s系" % (cur["core_tier"], cur["core_attr"] or "无"))
+    rec = pc.match_recipe(cur)
+    fire_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(
+        pc.fire_grade_of_tier(cur["fire_tier"]), "兽火")
     lines = [
         "【%s】%s档 · %s皮" % (cur["name"], tier_name, skin),
         "　躯体：%s（%s%s）" % (cur["body_name"] or "—",
                               cur["body_realm"] or "凡躯",
                               ("·%d星" % cur["body_star"]) if cur["body_star"] else ""),
-        "　魔核：%d阶%s系　灵魂：%s" % (cur["core_tier"], cur["core_attr"] or "无",
-                                       cur["soul_source"] or "—"),
+        "　魔核：%s　灵魂：%s" % (core_txt, cur["soul_source"] or "—"),
+        "　金属：%s　炼制之火：%s" % (cur["metal_name"] or "—", fire_word),
+        "　锻法：%s" % (("%s（%s）" % (rec["name"], rec["note"])) if rec else "自定组合"),
         "　肉身攻击 %d（不吃斗气/斗技）" % int(atk),
         "　雷淬纯度 %d%%%s" % (cur["purity"], "　⚠受损，待雷淬修复" if cur["damaged"] else ""),
         "　%s%s" % ("已认主·永不背叛" if cur["bonded"] else "未认主",
@@ -2614,52 +2640,155 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     ]
     if len(roster) > 1:
         lines.append("　持有 %d 具；发「傀儡 结阵」查看合击" % len(roster))
-    lines.append("　子命令：淬炼 / 结阵 / 收服 / 融魂")
+    lines.append("　子命令：配方 / 淬炼 / 结阵 / 收服 / 融魂")
     return "\n".join(lines)
 
 
-async def cmd_craft_puppet(store, qq, pstore=None) -> str:
-    """炼制傀儡：过五道资格 → 扣真实列材料 → 建真实列傀儡行。"""
+def _puppet_recipe_text(p, mats: dict) -> str:
+    """「傀儡 配方」：18 条配方逐条列五维用料 + 玩家当前能不能凑齐。
+
+    分组用**配方标称档**（火按配方写死的字母），不是玩家实况档——否则只有 A 火的
+    玩家看到「金身傀」被归到地级，会以为配方写错了。实况档差在炼制时如实提示。
+    """
+    from . import puppet_core as pc
+    ready = {x["recipe"]["name"]: x for x in pc.craftable_recipes(p, mats)}
+    fg = pc.fire_grade(p)
+    fire_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(int(fg["grade"]), "兽火")
+    lines = ["【傀儡配方】共 %d 条（档位＝五维里最弱那一环，天为金·地为银·人为铜）"
+             % len(cfg.PUPPET_RECIPES),
+             "　你如今的炼制之火：%s（%s）" % (fire_word, fg["name"])]
+    last_tier = None
+    for r in cfg.PUPPET_RECIPES:
+        item = ready.get(r["name"]) or {}
+        tier = int(item.get("tier_nominal", pc.recipe_tier(pc.recipe_slots(r))))
+        if tier != last_tier:
+            lines.append("— %s —" % (cfg.PUPPET_TIER_BY_IDX[max(0, tier)][0]
+                                     if tier >= 0 else "五维不全"))
+            last_tier = tier
+        mark = "✅" if item.get("ok") else "⬜"
+        lines.append("%s %s：%s ＋ %s ＋ %s ＋ %s ＋ %s火" % (
+            mark, r["name"], r["body"], r["core"], r["soul"], r["metal"], r["fire"]))
+        if item.get("lack"):
+            lines.append("　　缺 %s" % "、".join(item["lack"]))
+    lines.append("发「炼制傀儡 <配方名>」开炉；留空自动选能凑齐的最高档。")
+    return "\n".join(lines)
+
+
+async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
+    """炼制傀儡：选配方 → 过五道资格 → 扣真实列材料 → 建真实列傀儡行。
+
+    2026-11-20 多配方：``arg`` 是配方名（「炼制傀儡 地妖傀」）；留空则自动选
+    「材料齐 + 境界够」的最高档。档位由五维材料木桶判定（原著第900/906章），
+    不再是「首炼恒人级铜」——材料好就该出好傀。
+    """
     from . import puppet_core as pc
     pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
     qq = str(qq)
-    gate = pc.puppet_gate(p, 0, need_mp=True)
-    if not gate["ok"]:
-        return "❌ 未能开炉：" + gate["reason"]
-    mats = await pstore.materials(qq)
+    mats = await pstore.materials(qq) or {}
     # 传承从独立资格表读（不进 p / 不进 JSON）
     elig = await pstore.eligibility(qq)
     p_view = dict(p)
     p_view["puppet_lore"] = elig["lore"]
-    # E10/E15：躯体须冰封保鲜，灵魂须先炼尽神智（否则入料反噬）
-    body = {"body_name": "强者之躯", "body_realm": cfg.realm_name(int(p.get("lv", 1))),
-            "body_star": 0, "body_fresh": True, "body_fresh_until": 0,
-            "mind_stripped": True}
-    chk = pc.craft_checks(p_view, mats, body, 0)
+    arg = str(arg or "").strip()
+    if arg in ("配方", "配方表", "列表", "谱"):
+        return _puppet_recipe_text(p, mats)
+
+    # ---- 0. 资格预检 / 传承（必须在「选配方」之前）----
+    # 旧版先查材料：新玩家材料必然是空的，于是「境界不足」「没竹简」全被盖成
+    # 「材料不足」——玩家永远看不到真正卡住他的那一道。门禁先于耗材。
+    pre = pc.puppet_gate(p_view, 0, need_mp=False)
+    if not pre["ok"]:
+        return "❌ 未能开炉：" + pre["reason"]
+    if not (p_view.get("puppet_lore") or p_view.get("lore")):
+        return ("❌ 尚未习得傀儡之技（无竹简，E01）——去「傀儡遗迹」第三段"
+                "「虚空雷池」打赢守者取《天妖傀》竹简。")
+
+    # ---- 1. 定配方 ----
+    if arg:
+        rec = pc.recipe_by_name(arg)
+        if not rec:
+            return ("无此配方「%s」。现有 %d 条：%s\n　发「傀儡 配方」看每条的用料与缺什么。"
+                    % (arg, len(cfg.PUPPET_RECIPES),
+                       "、".join(r["name"] for r in cfg.PUPPET_RECIPES)))
+        lack = pc.missing_materials(mats, rec)
+    else:
+        item = pc.best_recipe(p_view, mats)
+        if item is None:
+            near = [x for x in pc.craftable_recipes(p_view, mats) if int(x["tier"]) >= 0][:2]
+            tip = "".join("\n　%s：缺 %s" % (x["recipe"]["name"], "、".join(x["lack"]))
+                          for x in near)
+            return ("❌ 材料不足：凑不齐任何一条配方。" + tip
+                    + "\n　发「傀儡 配方」看全部用料，发「傀儡遗迹」去打料。")
+        rec = item["recipe"]
+        lack = []
+    if lack:
+        rows = []
+        for name, q in pc.recipe_materials(rec).items():
+            have = int(mats.get(name, 0))
+            if have < int(q):
+                rows.append("　缺 %s×%d（有 %d）—— %s" % (
+                    name, int(q) - have, have,
+                    cfg.PUPPET_MATERIAL_SRC.get(name, "野外掉落")))
+        return ("❌ 材料不足（%s 需 %s）：\n%s" % (
+            rec["name"], "、".join(sorted(pc.recipe_materials(rec))), "\n".join(rows)))
+
+    # ---- 2. 判档 + 五道资格 ----
+    slots = pc.recipe_slots(rec, p_view)
+    tier = pc.recipe_tier(slots)
+    nominal = pc.recipe_tier(pc.recipe_slots(rec))
+    if tier < 0:
+        return "❌ 配方「%s」五维不全，无法开炉。" % rec["name"]
+    gate = pc.puppet_gate(p_view, tier, need_mp=True)
+    if not gate["ok"]:
+        return "❌ 未能开炉：" + gate["reason"]
+
+    # ---- 3. 材料与躯体校验（E10 冰封保鲜 / E15 炼尽神智）----
+    b_row = pc.slot_row("body", rec["body"])
+    body = {"body_name": rec["body"], "body_realm": b_row[1], "body_star": b_row[2],
+            "body_fresh": True, "body_fresh_until": 0, "mind_stripped": True}
+    cost = pc.recipe_materials(rec)
+    chk = pc.craft_checks(p_view, mats, body, tier, need=cost)
     if not chk["ok"]:
         return "❌ " + chk["reason"]
-    cost = {"强者躯体": 1, "火属性魔核": 1, "无主灵魂": 1, "暗金玄铁": 1}
+
+    # ---- 4. 扣料 → 扣斗气 → 落库 ----
     if not await pstore.take_materials(qq, cost):
         return "❌ 材料在校验后被他人取用，炼制中断、材料未扣。"
     # 斗气按天烧：见底则中断、材料不退（此处扣一笔斗气续航）
-    need_mp = int(core.mp_max(p) * cfg.PUPPET_MP_FACTOR[0])
+    need_mp = int(core.mp_max(p) * cfg.PUPPET_MP_FACTOR.get(tier, 1.0))
     p["mp"] = max(0, int(p.get("mp", 0)) - need_mp)
     await store.put_player(p)
+    c_row = pc.slot_row("core", rec["core"])
+    s_row = pc.slot_row("soul", rec["soul"])
+    m_row = pc.slot_row("metal", rec["metal"])
+    fg = pc.fire_grade(p)
     puppet = pc.make_puppet(
         p, body,
-        {"core_tier": 7, "core_attr": "火"},
-        {"soul_source": "无主灵魂", "soul_strength": 900, "mind_stripped": True},
-        {"metal_name": "暗金玄铁", "metal_grade": 2},
-        {"fire_tier": 7, "fire_attr": "火"},
+        {"core_name": rec["core"], "core_tier": c_row[1], "core_attr": c_row[2]},
+        {"soul_source": rec["soul"], "soul_strength": s_row[1], "mind_stripped": True},
+        {"metal_name": rec["metal"], "metal_grade": m_row[1]},
+        {"fire_tier": fg["fire_tier"], "fire_attr": "火", "fire_grade": fg["grade"]},
     )
     pid = await pstore.add_puppet(qq, puppet)
     if not elig["ready"]:
         await pstore.set_ready(qq, True)
-    return ("⚗️ 炼制成功！【%s】人级铜傀儡（id=%d）——首炼即成，难者其后，"
-            "靠雷池淬炼可升地级银、天级金。发「傀儡」查看。" % (puppet["name"], pid))
+    tier_name, skin = cfg.PUPPET_TIER_BY_IDX[puppet["tier"]]
+    fire_note = ""
+    if int(puppet["tier"]) < int(nominal):
+        fg_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(int(fg["grade"]), "兽火")
+        fire_note = ("\n　⚠ 此配方本可出%s，但你的炼制之火只到%s——降为%s。"
+                     % (cfg.PUPPET_TIER_BY_IDX[max(0, nominal)][0], fg_word, tier_name))
+    return ("⚗️ 炼制成功！【%s】%s·%s皮（%s，id=%d）\n"
+            "　用料：%s\n"
+            "　肉身攻击 %d（不吃斗气/斗技）\n"
+            "　斗气 -%d（余 %d）%s\n"
+            "　发「傀儡」查看；雷淬可再升档。" % (
+                puppet["name"], tier_name, skin, rec["name"], pid,
+                "、".join(cost), int(pc.puppet_attack(puppet)),
+                need_mp, int(p["mp"]), fire_note))
 
 
 async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
@@ -2756,8 +2885,19 @@ async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     if cur["tier"] >= 2 and cur["purity"] >= cfg.PUPPET_PURITY_MAX:
         return "【%s】已是天级金，此界上限，无需再淬。" % cur["name"]
+    # 2026-11-20 修 bug：雷淬石以前**永不消耗**（只扣金币），掉落的石头毫无用处。
+    # 现在每淬一次扣 PUPPET_TEMPER_STONE 枚，缺料先说清楚去哪取。
+    mats = await pstore.materials(qq)
+    stone_need = int(cfg.PUPPET_TEMPER_STONE)
+    stone_have = int(mats.get("雷淬石", 0))
+    if stone_have < stone_need:
+        return "雷淬石不足（有 %d，需 %d）——去「傀儡遗迹」第三段「虚空雷池」取。" % (
+            stone_have, stone_need)
     if int(p.get("gold", 0)) < cfg.PUPPET_TEMPER_COST:
         return "金币不足，雷淬需 %d 金。" % cfg.PUPPET_TEMPER_COST
+    # 先扣料再扣金：料被并发取走时直接中断，不会白扣金币。
+    if not await pstore.take_materials(qq, {"雷淬石": stone_need}):
+        return "雷淬石在校验后被取用，雷淬中断、金币未扣。"
     p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_TEMPER_COST
     await store.put_player(p)
     new = pc.temper(cur)
@@ -2769,18 +2909,29 @@ async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
     if new.get("capped"):
         return "⚡ 雷霆淬炼圆满！【%s】进化为【%s】（%s皮）——已至天妖傀上限。" % (
             cur["name"], new["tier_name"], new["skin"])
-    return "⚡ 雷霆淬炼：纯度 %d%%，当前 %s·%s皮。" % (
-        new["purity"], new["tier_name"], new["skin"])
+    nxt = new["tier"] + 1
+    toward = ("晋【%s】还需纯度 %d" % (cfg.PUPPET_TIER_BY_IDX[nxt][0],
+                                    cfg.PUPPET_TIER_UP_PURITY[new["tier"]])) \
+        if new["tier"] < 2 else "已至上限"
+    return "⚡ 雷霆淬炼：纯度 %d%%，当前 %s·%s皮（%s）。" % (
+        new["purity"], new["tier_name"], new["skin"], toward)
 
 
 async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
+    """结阵展示。**只说真实生效的规则**，不再写「十具循环可短暂进化」这种空话。
+
+    实机：``puppet_expected_damage`` 里只有 ``1 + 0.15×(n-1)``，且 ``fight`` 每次
+    只带**一具**出战傀儡——所谓「十具同阶连成循环进化」从来没有任何实现
+    （2026-11-20 审计确认）。这里如实说明：阵中每多一具，出战那具 +15%，上限 +135%。
+    """
     from . import puppet_core as pc
     n = pc.formation_count(roster)
     if n < 2:
-        return "结阵须至少两具傀儡（十具同阶连成循环可短暂进化）。你目前 %d 具。" % n
+        return "结阵须至少两具傀儡。你目前 %d 具。" % n
     names = "、".join(x["name"] for x in roster[:10])
-    return "【傀儡结阵】%d 具同场：%s\n　阵法合击，全员攻击 +%d%%（银芒连成循环，可临时进阶）。" % (
-        n, names, int((n - 1) * 15))
+    bonus = int(min(n, 10) - 1) * 15
+    return "【傀儡结阵】%d 具同场：%s\n　出战傀儡攻击 +%d%%（每多一具 +15%%，十具封顶 +135%%）。" % (
+        n, names, bonus)
 
 
 async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
