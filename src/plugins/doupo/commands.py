@@ -360,7 +360,7 @@ MENU_GROUPS = (
         ("切磋 @某人", "无惩罚切磋：对方「应战」后自动随机放技，只记荣誉战绩"),
         ("应战", "接受本群道友的切磋邀请（1 分钟内有效）"),
         ("拒战", "婉拒切磋邀请"),
-        ("送 回灵丹 5 @某人", "赠金币 / 赠背包物品"),
+        ("送 回灵丹 5 @某人", "赠金币 / 物品 / 傀儡材料"),
     )),
 )
 
@@ -2186,36 +2186,76 @@ def _gift_item_name(p, name: str) -> str:
     return sorted(hits, key=len)[0] if hits else ""
 
 
-async def cmd_gift(store, qq, target, item, n=1) -> str:
-    """赠送一件背包物品。金币仍走 :func:`cmd_give`，两条路互不干扰。
+def _gift_material_name(mats: dict, name: str) -> str:
+    """把玩家输入对到**自己傀儡材料里真实有的**那种（先精确，再包含）。
+
+    与 ``_gift_item_name`` 同策略，候选池换成 ``puppet_materials`` 的键。
+    两个池子零重名（17 种傀儡材料 vs 153 种背包物品，2026-11-20 实测），
+    所以「先背包后材料」只是固定顺序，不会二义。
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    pool = [k for k, v in (mats or {}).items() if int(v) > 0]
+    if name in pool:
+        return name
+    hits = [x for x in pool if name in x or x in name]
+    return sorted(hits, key=len)[0] if hits else ""
+
+
+async def cmd_gift(store, qq, target, item, n=1, pstore=None) -> str:
+    """赠送一件背包物品 / 一种傀儡材料。金币仍走 :func:`cmd_give`。
+
+    两条路各自在自己的库里**一个事务写完**：
+      * 背包物品 → ``Store.transfer_item``（`doupo.sqlite`）；
+      * 傀儡材料 → ``PuppetStore.transfer_material``（`puppet_data.sqlite`）。
+    一次赠送只会命中其中一条，不存在跨库半成功。
 
     「一处输出=一条消息」：成功/失败都只回一条纯文本，不另发卡片。
     """
+    pstore = pstore or DEFAULT_PUPPET_STORE
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
     if not target:
-        return ("用法：送 回灵丹 5 @某人（赠物品）　｜　送 100 @某人（赠金币）")
+        return ("用法：送 回灵丹 5 @某人（物品/傀儡材料）　｜　送 100 @某人（金币）")
     if str(target) == str(qq):
         return "不能赠送给自己。"
     if int(n) <= 0:
         return "数量无效。"
     hit = _gift_item_name(p, item)
+    mat = ""
+    mats: dict = {}
     if not hit:
-        return ("包裹里没有【%s】。发「背包」看现有物品；"
+        # 背包里没有才查傀儡材料：少一次库读，且顺序固定
+        mats = await pstore.materials(str(qq))
+        mat = _gift_material_name(mats, item)
+    if not hit and not mat:
+        return ("包裹与傀儡材料里都没有【%s】。发「背包」「傀儡 材料」看现有物品；"
                 "送金币用「送 100 @某人」。" % str(item or "").strip())
-    have = core.count_item(p, hit)
-    if have < int(n):
-        return "【%s】只有 %d 个，不够送 %d 个。" % (hit, have, int(n))
+    if hit:
+        have = core.count_item(p, hit)
+        if have < int(n):
+            return "【%s】只有 %d 个，不够送 %d 个。" % (hit, have, int(n))
+    else:
+        have = int(mats.get(mat, 0))
+        if have < int(n):
+            return "【%s】只有 %d 个，不够送 %d 个。" % (mat, have, int(n))
     if await store.get_player(str(target)) is None:
         return "对方尚未入道。"
-    ok = await store.transfer_item(str(qq), str(target), hit, int(n))
+    if hit:
+        ok = await store.transfer_item(str(qq), str(target), hit, int(n))
+        kind = ""
+        left = core.count_item(p, hit)
+    else:
+        ok = await pstore.transfer_material(str(qq), str(target), mat, int(n))
+        kind = "（傀儡材料）"
+        left = int((await pstore.materials(str(qq))).get(mat, 0))
     if not ok:
         # 走到这里说明 get 与 transfer 之间状态变了（对方掉档 / 物品被别处扣掉）
-        return "赠送失败：对方存档或你的包裹已变动，请重试。"
-    left = core.count_item(p, hit)
-    return ("🎁 你赠予对方【%s】×%d，善缘结下。\n　包裹余 %d 个%s"
-            % (hit, int(n), left, "" if left else "（已送空）"))
+        return "赠送失败：对方存档或你的%s已变动，请重试。" % ("包裹" if hit else "材料")
+    return ("🎁 你赠予对方【%s】×%d%s，善缘结下。\n　余 %d 个%s"
+            % (hit or mat, int(n), kind, left, "" if left else "（已送空）"))
 
 
 # ---------------------------------------------------------------------------
@@ -3046,7 +3086,7 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
             "、".join("%s×%d" % (k, int(v)) for k, v in drops.items()) or "无掉落"))
         for name, qty in drops.items():
             await pstore.add_material(qq, name, int(qty))
-        if "天妖傀竹简" in drops:
+        if cfg.PUPPET_LORE_MATERIAL in drops:
             await pstore.set_lore(qq, True)
             lore_gain = True
             wild = pc.make_puppet(

@@ -67,6 +67,7 @@ from doupo import commands  # noqa: E402
 import importlib  # noqa: E402
 
 store_mod = importlib.import_module("doupo.store")
+ps_mod = importlib.import_module("doupo.puppet_store")
 
 A = "20001"
 B = "20002"
@@ -238,6 +239,123 @@ async def e2e():
           "两边各有存货时应各算各的：A=%d B=%d"
           % (core.count_item(pa, "药渣"), core.count_item(pb, "药渣")))
 
+    # ------------------------------------------------------------------
+    # 傀儡材料：同样一个事务，但落在 puppet_data.sqlite 的 puppet_materials
+    # ------------------------------------------------------------------
+    pdb = ps_mod.PuppetStore(os.path.join(tmp, "puppet.sqlite"))
+    await pdb.add_material(A, "七阶魔核", 3)
+    txt = await commands.cmd_gift(store, A, B, "七阶魔核", 2, pdb)
+    check("七阶魔核" in txt and "傀儡材料" in txt,
+          "材料回包应点名材料并标「傀儡材料」：%s" % txt.replace("\n", " / ")[:70])
+    check(await pdb.material_qty(A, "七阶魔核") == 1,
+          "送主材料应剩 1，实得 %d" % await pdb.material_qty(A, "七阶魔核"))
+    check(await pdb.material_qty(B, "七阶魔核") == 2,
+          "受主材料应为 2，实得 %d" % await pdb.material_qty(B, "七阶魔核"))
+
+    fresh_db = ps_mod.PuppetStore(os.path.join(tmp, "puppet.sqlite"))
+    check(await fresh_db.material_qty(B, "七阶魔核") == 2,
+          "另开 PuppetStore 复核：材料赠送已真落库")
+
+    # 模糊匹配（「七阶」→ 七阶魔核）
+    txt = await commands.cmd_gift(store, A, B, "七阶", 1, pdb)
+    check(await pdb.material_qty(A, "七阶魔核") == 0 and "七阶魔核" in txt,
+          "「七阶」应模糊命中七阶魔核：%s" % txt[:60])
+    check("七阶魔核" not in await pdb.materials(A),
+          "送空后材料行必须删掉（留 qty=0 会让材料面板多一行空条目）")
+
+    # 竹简 = 传承：受赠者必须同时点亮 lore，否则拿到一张永远用不掉的废纸
+    await pdb.add_material(A, cfg.PUPPET_LORE_MATERIAL, 1)
+    check(not (await pdb.eligibility(B)).get("lore"),
+          "前置：受主本来不该有传承")
+    txt = await commands.cmd_gift(store, A, B, cfg.PUPPET_LORE_MATERIAL, 1, pdb)
+    check((await pdb.eligibility(B)).get("lore") is True or
+          int((await pdb.eligibility(B)).get("lore") or 0) == 1,
+          "送竹简必须同时授予传承（lore），实得 %s" % (await pdb.eligibility(B)))
+    check("傀儡材料" in txt, "竹简回包仍要标材料：%s" % txt[:50])
+
+    # 普通材料不许顺带点亮传承
+    await pdb.add_material(A, "暗金玄铁", 1)
+    txt = await commands.cmd_gift(store, A, B, "暗金玄铁", 1, pdb)
+    check(int((await pdb.eligibility(B)).get("lore") or 0) == 1 and "暗金玄铁" in txt,
+          "普通材料不该改 lore")
+
+    # 没拥有过的材料：要报「都没有」，不能报「只有 0 个」（后者意味着候选池
+    # 用的是全材料表，等于把玩家没拥有的东西也当成可送项）
+    txt = await commands.cmd_gift(store, A, B, "火属性魔核", 1, pdb)
+    check("都没有" in txt, "未拥有的材料应报「都没有」：%s" % txt[:60])
+
+    # 超额 / 未入道 / 自赠：零副作用
+    await pdb.add_material(A, "寒铁", 2)
+    before_m = await pdb.materials(A)
+    txt = await commands.cmd_gift(store, A, B, "寒铁", 9, pdb)
+    check("不够" in txt, "材料超额应报不够：%s" % txt[:50])
+    txt = await commands.cmd_gift(store, A, A, "寒铁", 1, pdb)
+    check("自己" in txt, "材料自赠应被挡：%s" % txt[:50])
+    txt = await commands.cmd_gift(store, A, "999999", "寒铁", 1, pdb)
+    check("未入道" in txt, "材料送未入道者应被挡：%s" % txt[:50])
+    check(await pdb.materials(A) == before_m, "三类拒绝都必须零副作用")
+
+    # 原子性：第二次写库失败 → 双方材料都回滚
+    orig_conn = pdb._conn
+
+    def bad_conn():
+        real = orig_conn()
+
+        class _W:
+            def __init__(self, c):
+                self._c = c
+                self._n = 0
+
+            def execute(self, *a, **k):
+                self._n += 1
+                if self._n >= 3:          # SELECT + UPDATE/DELETE 之后的 INSERT
+                    raise RuntimeError("模拟材料写盘故障")
+                return self._c.execute(*a, **k)
+
+            def __getattr__(self, k):
+                return getattr(self._c, k)
+
+            def __enter__(self):
+                self._c.__enter__()
+                return self
+
+            def __exit__(self, *a):
+                return self._c.__exit__(*a)
+
+        return _W(real)
+
+    snap_m = await pdb.materials(A)
+    snap_b = await pdb.materials(B)
+    pdb._conn = bad_conn
+    try:
+        raised = False
+        try:
+            await pdb.transfer_material(A, B, "寒铁", 1)
+        except ps_mod.PuppetStoreError:
+            raised = True
+        check(raised, "材料写盘故障必须抛 PuppetStoreError，不能静默半成功")
+        check(await pdb.materials(A) == snap_m,
+              "失败后送主材料必须回滚，实得 %s" % await pdb.materials(A))
+        check(await pdb.materials(B) == snap_b,
+              "失败后受主材料必须回滚，实得 %s" % await pdb.materials(B))
+    finally:
+        pdb._conn = orig_conn
+    fresh_db = ps_mod.PuppetStore(os.path.join(tmp, "puppet.sqlite"))
+    check(await fresh_db.material_qty(A, "寒铁") == 2,
+          "回滚必须连磁盘一起回滚（事务未 commit）")
+
+    # 先背包后材料：人为制造同名时，走背包那条路（顺序固定不二义）
+    pa = await store.get_player(A)
+    core.add_item(pa, "寒铁", 1)
+    await store.put_player(pa)
+    txt = await commands.cmd_gift(store, A, B, "寒铁", 1, pdb)
+    check("傀儡材料" not in txt and "包裹" not in txt.split("\n")[0],
+          "同名时应收背包里的那份，实得：%s" % txt.replace("\n", " / ")[:70])
+    check(core.count_item(await store.get_player(A), "寒铁") == 0,
+          "同名时背包里那份必须真的扣掉")
+    check(await pdb.material_qty(A, "寒铁") == 2,
+          "走背包路时材料一个都不该动，实得 %d" % await pdb.material_qty(A, "寒铁"))
+
     # 金币旧路径必须还在
     pa, pb = await store.get_player(A), await store.get_player(B)
     ga, gb = int(pa["gold"]), int(pb["gold"])
@@ -271,6 +389,12 @@ def test_source_gates():
     # 不许把金币逻辑复制进来（金币仍归 cmd_give 唯一一处）
     check("gold" not in body, "cmd_gift 不该碰金币，金币走 cmd_give")
 
+    # 材料分支：必须走 PuppetStore.transfer_material，不许自己拼两库
+    check("pstore.transfer_material(" in body,
+          "cmd_gift 的材料分支必须走 PuppetStore.transfer_material")
+    check("pstore.materials(" in body,
+          "材料候选池必须来自 puppet_materials 真实行")
+
     # transfer_item 必须一次事务写两行
     j = st.index("async def transfer_item(")
     # 切到下一个方法为止，别把后面方法的事务算进来
@@ -281,6 +405,17 @@ def test_source_gates():
           "transfer_item 必须写两行：%d" % tbody.count("_upsert_player("))
     check("bag_a.clear()" in tbody and "bag_b.clear()" in tbody,
           "回滚必须就地 clear+update（替换 dict 会让别人手里的引用失效）")
+
+    # 材料转账：同样只能有一个事务，且送空要删行
+    pst = _read("src/plugins/doupo/puppet_store.py")
+    j = pst.index("async def transfer_material(")
+    mbody = pst[j:pst.index("\n    async def ", j + 10)]
+    check(mbody.count("with self._tx()") == 1,
+          "transfer_material 必须恰好一个事务：%d" % mbody.count("with self._tx()"))
+    check("DELETE FROM puppet_materials" in mbody,
+          "送空必须删行（留 qty=0 会让材料面板多一行空条目）")
+    check("ON CONFLICT(qq,name) DO UPDATE" in mbody,
+          "受主一侧必须 UPSERT（不能假设对方已有该材料行）")
 
     # matcher 必须按 parse_gift 分流，且保留 _extract_at
     i0 = init.index("@give.handle()")
