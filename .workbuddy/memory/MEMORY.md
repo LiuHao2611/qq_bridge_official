@@ -78,3 +78,5 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 **零回归硬证据**：`_balance.py` 全量 lv1~102×200 场 **本轮 vs HEAD `diff` 无差异**（lv49 100% 越界是 HEAD 基线，非本轮引入；211 场在 120~400 内）。回归约 1200 条全绿（回看 218/commands 124/多配方 87/e2e 77/菜单 75/anchor 57/duel 56/puppet 54/boss_cast 48/沉浸 43/flame_tiers 41/battle_depth 37/九星 36/core 31/hit_rate 25/存档 12/持久化 8…）。
 ⚠️ **写塔/周本用例必须打深层**：第 1 层怪血仅 4000~8000（周本新玩家走 `ROOKIE_PROFILE` lv5），lv60 玩家先手秒杀 → 傀儡没机会出手，用例会假红/假绿。塔用 `{"floor":25}`，周本传 `wd_weekly.snapshot_profile(p)` 而不是 `core.weekly_snapshot`（后者对无本周快照的新玩家返 lv5 新手档）。
 ⚠️ `tests/test_battle_encounter.py` 是 pytest 风格，镜像与宿主机都没有 pytest → **既有基线红**，与本轮无关。
+⚠️ **傀儡库是独立库** `data/doupo/puppet_data.sqlite`（表 `puppets`/`puppet_materials`/`puppet_eligibility`），**不在** `doupo.sqlite`。`puppets` 无 `active` 列（出战看 `puppet_eligibility.active_id`）、无 `name` 列；`qq='wild'` 是遗迹残傀池，统计要排除。只读体检脚本 `tmp/probe_master_puppet.py`（挂 `data/doupo:/d:ro` → `cp` 到 `/tmp/probe` 再开，SQLite 只读挂载需写锁）。
+⚠️ **验收标志串先 grep 再写**：本轮 `verify_anchor_remote.py` 因臆造 `PUPPET_ENEMY_COMP=0.55`（实际是表格 `| \`X\` | \`0.55\` |`）连假 MISS 两次。`git diff --numstat` 中文路径必须 `-c core.quotepath=false`，否则永远假「远端缺文件」。
