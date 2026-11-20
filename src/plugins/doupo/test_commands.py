@@ -406,6 +406,24 @@ async def main():
     r = await commands.cmd_main_submit(store, A)
     check("领主线 未达标被挡", "未完成" in r or "完成" in r, r[:60])
 
+    # 主线提交必须**落库**（2026-11-20：旧版只改内存 p，重启章节回退、奖励蒸发）。
+    # 验证方式：另起一个 Store 从同一文件读回，不信内存里那个 dict。
+    pa = await store.get_player(A)
+    if int(pa.get("main_idx", 0)) < len(cfg.MAIN_TASKS):
+        pa["main_progress"] = int(cfg.MAIN_TASKS[int(pa["main_idx"])]["target"])
+        await store.put_player(pa)
+        before_idx = int(pa.get("main_idx", 0))
+        before_gold = int(pa.get("gold", 0))
+        r = await commands.cmd_main_submit(store, A)
+        st2 = Store(os.path.join(tmp, "doupo.json"))
+        await st2.load()
+        q = await st2.get_player(A)
+        check("主线提交落库（章节推进 + 金币入账）",
+              int(q.get("main_idx", 0)) == before_idx + 1
+              and int(q.get("gold", 0)) > before_gold,
+              "idx %s→%s gold %s→%s" % (before_idx, q.get("main_idx"),
+                                        before_gold, q.get("gold")))
+
     # ------------------------------------------------------------------
     # 11. 排行 / 抢 / 送
     # ------------------------------------------------------------------

@@ -1871,6 +1871,9 @@ async def cmd_main_submit(store, qq) -> str:
         t = res["task"]
         return f"主线未完成：{t['name']}（{res.get('progress', 0)}/{t['target']}）"
     rw = res["reward"]
+    # 2026-11-20：主线提交必须落库（此前只在内存改 p —— 支线在 2026-11-19 修过同一个错，
+    # 主线漏了：交完主线不重启还好，一重启章节回退、奖励蒸发）。
+    await store.put_player(p)
     msg = (f"🏅 主线【{res['task']['name']}】完成！\n"
            f"　金币 +{rw['gold']}　修为 +{rw['exp']}　机缘 +{rw['luck']}")
     if res.get("next"):
