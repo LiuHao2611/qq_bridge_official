@@ -773,6 +773,32 @@ def cum_damage(p, rounds: int, puppet_bonus: float = 0.0) -> float:
     return total
 
 
+def mon_tier(kind) -> str:
+    """怪物战斗档位：``"boss"`` / ``"elite"`` / ``"normal"``。**唯一判定入口**。
+
+    三处来源的 ``kind`` 字面并不统一，别再各自写字符串包含：
+      * 野外 —— 势力名：``"魔兽"`` / ``"悍匪"`` / ``"魂殿"`` / ``"黑盟"`` / ``"魔炎谷"``
+      * 爬塔 —— ``"塔·normal"`` / ``"塔·elite"`` / ``"塔·boss"``
+      * 周本 —— ``"周本·normal"`` / ``"周本·elite"`` / ``"周本·boss"``
+
+    2026-11-20 修的真 bug：旧版面板、怪失误率、怪技能概率、精英保底掉落四处都写
+    ``"精英" in kind``，而塔/周本传的是 ``"塔·elite"`` / ``"周本·elite"`` ——
+    **不含「精英」二字**（那两个字只在怪名「精英·嗜血鼠」里）。于是精英层全程按
+    小怪结算：``MON_PANEL_ELITE`` 是死常量、技能概率少 ×1.5、失误率少减半、
+    硬仗必掉的两件疗伤丹也没了。
+
+    BOSS 档沿用 ``cfg.BOSS_KIND_TOKENS``：野外魂殿/黑盟/魔炎谷的反派本来就是
+    BOSS 档（``recipes_data`` 里那句注释写明了「普通遭遇战的反派…都覆盖」，
+    并据此解锁 tier4 天材地宝），这条口径不动。
+    """
+    k = str(kind or "")
+    if any(t in k for t in cfg.BOSS_KIND_TOKENS):
+        return "boss"
+    if any(t in k for t in cfg.MON_TIER_ELITE_TOKENS):
+        return "elite"
+    return "normal"
+
+
 def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
     """怪物隐藏面板：与玩家同构的**命中 / 暴击 / 闪避**（单位都是 %）。
 
@@ -787,10 +813,11 @@ def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
     这个面板只决定「谁打得中谁、谁打得疼」，不改「几回合打完」的设计值。
     """
     k = cfg.realm_index(max(1, int(lv)))
+    _tier = "boss" if is_boss else mon_tier(kind)
     mul = 1.0
-    if is_boss:
+    if _tier == "boss":
         mul = float(cfg.MON_PANEL_BOSS)
-    elif "精英" in str(kind):
+    elif _tier == "elite":
         mul = float(cfg.MON_PANEL_ELITE)
     # 眼力 = 该等级白拿的身法 − 残值：同等级正好抵掉「等级送的闪避」。
     # 不加精英/BOSS 系数 —— 眼力再拔高就会把必打关（九星突破）压成必输。
@@ -1475,7 +1502,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             # 怪物失误：原著「脚掌一崴，一屁股坐在地上」（第191章）/
             # 「手忙脚乱，自乱阵脚」（第601章）。本回合怪不攻击。
             mishap = float(cfg.MISHAP_CHANCE)
-            if mon.get("is_boss") or "精英" in _kind:
+            # 档位判定统一走 mon_tier：塔/周本的 kind 是 "塔·elite"/"周本·elite"，
+            # 旧版 `"精英" in _kind` 永远 False → 精英层失误率没减半。
+            if mon.get("is_boss") or mon_tier(_kind) in ("elite", "boss"):
                 mishap *= float(cfg.MISHAP_BOSS_FACTOR)
             if rng() < mishap:
                 _why = ("脚掌一崴，一屁股坐在地上" if "魔兽" in _kind
@@ -1509,7 +1538,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                     _sc = float(sk.get("chance") or cfg.MONSTER_SKILL_BASE_CHANCE)
                     if mon.get("is_boss"):
                         _sc *= 2.0
-                    elif "精英" in _kind:
+                    elif mon_tier(_kind) == "elite":
                         _sc *= 1.5
                     if rng() < _sc:
                         _se, _sm = str(sk.get("effect") or ""), float(sk.get("mult") or 0)
@@ -2498,7 +2527,7 @@ def _roll_drops(p, rng, mon=None) -> list:
     # 放在**所有既有判定之后**，rng 调用只追加不插队 —— 老路径的掉落序列逐字节不变。
     # 精英/Boss 必掉气血+斗气各一件（硬仗本来就该喝药）；普通战斗按 HEAL_DROP_RATE
     # 掉一件、气血斗气二选一。丹名取既有配方（回春散/回气丹），效果靠配方 pct 跟随上限。
-    if is_boss or "精英" in str(mon.get("kind") or ""):
+    if is_boss or mon_tier(mon.get("kind")) == "elite":
         for _nm in (cfg.HEAL_PILL_HP, cfg.HEAL_PILL_MP):
             add_item(p, _nm, 1)
             out.append((_nm, 1))

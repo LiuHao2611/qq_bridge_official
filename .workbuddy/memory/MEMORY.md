@@ -51,3 +51,8 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 守门 `tests/test_doupo_hit_rate.py` 25 条 + `tools/mutate_hit_rate.py` 9 组。**手搓怪用例必须满级怪 + 拖满 30 回合**，否则小样本抓不住。镜像无 pytest；插件测试不能同进程跑（Plugin already exists: doupo）。
 ⚠️ **别再引入「基准闪避补偿」常量**：`DODGE_DESIGN=0.30` 那条路（反解怪攻除以 `1-0.30`）对没被削闪避的低等级同样放大 1.43× → 全等级越界，已试过否决并删掉常量（config 里只留一行警告注释）。正解是眼力抵掉等级白拿的身法，不碰 hp/atk 反解。
 ⚠️ 九星突破测试真实路径 `src/plugins/doupo/test_nine_star_breakthrough.py`（不在 tests/）；容器内跑测试必须 `/opt/venv/bin/python`（系统 `python3` 无 nonebot）。
+
+## 12. 怪物隐藏面板三项待拍板缺陷（2026-11-20 第五轮）
+面板只由**等级**决定，三档只差乘数：小怪 ×1.00 / 精英 ×1.20 / BOSS ×1.45；`hit = max(0, level_dodge(lv) − MON_HIT_RESIDUAL=50)`（lv1~63 恒 0，lv90 起封顶 30）、`crit = (2.0+0.8k)×mul` cap25、`dodge = (3.0+1.6k)×mul` cap32。对冲唯一口径 `max(0, 目标闪避 − 攻击方命中)`；玩家被闪恒压 50%，怪被闪小怪/精英恒 0。
+**三处量出来没改的缺陷**：① 精英系数失效——`monster_panel` 判 `"精英" in kind`，塔/周本 kind 是 `"塔·elite"`/`"周本·elite"`；② 野外 6 只反派（魂殿 4 + 药皇韩枫 + 地魔老鬼）因 `BOSS_KIND_TOKENS` 命中 kind 名拿到 ×1.45，但这也是唯一让怪身法有意义的地方（0.8~8%）；③ 「压闪避」7 门斗技 PVE 全废（玩家命中 6~24 恒 ≥ 怪身法 3~22.2），只对 PVP 有效——改语义/抬 `MON_DODGE_BASE`/卡面不写三选一。
+**别手算面板**：必须真跑 `core.monster_panel()`，手算会漏掉「kind 字符串没命中」这类判定 bug（①②就是这么漏的）。清单 `docs/怪物隐藏面板清单_2026-11-20.md`，生成器 `tmp/gen_monster_panels.py` + `tmp/gen_panel_effect.py`。
