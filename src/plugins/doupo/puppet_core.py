@@ -393,13 +393,99 @@ def make_puppet(p: dict, body: dict, core_info: dict, soul: dict,
 # ---------------------------------------------------------------------------
 # 战斗集成（红线：唯一期望输出函数）
 # ---------------------------------------------------------------------------
-def _ref_player(tier: int) -> dict:
+def puppet_realm_lv(puppet: Optional[dict]) -> int:
+    """傀儡战力对应的等级 —— 由**躯体**境界决定（第900章「等级之差取决炼制材料」）。
+
+    折算规则来自第757处：用「一名七星斗宗强者的躯体」（第906章）炼出的地妖傀，
+    「恐怕不会比一名**五星乃至六星**的斗宗强者弱」⇒ 战力 = 躯体境界 − 2 星。
+    ``body_star=0``（强者躯体 / 斗尊强者之躯未标小星）按一星算。
+
+    认不出躯体境界（老存档 ``body_realm`` 为空）时回落
+    ``cfg.PUPPET_TIER_REALM_LV[tier]`` —— 该档**标准躯体**折算出的等级，
+    与同一档新傀同料同档，不会因为缺字段就掉成废铁。
+    """
+    pu = puppet or {}
+    tier = max(0, min(2, int(pu.get("tier", 0) or 0)))
+    realm = str(pu.get("body_realm") or "")
+    try:
+        idx = cfg.REALM_NAMES.index(realm)
+    except ValueError:
+        return int(cfg.PUPPET_TIER_REALM_LV[tier])
+    star = int(pu.get("body_star") or 0)
+    n = max(1, min(9, star if star > 0 else 1))   # 未标小星 = 一星
+    lv = cfg.realm_lv(idx) + max(0, n - 1 - int(cfg.PUPPET_BODY_STAR_PENALTY))
+    # 封在该境界之内：傀儡不会因为躯体小星高就跨到下一个大境界去
+    return min(lv, cfg.realm_lv(idx) + 8)
+
+
+def _round_output_at(lv: int) -> float:
+    """某等级的标尺玩家每回合期望输出（卡面「战力对标」反查专用）。"""
+    from . import core
+    lv = max(1, min(int(cfg.MAX_LV), int(lv)))
+    return _player_round_output(core.tower_ref_player(lv))
+
+
+def puppet_effective_lv(puppet: Optional[dict], p: Optional[dict] = None) -> int:
+    """**当前实际**战力对应的等级（不是材料境界）。
+
+    卡面的「斗宗级」必须用它而不是 ``puppet_realm_lv()``：被
+    ``PUPPET_ATK_CAP`` 压住时实际发挥会低于材料境界，标签得跟着降 ——
+    否则就是「写着斗宗级、打出来 1734」的假标签，比不写更糟。
+    """
+    if not puppet:
+        return 0
+    # atk 已含材料系数（见 puppet_attack），反查直接拿它比标尺输出，**别再除一次**。
+    target = puppet_attack(puppet, p)
+    lo, hi = 1, int(cfg.MAX_LV)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _round_output_at(mid) <= target:
+            lo = mid
+        else:
+            hi = mid - 1
+    # 二分只保证「≤ target 的最大等级」，若等级曲线有抖动，就近取更接近的一侧
+    if lo < int(cfg.MAX_LV):
+        if abs(_round_output_at(lo + 1) - target) < abs(_round_output_at(lo) - target):
+            lo += 1
+    return lo
+
+
+def puppet_realm_label(puppet: Optional[dict], p: Optional[dict] = None) -> str:
+    """战力境界的玩家可见称呼（「斗宗级」）—— 卡面与文档同一口径。
+
+    ``p`` 给了就看**实际发挥**：发挥不满（被 ``PUPPET_ATK_CAP`` 压住）时标实际
+    档位并注明原因，否则一律标材料境界 —— 这样标签永远与「肉身攻击」那个数字
+    自洽，不会出现「写着斗宗级、打出来一千七」的假标签。
+    注意「同境界内被压」不降档：斗尊躯被压到斗尊初段，仍叫斗尊级。
+
+    ⚠️ 返回值**不许带括号**：卡面把它塞进「肉身攻击 N（…）」里，再套一层就成了
+        ``（斗皇级（受你境界所限），不吃斗气/斗技）`` 这种嵌套括号（实测踩过）。
+       用「·」断句。
+    """
+    if not puppet:
+        return "—"
+    mat_lv = puppet_realm_lv(puppet)
+    mat_name = cfg.realm_name(mat_lv)
+    if p is None:
+        return "%s级" % mat_name
+    eff = puppet_effective_lv(puppet, p)
+    if cfg.realm_index(eff) >= cfg.realm_index(mat_lv):
+        return "%s级" % mat_name
+    return "%s级 · 受你境界所限" % cfg.realm_name(eff)
+
+
+def _ref_player(tier: int, puppet: Optional[dict] = None) -> dict:
     """无玩家上下文时的「标尺玩家」：走 core.tower_ref_player，与爬塔同一套标尺。
 
     不另造一份假玩家——两份标尺一定会漂，卡面与实战就成了两张皮。
+    给了 puppet 就按**它的躯体境界**取标尺，保证同一具傀儡在任何调用点算出的
+    战力都是同一个数（卡面 vs 实战 vs 怪血反解）。
     """
     from . import core  # 延迟导入避免环
-    lv = int(cfg.PUPPET_REF_LV[max(0, min(2, int(tier)))])
+    if puppet:
+        lv = puppet_realm_lv(puppet)
+    else:
+        lv = int(cfg.PUPPET_TIER_REALM_LV[max(0, min(2, int(tier)))])
     return core.tower_ref_player(lv)
 
 
@@ -442,21 +528,49 @@ def _material_mult(puppet: dict) -> float:
 def puppet_attack(puppet: Optional[dict], p: Optional[dict] = None) -> float:
     """傀儡肉身攻击（E32/E33/E35）：不吃 mp/斗技，纯躯体+魔核+灵魂+材料。
 
-    **2026-11-20 第二轮：锚定玩家，不再是绝对常数。**
-    旧版 ``(120/900/4200 + core×40 + soul×0.15) × 0.42`` 在 lv81 玩家身上只有
-    224.7，占其每回合输出 0.2%、同阶怪血 0.08% —— 用户原话「低得离谱」，
-    实测确认属实。
+    **2026-11-20 第三轮：锚躯体境界，档位只封顶。**
 
-    新口径：``玩家平均每回合期望输出 × PUPPET_TIER_RATIO[tier] × 材料系数``。
-    ``p=None``（卡面/旧脚本只给 puppet dict）时用 ``PUPPET_REF_LV`` 的标尺玩家，
-    保证任何调用点都能拿到一个同量级的确定值，不会出现「卡面 224 / 实战 9 千」。
+    三轮演进，别再改回去：
+      ① 初版 ``(120/900/4200 + core×40 + soul×0.15) × 0.42`` 是绝对常数，lv81
+         玩家身上只有 224.7，占其每回合输出 0.2% —— 用户原话「低得离谱」。
+      ② 第二轮改成 ``玩家每回合输出 × (0.15/0.30/0.50)``：比例有了，但 lv81 人级
+         也只有 5.5 千，与原著「地妖傀 = 五星六星斗宗」对不上；反过来给同境界
+         满额又让 lv20 到 1134%（实测崩坏）。
+      ③ 本轮（用户「应该有原著中说的，有对应斗宗或者斗尊级别的战力」）：
+
+         ``min(躯体境界标尺输出, 玩家每回合输出 × PUPPET_ATK_CAP[档]) × 材料系数``
+
+     第一项给「斗宗/斗尊级战力」（来自躯体，见 ``puppet_realm_lv``），第二项是
+     「不抢风头」的安全阀（玩家比傀儡弱时往下压），两者取小即同时满足两条红线。
+
+    ``p=None``（旧脚本只给 puppet dict）时直接给躯体境界标尺值 —— 即「这具傀儡
+    的标配战力」，不掺玩家强弱；卡面与实战都传 p，所以不会出现两张皮。
     """
     if not puppet:
         return 0.0
     tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
-    anchor_p = p if p is not None else _ref_player(tier)
-    anchor = _player_round_output(anchor_p)
-    return anchor * float(cfg.PUPPET_TIER_RATIO[tier]) * _material_mult(puppet)
+    # ⚠️ 材料系数必须乘在**境界标尺**上、而不是乘在 min() 之后：
+    #    乘在后面会让好材料把「不抢风头」的封顶撑破（实测天级 core9/soul2400
+    #    /metal4/fire9 的 1.31 倍直接把 100% 顶成 131%）。
+    realm_out = _player_round_output(_ref_player(tier, puppet)) \
+        * _material_mult(puppet)
+    if p is None:
+        return realm_out
+    return min(realm_out,
+               _player_round_output(p) * float(cfg.PUPPET_ATK_CAP[tier]))
+
+
+def puppet_full_attack(puppet: Optional[dict]) -> float:
+    """躯体境界满配战力（含材料系数，**不含**玩家封顶/结阵/异火）。
+
+    战斗口径 ``puppet_expected_damage`` 拿它当基数再叠结阵与异火，最后一次性
+    落在 ``PUPPET_ATK_CAP`` 上 —— 封顶必须管**最终值**，否则结阵 ×1.30 会把
+    「天级不超过自己 95%」顶成 123%（实测）。
+    """
+    if not puppet:
+        return 0.0
+    tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
+    return _player_round_output(_ref_player(tier, puppet)) * _material_mult(puppet)
 
 
 def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
@@ -476,12 +590,20 @@ def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
     """
     if not puppet:
         return 0.0
-    atk = puppet_attack(puppet, p)
+    tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
+    atk = puppet_full_attack(puppet)
     # 结阵加成（2026-11-20 第二轮加上限）：`formation_count` 数的是玩家**拥有的
     # 全部**傀儡，人级材料便宜，不封顶就能靠堆垃圾傀儡白拿 +60% → 封顶 3 具。
     n_eff = min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), max(0, formation_n))
     bonus = 1.0 + max(0, n_eff - 1) * float(getattr(cfg, "PUPPET_FORMATION_STEP", 0.15))
-    return atk * bonus * max(1.0, float(flame_mult))
+    total = atk * bonus * max(1.0, float(flame_mult))
+    # 🚨 封顶只在这里落一次：管的是**最终值**（结阵/异火叠完之后）。
+    #    若改回在 puppet_attack 里封顶，结阵 ×1.30 会把「天级 ≤ 自己 95%」
+    #    顶成 123%（实测），「不抢风头」当场破功。
+    if p is not None:
+        total = min(total,
+                    _player_round_output(p) * float(cfg.PUPPET_ATK_CAP[tier]))
+    return total
 
 
 def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
@@ -509,7 +631,7 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     from . import core  # 延迟导入避免与 core 循环
 
     tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
-    anchor = p if p is not None else _ref_player(tier)
+    anchor = p if p is not None else _ref_player(tier, puppet)
     st = core.stats(anchor)
     mm = _material_mult(puppet)
     hp_max = max(1, int(int(st["体力"]) * float(cfg.PUPPET_HP_RATIO[tier]) * mm))

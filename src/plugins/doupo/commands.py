@@ -2684,8 +2684,8 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
-    # atk 必须传 p（2026-11-20 第三轮修）：旧版 `puppet_attack(cur)` 不传 p 会走
-    # `_ref_player(tier)` 标尺玩家，卡面数字与实战（fight 传的是真实 p）就是两张皮。
+    # atk 必须传 p：不传 p 会走躯体境界标尺，卡面数字与实战（fight 传真实 p）
+    # 就是两张皮（2026-11-20 第三轮口径：min(躯体境界标尺, 玩家输出 × CAP)）。
     atk = pc.puppet_attack(cur, p)
     # 护主面板与 fight() 同源（同一个 guard_profile），结阵具数也走同一套封顶。
     g = pc.guard_profile(cur, p, pc.formation_count(roster))
@@ -2703,7 +2703,12 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         "　魔核：%s　灵魂：%s" % (core_txt, cur["soul_source"] or "—"),
         "　金属：%s　炼制之火：%s" % (cur["metal_name"] or "—", fire_word),
         "　锻法：%s" % (("%s（%s）" % (rec["name"], rec["note"])) if rec else "自定组合"),
-        "　肉身攻击 %d（不吃斗气/斗技）" % int(atk),
+        # 战力对标（2026-11-20 第三轮）：数字旁边必须给出「这是几品战力」，
+        # 否则「肉身攻击 28357」对玩家只是一个无量纲的数。标签走实际发挥，
+        # 被玩家境界压制时会自动降档，不会出现「写着斗宗级、打出来一千七」。
+        # ⚠️ label 已自带「级别 · 受你境界所限」，别再用括号包它 → 嵌套括号。
+        "　肉身攻击 %d　%s（不吃斗气/斗技）" % (
+            int(atk), pc.puppet_realm_label(cur, p)),
         # 护主三件事必须一起给出（2026-11-20 第三轮）：气血/护甲是能力，
         # 挡伤概率是机制，大额线是「什么时候会触发」——缺一个就是隐式数值。
         "　护主：气血 %d　护甲 %d（挡下伤害时减伤 %.0f%%）" % (
@@ -2860,11 +2865,12 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="") -> str:
                      % (cfg.PUPPET_TIER_BY_IDX[max(0, nominal)][0], fg_word, tier_name))
     return ("⚗️ 炼制成功！【%s】%s·%s皮（%s，id=%d）\n"
             "　用料：%s\n"
-            "　肉身攻击 %d（不吃斗气/斗技）\n"
+            "　肉身攻击 %d　%s（不吃斗气/斗技）\n"
             "　斗气 -%d（余 %d）%s\n"
             "　发「傀儡」查看；雷淬可再升档。" % (
                 puppet["name"], tier_name, skin, rec["name"], pid,
-                "、".join(cost), int(pc.puppet_attack(puppet)),
+                "、".join(cost), int(pc.puppet_attack(puppet, p)),
+                pc.puppet_realm_label(puppet, p),
                 need_mp, int(p["mp"]), fire_note))
 
 

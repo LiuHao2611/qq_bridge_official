@@ -1447,8 +1447,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     _guard_taken_sum = 0
     if puppet:
         from . import puppet_core as _pc0  # 延迟导入避免与 core 环
-        _pup_atk = (_pc0.puppet_attack(puppet, p)
-                    * max(1.0, float(puppet_flame_mult)))
+        # 🚨 必须走 ``puppet_expected_damage``（唯一函数），不能用 ``puppet_attack``：
+        #    后者不含结阵与异火，而 `monster_scaled` 的反解是按前者让怪变厚的
+        #    —— 两处不同源就是「带结阵反而吃亏」（第二轮遗留 bug，本轮修）。
+        _pup_atk = _pc0.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=p)
         _pup_prof = _pc0.guard_profile(puppet, p, formation_n)
         _pup_hp = int(_pup_prof["hp_max"])
 

@@ -876,6 +876,10 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
             "badge": "%s · %s皮%s" % (tier_name, skin, " · 出战" if pu.get("id") == elig.get("active_id") else ""),
             "atk": str(int(pc.puppet_attack(pu, p))),
             "lines": [
+                # 战力对标（2026-11-20 第三轮）：数字得有个「几品战力」的量纲，
+                # 否则「肉身攻击 28357」对玩家只是一个无量纲的数。标签走**实际
+                # 发挥**（puppet_realm_label 会按玩家境界压制同步降档）。
+                "战力 " + pc.puppet_realm_label(pu, p),
                 "躯体 " + body,
                 "魔核 %d阶%s系 · 灵魂 %s" % (int(pu.get("core_tier", 0)),
                                               pu.get("core_attr") or "无",

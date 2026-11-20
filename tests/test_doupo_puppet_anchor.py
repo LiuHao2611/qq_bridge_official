@@ -83,13 +83,21 @@ def check(cond, msg):
         _FAILS.append(msg)
 
 
-# 三档代表傀儡：与 config.PUPPET_TIER_RATIO 一一对应
+# 三档代表傀儡：tier 与**躯体**共同决定战力（2026-11-20 第三轮口径）。
+# body_realm/body_star 取自 cfg.PUPPET_BODY_TIERS：躯体 n 星 → 战力 n−2 星。
 PU_REN = {"name": "铜尸傀", "tier": 0, "core_tier": 4, "soul_strength": 900,
-          "metal_grade": 1, "fire_tier": 7, "skin": "铜"}
+          "metal_grade": 1, "fire_tier": 7, "skin": "铜",
+          "body_name": "强者躯体", "body_realm": "斗皇", "body_star": 0}
 PU_DI = {"name": "地妖傀", "tier": 1, "core_tier": 7, "soul_strength": 1500,
-         "metal_grade": 2, "fire_tier": 8, "skin": "银"}
+         "metal_grade": 2, "fire_tier": 8, "skin": "银",
+         "body_name": "斗宗强者之躯", "body_realm": "斗宗", "body_star": 7}
 PU_TIAN = {"name": "天妖傀", "tier": 2, "core_tier": 9, "soul_strength": 2400,
-           "metal_grade": 4, "fire_tier": 9, "skin": "金"}
+           "metal_grade": 4, "fire_tier": 9, "skin": "金",
+           "body_name": "斗尊强者之躯", "body_realm": "斗尊", "body_star": 0}
+# 北王傀：斗圣之躯（五星），后期唯一能跟上斗圣玩家的料。
+PU_BEI = {"name": "北王傀", "tier": 2, "core_tier": 9, "soul_strength": 3000,
+          "metal_grade": 4, "fire_tier": 9, "skin": "金",
+          "body_name": "北龙王之躯", "body_realm": "斗圣", "body_star": 5}
 
 SPEC = {"name": "同阶怪", "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": "普通"}
@@ -193,12 +201,77 @@ def test_not_negligible_at_high_level():
 
 
 def test_tier_gradient():
+    """人<地<天 单调，且**由躯体境界驱动**（不是比例常数）。"""
     p = core.tower_ref_player(70)
     a = [pc.puppet_attack(x, p) for x in (PU_REN, PU_DI, PU_TIAN)]
     check(a[0] < a[1] < a[2], "人<地<天 梯度破坏：%s" % a)
-    check(abs(a[0] / a[2] - cfg.PUPPET_TIER_RATIO[0] / cfg.PUPPET_TIER_RATIO[2]
-              * (pc._material_mult(PU_REN) / pc._material_mult(PU_TIAN))) < 0.02,
-          "档位比例与 PUPPET_TIER_RATIO 不一致：%s" % a)
+    # 旧的「档位比例必须等于 PUPPET_TIER_RATIO」断言已作废：本轮起三档的差距
+    # 来自躯体境界（斗皇/斗宗/斗尊），不再是 0.15/0.30/0.50 的线性比例。
+    check(not hasattr(cfg, "PUPPET_TIER_RATIO"),
+          "cfg.PUPPET_TIER_RATIO 复活了 —— 旧口径（玩家输出百分比）已被"
+          "「躯体境界锚定」取代，两套并存会让战力口径分叉")
+    check(not hasattr(cfg, "PUPPET_REF_LV"),
+          "cfg.PUPPET_REF_LV 复活了 —— 已改名 PUPPET_TIER_REALM_LV（语义从"
+          "「标尺等级」变成「该档标准躯体的折算境界」）")
+
+
+def test_realm_comes_from_body():
+    """战力境界必须由**躯体**决定，且按原著折 n−2 星（第757处）。"""
+    # 七星斗宗之躯 → 「不会比一名五星乃至六星的斗宗强者弱」
+    check(pc.puppet_realm_lv(PU_DI) == cfg.realm_lv(7) + 4,
+          "七星斗宗之躯应折成五星斗宗（lv%d），实得 lv%d"
+          % (cfg.realm_lv(7) + 4, pc.puppet_realm_lv(PU_DI)))
+    check(cfg.full_realm(pc.puppet_realm_lv(PU_DI)) == "五星斗宗",
+          "折算称呼应为「五星斗宗」，实得 %s"
+          % cfg.full_realm(pc.puppet_realm_lv(PU_DI)))
+    # 同一 tier 下，换更好的躯体会更强（这条守住「料好就该更强」）
+    better = dict(PU_TIAN, body_name="北龙王之躯",
+                  body_realm="斗圣", body_star=5)
+    check(pc.puppet_attack(better) > pc.puppet_attack(PU_TIAN),
+          "斗圣之躯的天级傀儡应强于斗尊之躯：%.0f vs %.0f"
+          % (pc.puppet_attack(better), pc.puppet_attack(PU_TIAN)))
+    # 境界标签必须与材料一致
+    check(pc.puppet_realm_label(PU_DI) == "斗宗级",
+          "地妖傀标签应为「斗宗级」，实得 %s" % pc.puppet_realm_label(PU_DI))
+    check(pc.puppet_realm_label(PU_BEI) == "斗圣级",
+          "北王傀标签应为「斗圣级」，实得 %s" % pc.puppet_realm_label(PU_BEI))
+
+
+def test_old_save_falls_back_not_scrap():
+    """老存档 body_realm 为空时回落该档标准躯体，绝不许掉成废铁。
+
+    ⚠️ 断言写**绝对境界名**，不拿 ``cfg.PUPPET_TIER_REALM_LV`` 当期望值 ——
+       拿配置当期望，配置被改成 (1,1,1) 时测试会跟着一起过（注入反证实测白守）。
+    """
+    p = core.tower_ref_player(81)
+    want_realm = ("斗皇", "斗宗", "斗尊")   # 三档标准躯体的境界
+    for pu, tier in ((PU_REN, 0), (PU_DI, 1), (PU_TIAN, 2)):
+        old = {k: v for k, v in pu.items()
+               if k not in ("body_realm", "body_star", "body_name")}
+        lv = pc.puppet_realm_lv(old)
+        check(cfg.realm_name(lv) == want_realm[tier],
+              "tier%d 无 body_realm 应回落到%s级，实得 %s（lv%d）"
+              % (tier, want_realm[tier], cfg.realm_name(lv), lv))
+        check(pc.puppet_attack(old, p) > 0,
+              "tier%d 老存档战力算成 0 —— 变成废铁了" % tier)
+
+
+def test_cap_survives_material_bonus():
+    """封顶必须管**最终值**：好材料/结阵/异火都不许把「不抢风头」撑破。"""
+    own = round_out(core.tower_ref_player(81))
+    for t, pu in ((0, PU_REN), (1, PU_DI), (2, PU_TIAN)):
+        cap = float(cfg.PUPPET_ATK_CAP[t])
+        # ① 单体（材料系数已含）
+        a = pc.puppet_attack(pu, core.tower_ref_player(81))
+        check(a <= own * cap + 1e-6,
+              "tier%d 单体 %.0f 超过封顶 %.0f（自己 %.0f × %.2f）"
+              % (t, a, own * cap, own, cap))
+        # ② 结阵 3 具 + 异火 1.3 倍 —— 两个乘数都不许突破封顶
+        d = pc.puppet_expected_damage(
+            pu, 3, flame_mult=1.3, p=core.tower_ref_player(81))
+        check(d <= own * cap + 1e-6,
+              "tier%d 结阵+异火后 %.0f 超过封顶 %.0f（结阵/异火把封顶撑破了）"
+              % (t, d, own * cap))
 
 
 def test_material_mult():
@@ -228,16 +301,21 @@ def test_material_mult():
 def test_formation_cap():
     p = core.tower_ref_player(80)
     out = round_out(p)
-    one = pc.puppet_expected_damage(PU_TIAN, 1, p=p)
-    three = pc.puppet_expected_damage(PU_TIAN, 3, p=p)
-    eight = pc.puppet_expected_damage(PU_TIAN, 8, p=p)
+    # ⚠️ 结阵收益要用**没贴顶的档**验（人级 lv80 只到 52%，离 55% 封顶还有余量）。
+    #    天级已经贴顶 95%，结阵必然被收口 —— 那是设计意图（不抢风头），不是 bug。
+    one = pc.puppet_expected_damage(PU_REN, 1, p=p)
+    three = pc.puppet_expected_damage(PU_REN, 3, p=p)
+    eight = pc.puppet_expected_damage(PU_REN, 8, p=p)
     check(three > one, "结阵无加成：3 具 %.1f 未高于 1 具 %.1f" % (three, one))
     check(abs(eight - three) < 1e-6,
           "结阵未封顶：8 具 %.1f 与 3 具 %.1f 应相等" % (eight, three))
     check(pc.formation_count([{"id": i} for i in range(8)]) == cfg.PUPPET_FORMATION_MAX,
           "formation_count 8 具应封顶到 %d" % cfg.PUPPET_FORMATION_MAX)
-    check(eight / out < 0.95,
-          "天级 8 具封顶后仍占玩家输出 %.1f%%（≥95%% 等于外挂）" % (eight / out * 100))
+    # 天级：无论结阵几具，最终输出都不许越过封顶（结阵/8 具一起验）
+    tian8 = pc.puppet_expected_damage(PU_TIAN, 8, p=p)
+    check(tian8 / out <= float(cfg.PUPPET_ATK_CAP[2]) + 1e-6,
+          "天级 8 具封顶后仍占玩家输出 %.1f%%（超过封顶 %.0f%% 等于外挂）"
+          % (tian8 / out * 100, float(cfg.PUPPET_ATK_CAP[2]) * 100))
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +371,15 @@ def test_enemy_comp_is_discount():
     check(c > 0.30,
           "PUPPET_ENEMY_COMP=%.2f ≤0.30 —— 怪血几乎不因傀儡变厚，"
           "带傀儡等于白送输出，全等级难度会崩" % c)
-    check(float(cfg.PUPPET_TIER_RATIO[0]) < float(cfg.PUPPET_TIER_RATIO[1])
-          < float(cfg.PUPPET_TIER_RATIO[2]),
-          "PUPPET_TIER_RATIO 梯度破坏：%s" % (cfg.PUPPET_TIER_RATIO,))
+    check(float(cfg.PUPPET_ATK_CAP[0]) < float(cfg.PUPPET_ATK_CAP[1])
+          < float(cfg.PUPPET_ATK_CAP[2]),
+          "PUPPET_ATK_CAP 梯度破坏：%s" % (cfg.PUPPET_ATK_CAP,))
+    check(float(cfg.PUPPET_ATK_CAP[2]) < 1.0,
+          "PUPPET_ATK_CAP[2]=%.2f ≥1.0 —— 天级傀儡可追平玩家全体输出，"
+          "「不抢风头」红线破了" % float(cfg.PUPPET_ATK_CAP[2]))
+    # 旧口径常量必须彻底退场（两套并存会让战力口径分叉）
+    for ghost in ("PUPPET_TIER_RATIO", "PUPPET_REF_LV"):
+        check(not hasattr(cfg, ghost), "cfg.%s 复活了 —— 旧比例口径已弃用" % ghost)
 
 
 def test_no_puppet_path_unchanged():
@@ -400,6 +484,39 @@ def test_five_battle_entries_bring_puppet():
     check(not _has_log_kind(tw0.get("log")), "爬塔没带傀儡却出现「傀儡击」")
 
 
+def test_card_shows_realm_label():
+    """卡面必须给出「战力 X级」，且整段不许出现嵌套括号。"""
+    from doupo import card
+    p = core.tower_ref_player(81)
+    data = card.build_puppet_data([dict(PU_DI, id=1), dict(PU_TIAN, id=2)],
+                                  {"active_id": 1}, p)
+    blob = "\n".join("\n".join(x["lines"]) for x in data["puppets"])
+    check("战力 " in blob, "傀儡卡没有战力对标行：%s" % blob)
+    check("斗宗级" in blob, "地级（七星斗宗躯）卡面没标「斗宗级」：%s" % blob)
+    check("斗尊级" in blob, "天级（斗尊躯）卡面没标「斗尊级」：%s" % blob)
+    # 嵌套括号：``（斗皇级（受你境界所限），不吃斗气/斗技）`` 这种（实测踩过）
+    for seg in blob.split("\n"):
+        if seg.count("（") > 1 or seg.count("(") > 1:
+            check(False, "卡面出现嵌套括号：%s" % seg)
+    # 数字必须与 puppet_attack 同源，不许渲染层另算
+    check(data["puppets"][1]["atk"] == str(int(pc.puppet_attack(PU_TIAN, p))),
+          "卡面攻击与 puppet_attack 不同源：%s vs %s"
+          % (data["puppets"][1]["atk"], int(pc.puppet_attack(PU_TIAN, p))))
+
+
+def test_fight_single_source():
+    """fight 的傀儡输出必须来自 ``puppet_expected_damage``（唯一函数）。
+
+    用 ``puppet_attack`` 会漏掉结阵与异火，而 ``monster_scaled`` 的反解是按前者
+    让怪变厚的 —— 两处不同源就是「带结阵反而吃亏」（第二轮遗留 bug，本轮修）。
+    """
+    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
+               encoding="utf-8").read()
+    check("_pup_atk = _pc0.puppet_expected_damage(" in src,
+          "fight 的 _pup_atk 没走 puppet_expected_damage —— 结阵/异火会漏算，"
+          "而怪血反解是按它算的，带结阵反而吃亏")
+
+
 def test_tower_anchors_reference_not_player():
     """塔的怪血必须锚标尺玩家（同层同一只怪），源码级红线。"""
     src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
@@ -414,11 +531,15 @@ def test_tower_anchors_reference_not_player():
 def _run() -> int:
     for fn in (test_signatures, test_command_layer_passes_puppet,
                test_anchor_follows_level, test_not_negligible_at_high_level,
-               test_tier_gradient, test_material_mult, test_formation_cap,
+               test_tier_gradient, test_realm_comes_from_body,
+               test_old_save_falls_back_not_scrap, test_cap_survives_material_bonus,
+               test_material_mult, test_formation_cap,
                test_puppet_worth_bringing, test_full_comp_cancels_out,
                test_enemy_comp_is_discount,
                test_no_puppet_path_unchanged, test_duel_symmetric,
                test_five_battle_entries_bring_puppet,
+               test_card_shows_realm_label,
+               test_fight_single_source,
                test_tower_anchors_reference_not_player):
         try:
             fn()
