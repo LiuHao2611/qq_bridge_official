@@ -1713,7 +1713,13 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         p["exp"] = int(p.get("exp", 0)) + exp
         gold = int(mon["gold"] * (cfg.DROP_GOLD_MULT[0] + rng()))
         p["gold"] = int(p.get("gold", 0)) + gold
-        res.update(exp=exp, gold=gold, drops=_roll_drops(p, rng, mon))
+        # 傀儡专用材料单独收集（真实列 puppet_materials，不进 bag）：
+        # rng 调用全部追加在既有判定之后，老路径掉落序列逐字节不变。
+        _pup_drops: list = []
+        res.update(exp=exp, gold=gold,
+                   drops=_roll_drops(p, rng, mon, _pup_drops))
+        if _pup_drops:
+            res["puppet_drops"] = _pup_drops
     else:
         p["losses"] = int(p.get("losses", 0)) + 1
         # 气血已在上面统一成「上限 × LOSE_HP_FLOOR」，这里不再二次改写：
@@ -2483,7 +2489,7 @@ def duel(p, vic, rng=random.random) -> dict:
             "exhausted": rounds >= int(cfg.HARD_ROUND_CAP)}
 
 
-def _roll_drops(p, rng, mon=None) -> list:
+def _roll_drops(p, rng, mon=None, puppet_out=None) -> list:
     """[源码 h.java:57-78] 千分率判定 + 基础值到 2 倍随机。
 
     2026-11-18 天材地宝分级掉落（用户「天才地宝也按怪物等级分配，还有 boos」）：
@@ -2492,6 +2498,11 @@ def _roll_drops(p, rng, mon=None) -> list:
       * 传入 mon 后，按 ``mon['lv']`` 选可掉 tier（lv 越高池越深），逐档独立千分率判定；
         ``mon['is_boss']`` 为真时**额外必掉一件 tier4 专属天材地宝**。
       * 每件天材地宝自带 effect/value，服下即生效（见 use_item），不是背包摆设。
+
+    2026-11-20 傀儡多配方材料：同样追加在**最后**，老路径 rng 序列只增不改。
+    这些料属于傀儡专用（真实列 ``puppet_materials``），**不进 players.data 的 bag**，
+    所以只收集进 ``puppet_out``，由命令层 ``await pstore.add_material`` 落库。
+    ``puppet_out=None``（老调用）时整段跳过 —— 行为与改动前逐字节一致。
     """
     out = []
     if int(rng() * 1000) < cfg.DROP_RATE_STONE:
@@ -2535,6 +2546,23 @@ def _roll_drops(p, rng, mon=None) -> list:
         _nm = cfg.HEAL_PILL_HP if rng() < 0.5 else cfg.HEAL_PILL_MP
         add_item(p, _nm, 1)
         out.append((_nm, 1))
+
+    # ---- 傀儡专用材料（2026-11-20 多配方；只在命令层要收集时才跑）----
+    # 只写 puppet_out，**不写 out**：out 是「进背包的战利」，这些料进傀儡库真实列，
+    # 混进 out 会让展示与账目对不上（还挤掉真正的战利品位置）。
+    if puppet_out is not None:
+        _elite = is_boss or mon_tier(mon.get("kind")) == "elite"
+        for _nm, _spec in cfg.PUPPET_DROPS.items():
+            _minlv, _rate, _need_elite = _spec
+            if lv < int(_minlv) or (_need_elite and not _elite):
+                continue
+            if int(rng() * 1000) < int(_rate):
+                puppet_out.append((_nm, 1))
+        if _elite:
+            for _minlv, _nm in cfg.PUPPET_DROPS_SURE:
+                if lv >= int(_minlv):
+                    puppet_out.append((_nm, 1))
+                    break
     return out
 
 

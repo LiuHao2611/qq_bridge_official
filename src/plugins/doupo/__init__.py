@@ -944,8 +944,11 @@ async def _(event: Event):
         await puppet_cmd.finish("⚠️ 傀儡遗迹卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
         return
     if "炼制傀儡" in raw:
+        # 2026-11-20 多配方：「炼制傀儡 <配方名>」按配方开炉；留空自动选最高档。
+        _m = re.search(r"炼制傀儡\s*(.*)", raw)
+        _arg = (_m.group(1) if _m else "").strip()
         await puppet_cmd.finish(
-            await commands.cmd_craft_puppet(store, qq, puppet_store_inst))
+            await commands.cmd_craft_puppet(store, qq, puppet_store_inst, _arg))
         return
     m = re.search(r"傀儡\s*(.*)", raw)
     arg = (m.group(1) if m else "").strip()
