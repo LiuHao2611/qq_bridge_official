@@ -434,17 +434,22 @@ def on_turn_start(target_state: dict, rng) -> dict:
     return {"dot_dmg": dot_dmg, "skip": skip, "notes": notes}
 
 
-def on_incoming(self_state: dict, dmg: int, rng, ctx: dict | None = None) -> dict:
+def on_incoming(self_state: dict, dmg: int, rng, ctx: dict | None = None,
+                hit: float = 0.0) -> dict:
     """自身受击：结算闪避 / 减伤 / 反伤。
 
     返回 ``{final, reflect, evaded, notes}``；final 已含减伤，reflect 为反弹给对方的伤害。
+
+    ``hit``：攻击方命中率（分数 0~1，2026-11-20 命中对冲）。与 ``core.hit_rate``
+    同一条口径 —— 实际闪避 = max(0, 自身闪避 − 命中)。默认 0.0 时逐字节不变。
     """
     ctx = ctx or {}
     st = self_state
     notes: list[str] = []
     # 压闪避（2026-11-19 修）：对手挂来的 debuff_evade 记在自己 state 上，
     # 受击时按 target_evade_delta 扣减自身闪避率。无压闪避时 delta=0，逐字节不变。
-    evade = float(st.get("evade", 0)) + target_evade_delta(st)
+    evade = (float(st.get("evade", 0)) + target_evade_delta(st)
+             - max(0.0, float(hit)))
     if evade > 0 and rng() < evade:
         return {"final": 0, "reflect": 0, "evaded": True,
                 "notes": [f"闪避{_pct(max(0.0, float(st.get('evade', 0))))}"]}

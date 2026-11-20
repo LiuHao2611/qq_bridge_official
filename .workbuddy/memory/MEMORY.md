@@ -39,3 +39,13 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 **技能效果必须逐型验落地**：`tests/test_doupo_skill_effects_land.py` 对 skill_book 声明的 16 种 effect 做同参数对照实验（带效果 vs 不带效果各打一场，只看日志数值）→ 23 条。新增 effect 类型必须同时在该文件补一条，否则等于只加描述。
 **目标侧闪避曾是死机制**：`_hit` 只算防御减伤，怪挂「身法」不闪 → 玩家 7 门「压闪避」压空气。现 `mon["dodge"]`→`m_fx["evade"]`，在 `on_hit` **之前**结算（闪过不挂毒不降攻），**`t_ev<=0` 绝不掷骰**（否则旧战斗 rng 序列全变，211 条回看测试会一起红）。已知弱点：控场是命中后挂，目标闪避>30% 时压闪避挂不上。
 **基线红清单已清空**：菜单 52 条 / 菜单卡 cap 3600（52 条实渲 3474）/ 异火面板改判「不许印」/ 火焰出处改判台账。
+
+## 11. 命中 ↔ 闪避对冲 + 怪物隐藏面板（2026-11-20 第四轮）
+**唯一口径**：`实际闪避% = max(0, 目标闪避% − 攻击方命中%)`，PVE 双侧同一条，禁在 fight/_hit/on_incoming 各写一份。三处都要扣：`fight()` 的 `dodge` 阈值（怪 `panel["hit"]`）、`_hit(atk_hit=)`（玩家 `hit_rate`）、`on_incoming(hit=)`（**临时身法也得对冲**）。
+**玩家命中绝不吃敏捷**（敏捷已同产闪避+暴击，再加＝两边同步成长，词条等于没加）：`6 + 大境界×1.5 + bonus["命中"]`（凝识丹 +5%/枚）。
+**怪物面板** `core.monster_panel(lv, kind, is_boss)`：眼力 = `level_dodge(lv) − cfg.MON_HIT_RESIDUAL(50)`（正好抵掉"靠等级白拿的身法"）；暴击 `2+0.8k` cap25、身法 `3+1.6k` cap32，精英×1.20/BOSS×1.45，**眼力不加系数**（加了必打关变必输）。**面板只挂 `monster_scaled` 实例，绝不进 hp/atk 反解**；手搓怪（测试直接给 hp/atk）零面板 → 200+ 条逐招快照零回归，别再给它们"补"面板。
+**怪击暴击与伤害浮动共用一次采样**（`roll > 1+var−2·var·c`）：概率精确且不多吃 rng；`MON_DMG_VAR=0` 时无暴击。
+**削弱旋钮只有一个** `cfg.MON_HIT_RESIDUAL`：70→96%、60→91%、**50（采用）→87% 且最低胜率73%**、45→破 70% 下限。高层实际闪避 80→50。
+**九星突破必须连带重标定**：`BOSS_BREAK_HP_MULT 1.60→1.15`、`ATK_MULT 1.15→1.10`（必须 >1，测试断言"BOSS 攻击高于同阶基准"），否则 92%→22%。12 档现 35%~98%。
+`_balance.py::species_pool` 已改为与 `pick_monster` 同口径；旧版"取不到退全表最后两只"会让 1~6 级判成打 lv102，报告假数据。改完 `_balance.py` **全部达标**。
+守门 `tests/test_doupo_hit_rate.py` 25 条 + `tools/mutate_hit_rate.py` 9 组。**手搓怪用例必须满级怪 + 拖满 30 回合**，否则小样本抓不住。镜像无 pytest；插件测试不能同进程跑（Plugin already exists: doupo）。

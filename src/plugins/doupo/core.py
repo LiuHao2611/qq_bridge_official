@@ -225,6 +225,33 @@ def crit_rate(p) -> float:
     return float(min(80, base))
 
 
+def level_dodge(lv: int) -> float:
+    """**不靠任何装备/异火/丹药**、纯等级带来的闪避百分点（上限同 dodge_rate）。
+
+    两个用途，同一条曲线，保证「同等级同身法」：
+      * 怪物眼力的基准（``monster_panel`` 用它抵掉玩家白拿的身法）；
+      * 让「等级涨上去自然就闪」这件事可被度量，而不是散在 dodge_rate 里。
+    """
+    agi = c_stat(cfg.HERO_BASE["敏捷"], int(lv))
+    return float(min(80, cfg.HERO_DODGE + (agi + 20) // 200))
+
+
+def hit_rate(p) -> float:
+    """命中率（%）。**与闪避对冲的那一半**：实际闪避 = max(0, 目标闪避 − 命中)。
+
+    2026-11-20 用户：「应该有一个和闪避对应的词条，不然闪避太超标了」。
+
+    刻意**不吃敏捷**：敏捷已经同时产闪避与暴击（``STAT_BATTLE_ROLE``），
+    若命中也从敏捷来，两边同速成长 → 命中永远把闪避抵平，等于加了个假词条。
+    这里按大境界给基数，剩下的留给后天投入（凝识丹 ``bonus["命中"]``），
+    玩家才有一条能自己决定的解法。
+    """
+    lv = int(p.get("lv", 1))
+    base = cfg.HERO_HIT + cfg.HERO_HIT_PER_REALM * cfg.realm_index(lv)
+    base += int((p.get("bonus") or {}).get("命中", 0))
+    return float(min(cfg.HIT_CAP, base))
+
+
 def power(p) -> int:
     """战力：用于排行榜/切磋。"""
     s = stats(p)
@@ -746,6 +773,37 @@ def cum_damage(p, rounds: int, puppet_bonus: float = 0.0) -> float:
     return total
 
 
+def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
+    """怪物隐藏面板：与玩家同构的**命中 / 暴击 / 闪避**（单位都是 %）。
+
+    用户 2026-11-20 口径：「按照等级来，然后无论是小怪还是精英怪，还是 boos，
+    都应该拥有和玩家一样的隐藏面板，这样战斗逻辑进行时才不会出现个别词条
+    一边倒的情况」。
+
+    旧版怪物这三项全无：玩家把闪避堆到 80 就是物理免疫（九星突破 BOSS 实测
+    全场 ``taken=0``），怪物也不会闪、不会暴 —— 词条天平彻底一边倒。
+
+    **不进 hp/atk 反解**：难度仍只由物种等级 / 塔层 / 周本层决定，
+    这个面板只决定「谁打得中谁、谁打得疼」，不改「几回合打完」的设计值。
+    """
+    k = cfg.realm_index(max(1, int(lv)))
+    mul = 1.0
+    if is_boss:
+        mul = float(cfg.MON_PANEL_BOSS)
+    elif "精英" in str(kind):
+        mul = float(cfg.MON_PANEL_ELITE)
+    # 眼力 = 该等级白拿的身法 − 残值：同等级正好抵掉「等级送的闪避」。
+    # 不加精英/BOSS 系数 —— 眼力再拔高就会把必打关（九星突破）压成必输。
+    hit = max(0.0, level_dodge(lv) - float(cfg.MON_HIT_RESIDUAL))
+    return {
+        "hit": round(min(95.0, hit), 2),
+        "crit": round(min(cfg.MON_CRIT_CAP, (cfg.MON_CRIT_BASE
+                                            + cfg.MON_CRIT_PER_REALM * k) * mul), 2),
+        "dodge": round(min(cfg.MON_DODGE_CAP, (cfg.MON_DODGE_BASE
+                                              + cfg.MON_DODGE_PER_REALM * k) * mul), 2),
+    }
+
+
 def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
     """把"物种"实例化成一只同阶怪。
 
@@ -792,6 +850,7 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
             if _tok in _kind:
                 _skill = _sk
                 break
+    _panel = monster_panel(int(mon["lv"]), _kind, _is_boss)
     return {
         "name": mon["name"], "lv": int(mon["lv"]),
         "hp": max(1, m_hp), "atk": max(1, m_atk), "def": m_def,
@@ -799,6 +858,10 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
         "kind": _kind, "is_boss": _is_boss,
         "skill": dict(_skill) if _skill else None,
         "character": dict(_character) if _character else None,
+        # 2026-11-20 隐藏战斗面板（命中/暴击/闪避，%）。挂在实例上而不是
+        # 现算，是为了让「物种/塔层/周本」三条路径拿到**同一份**面板口径，
+        # 也让手搓怪（测试里直接给 hp/atk 的字典）保持零面板 → 行为零回归。
+        "panel": _panel,
     }
 
 
@@ -852,7 +915,7 @@ def _pick_skill(p, mp: int, rng=random.random):
 
 
 def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
-         crit_add=0.0, extra_effects=None) -> dict:
+         crit_add=0.0, extra_effects=None, atk_hit=0.0) -> dict:
     """一次出手：entry 为 None 时用武器普攻，否则按该斗技算伤害。
 
     2026-11-15 多维效果：传入 ``fx_target`` 时才结算技能效果（破防/连击/增伤/
@@ -895,10 +958,14 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     # 千幻玄冰刺）压了个不存在的属性 → 等于只加了描述。
     # 现在补上：目标闪避 = 自身 evade + 被压制的量（debuff_evade 为负）。
     # 位置在 on_hit **之前**：闪掉了就不该挂毒/降攻（miss 不产生命中效果）。
+    # 2026-11-20 命中对冲：攻击方的命中（``atk_hit``，%）直接减在目标闪避上，
+    # 与「玩家躲怪」是同一条公式的另一半（见 cfg 的 HERO_HIT/MON_* 注释）。
+    # ``atk_hit`` 默认 0.0 → PVP(duel) 与既有调用方的阈值逐字节不变。
     # ⚠️ t_ev<=0 时**不掷骰**，所以普通战斗的 rng 序列逐字节不变。
     if fx_target is not None:
         t_ev = max(0.0, float(fx_target.get("evade", 0))
-                   + fx.target_evade_delta(fx_target))
+                   + fx.target_evade_delta(fx_target)
+                   - max(0.0, float(atk_hit)) / 100.0)
         if t_ev > 0 and rng() < t_ev:
             return {"dmg": 0, "crit": False, "kind": kind, "skill": entry is not None,
                     "move": kind, "tier": str((entry or {}).get("tier") or ""),
@@ -1245,7 +1312,6 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                   "auto": True}))
             return
 
-    dodge = min(95, dodge_rate(p) + float(tm.get("evade_add", 0)))
     crit_add = float(tm.get("crit_add", 0))
     lifesteal = 0.02 * int((p.get("flames") or {}).get("三千焱炎火", 0))
     heal_mult = float(tm.get("heal_mult", 1.0))
@@ -1254,9 +1320,23 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     var = max(0.0, float(cfg.MON_DMG_VAR))
     # 2026-11-15 多维效果：本场临时状态（战后即弃，绝不写回 p/mon）
     p_fx, m_fx = fx.new_state(), fx.new_state()
-    # 2026-11-20：怪物可带固有闪避（mon["dodge"]，0~0.9）。默认 0 → 既有战斗不变；
-    # 一旦某物种/词缀给了身法，玩家的「压闪避」才有东西可压（见 _hit 目标闪避结算）。
-    m_fx["evade"] = max(0.0, min(0.9, float(mon.get("dodge") or 0)))
+    # 2026-11-20 怪物隐藏面板（命中/暴击/闪避，%）。**只认 monster_scaled 挂在
+    # 实例上的 panel**：手搓怪（测试/工具直接给 hp/atk 的字典）没有 panel →
+    # 三项全 0 → 判定阈值逐字节等于旧版，既有逐招快照零回归。
+    _panel = mon.get("panel") or {}
+    m_hit = max(0.0, float(_panel.get("hit") or 0.0))
+    m_crit = max(0.0, float(_panel.get("crit") or 0.0))
+    # 怪物闪避的既有口径是**分数**（规格里手写 mon["dodge"]=0.25 表示 25%），
+    # 面板是百分数 —— 这里显式区分：实例显式带走 dodge 就用它，否则读面板换算。
+    if "dodge" in mon:
+        m_dodge_frac = max(0.0, min(0.9, float(mon["dodge"] or 0)))
+    else:
+        m_dodge_frac = max(0.0, min(0.9, float(_panel.get("dodge") or 0.0) / 100.0))
+    m_fx["evade"] = m_dodge_frac
+    # 命中对冲（玩家防守侧）：怪物的命中直接减在玩家闪避上，与 _hit 里
+    # 「玩家命中减怪闪避」是同一条公式的另一半。m_hit=0（手搓怪）时不变。
+    p_hit = hit_rate(p)
+    dodge = max(0.0, min(95.0, dodge_rate(p) + float(tm.get("evade_add", 0))) - m_hit)
     m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
 
     # 2026-11-17 完整战斗回看的「逐条快照」：每条 log 都带当时的敌我血量/斗气，
@@ -1335,7 +1415,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             entry, cost = None, 0
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
-                   crit_add=crit_add, extra_effects=self_effects)
+                   crit_add=crit_add, extra_effects=self_effects, atk_hit=p_hit)
         # 心火共鸣：玩家 1~2 回合增伤（承伤减免在怪击那段）
         # 注意**不在这里递减**：递减放在本回合双方都行动完之后，否则 1 回合的
         # 共鸣只有增伤吃到、减伤吃不到（怪行动时计数已经归零）。
@@ -1483,16 +1563,30 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                     fx.on_hit([_mech_eff], m_fx, p_fx, dealt, rng,
                                               ctx={"target_flags": set(), "target_hp_ratio": 0.5})
                                 sk_note.append("%s！" % _mn)
+                # 怪击暴击（2026-11-20 隐藏面板）：与伤害浮动**共用同一次采样**。
+                # roll 是那次采样的单调变换，判「roll 落在区间顶端 2·var·c 内」
+                # 等价于独立掷一次暴击（概率精确等于 c），却不多消耗一次 rng ——
+                # 既有逐招快照的随机序列不被打乱（test_battle_review 211 条）。
+                # ⚠️ MON_DMG_VAR=0 时没有浮动也就没有暴击（同一次采样的必然结果）。
+                _m_crit = (m_crit > 0 and var > 0
+                           and roll > 1.0 + var - 2.0 * var * min(1.0, m_crit / 100.0))
+                if _m_crit:
+                    dealt = max(1, int(dealt * 1.5))
                 # 心火共鸣：承伤减免（原著「短暂晕眩足以令战局顷刻间转变」）
                 if fortune_left > 0:
                     dealt = max(1, int(dealt * float(cfg.FORTUNE_TAKEN_MULT)))
                     sk_note.append("心火护体，伤害减轻")
                 # 玩家侧减伤/闪避/反伤（卸力水镜/雷蝠天翼/燕返击）
-                inc = fx.on_incoming(p_fx, dealt, rng)
+                # 命中对冲：怪物的命中同样压玩家的**临时**闪避（技能给的身法），
+                # 否则「命中」只对基础闪避生效，留一个白嫖洞。
+                inc = fx.on_incoming(p_fx, dealt, rng, hit=m_hit / 100.0)
                 hp -= inc["final"]
                 taken += inc["final"]
                 log_entry = {"dmg": inc["final"], "kind": "兽击", "taken": True,
                              "move": "兽击",
+                             # 怪击暴击：回看卡词条行据此打「暴击」标记，
+                             # 解释「实收 > 面板−防御」的缺口（纯展示字段）。
+                             "crit": bool(_m_crit),
                              # 回看卡「承伤构成」：原始 → 防御削减 → 减伤吸收 → 实际。
                              # 纯展示字段，不参与结算（旧行为逐字节不变）。
                              "atk_raw": int(dealt_atk_raw),
@@ -2781,6 +2875,12 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
         b = p.setdefault("bonus", {})
         b["暴击"] = int(b.get("暴击", 0)) + val
         return {"ok": True, "msg": lead + f"永久暴击 +{val}%"}
+    if eff == "hit":
+        # 2026-11-20 命中（与风行丹的永久闪避成对）：落到 bonus["命中"]，
+        # 由 hit_rate() 唯一读取 —— 卡面/战斗/人物卡不会再各算一套。
+        b = p.setdefault("bonus", {})
+        b["命中"] = int(b.get("命中", 0)) + val
+        return {"ok": True, "msg": lead + f"永久命中 +{val}%"}
     if eff == "stat":
         b = p.setdefault("bonus", {})
         for k in ("力量", "敏捷", "斗气", "防御", "体力"):
