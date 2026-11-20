@@ -312,6 +312,53 @@ async def main():
     await fire("送 100 @某人", mk_group(A, "送 100", at=B), "金币")
     await fire("帮助", mk_group(A, "帮助"), None, expect_image=True)  # 2026-11-16 玩法卡
 
+    # ===== 傀儡子命令必须「出声」：回执不许被傀儡卡吞掉（2026-11-20 第十一轮）=====
+    # 用户报「傀儡淬炼口令没触发」。真相：命令命中了、雷淬石与金币也真扣了，但
+    # handler 结尾无条件出傀儡卡，把 cmd_puppet 的文本回执整条丢弃——玩家只收到
+    # 一张没变化的名录卡，看起来就像口令没触发。
+    # 判据必须落在**真实 matcher + 真实回包文本**上：命令层单测（test_doupo_puppet
+    # 直接调 cmd_puppet）绕过了 handler，全绿也抓不到「回执被卡吞」，本轮就是这样漏的。
+    await fire("傀儡（出图口令仍出图）", mk_group(A, "傀儡"), None, expect_image=True)
+    await fire("傀儡 配方（回执是文本不是卡）", mk_group(A, "傀儡 配方"), "傀儡配方")
+    await fire("傀儡 淬炼（尚无傀儡也须出声）", mk_group(A, "傀儡 淬炼"), "尚未拥有傀儡")
+    await fire("炼制傀儡（门禁回执是文本不是卡）", mk_group(A, "炼制傀儡"), "未能开炉")
+
+    # 够格玩家：真炼一具，顺带验「炼制成功出卡」与有傀后的各子命令回执。
+    # ⚠️ lv 与 mp 必须**分两次落库**：realm 由 put_player 同步，同步之后
+    # core.mp_max() 才会按新境界取值；一次写完会拿着旧 realm 算 mp（本轮踩到）。
+    _pa = await p_mod.store.get_player(str(A))
+    _pa["lv"] = 64
+    await p_mod.store.put_player(_pa)
+    _pa = await p_mod.store.get_player(str(A))
+    _pa["alch"] = cmds.cfg.PUPPET_ALCH_MIN
+    _pa["craft_count"] = cmds.cfg.PUPPET_CRAFT_COUNT_MIN
+    _pa["high_grade_crafts"] = cmds.cfg.PUPPET_HIGH_GRADE_MIN
+    _pa.setdefault("flames", {})["青莲地心火"] = 4     # 异火闸 + A 火
+    _pa["gold"] = 300000
+    # 斗气给到上限之上由 put_player 自行封顶：炼制消耗按 mp_max 的比例算，
+    # 手算具体值时 realm 何时同步会让数字漂（本轮踩过），交给 cap 最稳。
+    _pa["mp"] = 10 ** 9
+    await p_mod.store.put_player(_pa)
+    await p_mod.puppet_store_inst.set_lore(str(A), True)
+    for _mn in cmds.cfg.PUPPET_MATERIALS:
+        await p_mod.puppet_store_inst.add_material(str(A), _mn, 3)
+    await fire("炼制傀儡 铜尸傀（成傀出卡）",
+               mk_group(A, "炼制傀儡 铜尸傀"), None, expect_image=True)
+    # 一炉人级就要烧掉 mp_max 的 60%（PUPPET_MP_FACTOR[0]），连炼两炉必须补气，
+    # 否则第二炉会被「斗气不足以撑完炼制」正常拦下（那不是 bug，是设计）。
+    # 赋一个超上限的值由 get_player 自行 clamp 到 mp_max，比手算稳。
+    _pa = await p_mod.store.get_player(str(A))
+    _pa["mp"] = 10 ** 9
+    await p_mod.store.put_player(_pa)
+    await fire("炼制傀儡 自定 四维（成傀出卡）",
+               mk_group(A, "炼制傀儡 自定 强者躯体 火属性魔核 无主灵魂 精铁"),
+               None, expect_image=True)
+    await fire("炼制傀儡 自定 错名（文本报错）",
+               mk_group(A, "炼制傀儡 自定 铁疙瘩 火属性魔核 无主灵魂 精铁"),
+               "不是有效的躯体材料")
+    await fire("傀儡 淬炼（真扣料，回执须出声）", mk_group(A, "傀儡 淬炼"), "雷霆淬炼")
+    await fire("傀儡 结阵（真有傀）", mk_group(A, "傀儡 结阵"), "傀儡结阵")
+
     # prove-it 自举：fire(expect_image=True) 必须真的拦住「只回纯文本却声称出图」。
     # 把 fire 放宽成旧写法，下面这条 STATIC 就会 FAIL —— 防止「假通过」悄悄回归。
     # 用「修炼」（纯文本口令）做探针：帮助已改卡片，不能再用它当"纯文本"样本。

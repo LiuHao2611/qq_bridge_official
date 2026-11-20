@@ -1013,6 +1013,78 @@ async def render_ruin(state: dict, day: str = "", report: dict | None = None) ->
                               CARD_RUIN_NAME)
 
 
+CARD_CRAFT_NAME = "斗破傀儡炼制"
+
+
+def build_craft_data(report: dict | None) -> dict:
+    """成傀结果 → doupo_craft 模板参数（2026-11-20 第十一轮）。
+
+    取数唯一源是 ``commands.cmd_craft_puppet(report=...)`` 写下的那份 dict——
+    卡片**不重算**攻击力 / 用料 / 斗气消耗。重算就是第二套口径（第三轮已经吃过
+    「卡面数字与实战两张皮」的亏），也等于把「这一炉到底扣了什么」变成猜测。
+
+    没有 ``ok`` 标记时返回空 dict：失败 / 引导类回复本来就是逐条文本，不该出卡。
+    """
+    rep = dict(report or {})
+    if not rep.get("ok"):
+        return {}
+    tier_name = str(rep.get("tier_name") or "")
+    skin = str(rep.get("skin") or "")
+    label = str(rep.get("realm_label") or "")
+    head = ["【%s】%s档 · %s皮" % (rep.get("name") or "傀儡", tier_name, skin),
+            ("肉身攻击 %d　%s" % (int(rep.get("atk") or 0), label)) if label
+            else ("肉身攻击 %d" % int(rep.get("atk") or 0)),
+            "不吃斗气、不施斗技 —— 傀儡只以肉身搏杀"]
+    body = str(rep.get("body_name") or "")
+    if body:
+        star = int(rep.get("body_star") or 0)
+        head.append("躯体：%s（%s%s）" % (
+            body, rep.get("body_realm") or "凡躯",
+            ("·%d星" % star) if star else ""))
+    state = "已认主·永不背叛" if rep.get("bonded") else "未认主"
+    if rep.get("awakened"):
+        state += "　有灵（北王式）"
+    head.append("雷淬纯度 %d%%　%s" % (int(rep.get("purity") or 0), state))
+
+    cost = rep.get("cost") or {}
+    groups = [
+        {"name": "成傀", "rows": head},
+        {"name": "用料", "rows": [
+            "、".join("%s×%d" % (k, int(v)) for k, v in cost.items()) or "—",
+            "斗气 -%d（余 %d）" % (int(rep.get("need_mp") or 0),
+                                  int(rep.get("mp_left") or 0)),
+        ]},
+    ]
+    down = str(rep.get("downgrade") or "")
+    if down:
+        groups.append({"name": "降档提醒", "rows": [down]})
+    groups.append({"name": "下一步", "rows": [
+        "发「傀儡 淬炼」以雷淬石提纯升档（每淬扣 %d 枚）" % int(cfg.PUPPET_TEMPER_STONE),
+        "发「傀儡」看名录与护主面板；发「傀儡 结阵」看合击",
+    ]})
+    sub = "%s%s · %s·%s · id=%d" % (
+        "自选材料 · " if rep.get("custom") else "",
+        rep.get("recipe") or "", tier_name, skin, int(rep.get("pid") or 0))
+    return {
+        "title": "傀儡炼制",
+        "subtitle": sub,
+        "groups": groups,
+        "tip": "发「傀儡」看名录 · 发「傀儡 淬炼」雷淬升档 · 发「傀儡 配方」看全部配方",
+    }
+
+
+async def render_craft_for(report: dict | None) -> bytes | None:
+    """「炼制傀儡」出图入口：只吃命令层写下的 report，不另查库。
+
+    返回 None 表示「这一炉没有成傀数据」——调用方此时应发文本回执，不要拿
+    DEMO 占位卡糊过去（那会让玩家以为炼成了）。
+    """
+    data = build_craft_data(report)
+    if not data:
+        return None
+    return await _render_list("doupo_craft", data, CARD_CRAFT_NAME)
+
+
 # ---------------------------------------------------------------------------
 # 按 QQ 出图的两个唯一入口（2026-11-18 事故后补）
 #

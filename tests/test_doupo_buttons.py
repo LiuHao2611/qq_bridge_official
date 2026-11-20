@@ -207,6 +207,8 @@ def test_each_card_buttons_are_relevant_family():
         "battle": {"战斗评价"},
         "puppet": {"炼制傀儡", "傀儡遗迹", "战斗"},
         "ruin": {"炼制傀儡", "傀儡", "战斗"},
+        # 2026-11-20 傀儡炼制成卡（成傀后：看名录 / 回遗迹打料 / 打一场试刀）
+        "craft": {"傀儡", "傀儡遗迹", "战斗"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (
