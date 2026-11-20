@@ -611,13 +611,79 @@ def _player_round_output(p: dict) -> float:
             return 1.0
 
 
+def soul_base(puppet: Optional[dict]) -> int:
+    """材料决定的灵魂**基准值**：炼制时由灵魂材料写入，此后永不改写。
+
+    ``0/缺失`` 的老档按 900（旧口径的基准灵魂）算，与改造前逐字节一致。
+    它是木桶判档与材料系数的锚，**不许**再往里加养魂量（否则「已喂多少」
+    无从还原，上限就没有定义）。
+    """
+    return int((puppet or {}).get("soul_strength") or 900)
+
+
+def soul_fed_of(puppet: Optional[dict]) -> int:
+    """已养魂量（0..``PUPPET_SOUL_FEED_MAX``）；老存档没有该列 ⇒ 0。"""
+    if not puppet:
+        return 0
+    return max(0, min(int(cfg.PUPPET_SOUL_FEED_MAX), int(puppet.get("soul_fed") or 0)))
+
+
+def soul_total(puppet: Optional[dict]) -> int:
+    """**有效灵魂强度** = 基准值 + 养魂量（唯一读取口，``_material_mult`` 只调它）。
+
+    养魂为什么单独记账：见 ``cfg.PUPPET_SOUL_FEED_GAIN`` 那段注释 ——
+    基准值一改，上限就再也没法判定；分开记，``soul_fed=0`` 的老傀儡数值不变。
+    """
+    return max(0, soul_base(puppet)) + soul_fed_of(puppet)
+
+
+def soul_feed_info(puppet: Optional[dict]) -> dict:
+    """养魂进度面板（卡面 / 回执 / 测试同一份口径）。"""
+    fed = soul_fed_of(puppet)
+    cap = int(cfg.PUPPET_SOUL_FEED_MAX)
+    return {
+        "fed": fed, "cap": cap, "left": max(0, cap - fed), "maxed": fed >= cap,
+        "gain": int(cfg.PUPPET_SOUL_FEED_GAIN), "total": soul_total(puppet),
+    }
+
+
+def feed_soul(puppet: Optional[dict], pills: int) -> dict:
+    """把 ``pills`` 枚养魂涎渡进傀儡体内 —— **只算，不碰库、不碰背包**。
+
+    上限钳制只在这里做一次：喂到 190 再要求喂 5 枚，只会吃 1 枚到 200，
+    余下 4 枚原样留在包里（命令层按 ``used`` 扣丹）。这样既不会喂穿上限，
+    也不会出现「想喂满却白扔 4 枚」的浪费。
+    """
+    info = soul_feed_info(puppet)
+    n = max(0, int(pills or 0))
+    out = dict(info, ok=False, used=0, fed_new=info["fed"], reason="")
+    if puppet is None:
+        out["reason"] = "no_puppet"
+        return out
+    if info["maxed"]:
+        out["reason"] = "maxed"
+        return out
+    if n <= 0:
+        out["reason"] = "none"
+        return out
+    gain = max(1, info["gain"])
+    need = (info["left"] + gain - 1) // gain          # 喂满还差几枚
+    used = min(n, need)
+    fed_new = min(info["cap"], info["fed"] + used * gain)
+    out.update({"ok": True, "used": used, "fed": fed_new, "maxed": fed_new >= info["cap"],
+                "left": max(0, info["cap"] - fed_new)})
+    return out
+
+
 def _material_mult(puppet: dict) -> float:
     """材料系数（同档之内的差异）：基准 core7 / soul900 / metal2 / fire7 = 1.00。
 
     老傀儡全存这四个基准值 ⇒ 系数恰为 1.0，与「同档新傀同料」完全一致。
+    灵魂这一项读 ``soul_total``（基准 + 养魂量）：未养过魂时与旧口径完全相同，
+    养过之后攻击/气血/护甲一起长 —— 养魂不是一串孤立的数字。
     """
     core_t = int(puppet.get("core_tier") or 7)
-    soul = int(puppet.get("soul_strength") or 900)
+    soul = soul_total(puppet)
     mg = int(puppet.get("metal_grade") or 2)
     ft = int(puppet.get("fire_tier") or 7)
     m = (1.0

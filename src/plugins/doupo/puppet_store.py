@@ -38,7 +38,16 @@ from typing import Any, Dict, List, Optional
 
 from . import config as cfg
 
-DB_VER = 1
+DB_VER = 2
+
+#: 裸 ALTER 迁移表：``CREATE TABLE IF NOT EXISTS`` 只对**新库**生效，老库不会因为
+#: schema 字符串改了而多出一列 —— 玩家老存档会直接 ``no such column: soul_fed``。
+#: 只允许 ADD COLUMN 这种幂等操作（SQLite 不支持带默认值的复杂改列）。
+#: (表, 列, 列定义)
+_MIGRATIONS = (
+    # P3 养魂（第757章 N08）：老库补列，默认 0 ⇒ 数值与改造前完全一致。
+    ("puppets", "soul_fed", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 # 独立库文件：与 doupo.sqlite 同目录，文件名固定。
 PUPPET_DB_PATH = str(
@@ -69,6 +78,7 @@ CREATE TABLE IF NOT EXISTS puppets (
     core_attr     TEXT    NOT NULL DEFAULT '',
     soul_source   TEXT    NOT NULL DEFAULT '',
     soul_strength INTEGER NOT NULL DEFAULT 0,
+    soul_fed      INTEGER NOT NULL DEFAULT 0,   -- P3 养魂累计（0..200，与基准值分开记）
     mind_stripped INTEGER NOT NULL DEFAULT 0,
     metal_name    TEXT    NOT NULL DEFAULT '',
     metal_grade   INTEGER NOT NULL DEFAULT 0,
@@ -137,6 +147,12 @@ class PuppetStore:
             con = self._conn()
             with con:
                 con.executescript(_SCHEMA)
+                for _table, _col, _ddl in _MIGRATIONS:
+                    _have = {r["name"] for r in
+                             con.execute("PRAGMA table_info(%s)" % _table).fetchall()}
+                    if _col not in _have:
+                        con.execute("ALTER TABLE %s ADD COLUMN %s %s"
+                                    % (_table, _col, _ddl))
                 ver = con.execute("PRAGMA user_version").fetchone()[0]
                 if ver < DB_VER:
                     con.execute("PRAGMA user_version=%d" % DB_VER)
@@ -203,7 +219,8 @@ class PuppetStore:
         cols = (
             "qq", "name", "tier", "tier_name", "skin",
             "body_name", "body_realm", "body_star", "body_fresh", "body_fresh_until",
-            "core_tier", "core_attr", "soul_source", "soul_strength", "mind_stripped",
+            "core_tier", "core_attr", "soul_source", "soul_strength", "soul_fed",
+            "mind_stripped",
             "metal_name", "metal_grade", "fire_tier", "fire_attr",
             "purity", "bonded", "awakened", "origin", "damaged", "born",
         )
@@ -216,6 +233,7 @@ class PuppetStore:
             float(data.get("body_fresh_until") or 0),
             int(data.get("core_tier") or 0), str(data.get("core_attr") or ""),
             str(data.get("soul_source") or ""), int(data.get("soul_strength") or 0),
+            int(data.get("soul_fed") or 0),
             int(bool(data.get("mind_stripped", False))),
             str(data.get("metal_name") or ""), int(data.get("metal_grade") or 0),
             int(data.get("fire_tier") or 0), str(data.get("fire_attr") or ""),
@@ -266,8 +284,8 @@ class PuppetStore:
         allowed = {
             "name", "tier", "tier_name", "skin", "body_name", "body_realm", "body_star",
             "body_fresh", "body_fresh_until", "core_tier", "core_attr", "soul_source",
-            "soul_strength", "mind_stripped", "metal_name", "metal_grade", "fire_tier",
-            "fire_attr", "purity", "bonded", "awakened", "origin", "damaged",
+            "soul_strength", "soul_fed", "mind_stripped", "metal_name", "metal_grade",
+            "fire_tier", "fire_attr", "purity", "bonded", "awakened", "origin", "damaged",
         }
         bad = set(fields) - allowed
         if bad:
@@ -279,6 +297,8 @@ class PuppetStore:
         for k, v in fields.items():
             if k in ("body_fresh", "mind_stripped", "bonded", "awakened", "damaged"):
                 vals.append(int(bool(v)))
+            elif k == "soul_fed":
+                vals.append(int(v))
             else:
                 vals.append(v)
         vals += [str(qq), int(pid)]

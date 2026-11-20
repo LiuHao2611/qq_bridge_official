@@ -871,6 +871,7 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
         # atk / 护主都传 p：与 ``core.fight`` 同一个 p、同一个 guard_profile，
         # 卡面数字与实战掷的骰子是同一份（红线：只改一处必红）。
         g = pc.guard_profile(pu, p, pc.formation_count(roster))
+        _si = pc.soul_feed_info(pu)
         out["puppets"].append({
             "name": str(pu.get("name") or "傀儡"),
             "badge": "%s · %s皮%s" % (tier_name, skin, " · 出战" if pu.get("id") == elig.get("active_id") else ""),
@@ -896,6 +897,10 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
                     " · 有灵" if pu.get("awakened") else "",
                     # P1-1：战损在 PNG 名录卡上可见（此前只有文本名录卡有）
                     " · ⚠受损待雷淬修复" if pu.get("damaged") else ""),
+                # P3 养魂：文本卡与 PNG 卡同一份 soul_feed_info，卡面不再各算一套
+                "养魂 %d/%d%s · 有效灵魂 %d" % (
+                    _si["fed"], _si["cap"], "（已满）" if _si["maxed"] else "",
+                    _si["total"]),
             ],
             "active": bool(pu.get("id") == elig.get("active_id")),
         })
