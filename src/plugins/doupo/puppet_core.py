@@ -447,6 +447,55 @@ def make_puppet(p: dict, body: dict, core_info: dict, soul: dict,
 # ---------------------------------------------------------------------------
 # 战斗集成（红线：唯一期望输出函数）
 # ---------------------------------------------------------------------------
+def mark_strength(puppet: dict) -> int:
+    """P2 残傀原主印记强度（唯一口径）：档位越高印记越强（tier+1，1..3）。
+
+    原著 N03「印记太强，现在的我无法抹除」「若非亲手炼制过无法探知」。
+    """
+    return max(1, int((puppet or {}).get("tier", 0) or 0) + 1)
+
+
+def mark_exp_needed(puppet: dict) -> int:
+    """抹除该残傀印记所需炼制经验（craft_count），确定性、不掷骰。"""
+    return mark_strength(puppet) * int(cfg.PUPPET_MARK_EXP_PER)
+
+
+def reforge_body(puppet: dict, new_body_name: str) -> dict:
+    """P2 换躯重炼（E10/U11）：换躯体材料，五维木桶重算档位，存量继承。
+
+    原著依据（N10）：换躯后先降一星、再靠雷力补回 —— 这里体现为「tier 由新躯
+    在木桶里重算，可能升也可能降」，而 ``purity``（雷淬进度）原样保留，正好是
+    「靠雷力补回」的机制载体。
+
+    🚨 继承/重算边界（U11 单一真源）：
+      * 重算：``tier/tier_name/skin``（五维木桶）、``body_name/body_realm/body_star``；
+      * 保留：``purity/bonded/awakened/soul_strength/damaged/mind_stripped``
+        及魔核/金属/火等未换的维度 —— 旧主的一切养成不因换躯丢失（旧躯本身不返还）。
+      * 新躯体名不在表（手搓/非法）返回空 dict，命令层如实报错，绝不静默换失败。
+    """
+    row = slot_row("body", new_body_name)
+    if not row:
+        return {}
+    old = dict(puppet or {})
+    slots = {
+        "body": slot_tier("body", new_body_name),
+        "core": slot_tier("core", core_name_of(old)),
+        "soul": slot_tier("soul", old.get("soul_source")),
+        "metal": slot_tier("metal", old.get("metal_name")),
+        "fire": fire_grade_of_tier(int(old.get("fire_tier") or 0)),
+    }
+    tier = max(0, recipe_tier(slots))
+    tier_name, skin = cfg.PUPPET_TIER_BY_IDX[tier]
+    out = dict(old)
+    out.update({
+        "body_name": str(new_body_name),
+        "body_realm": str(row[1]) if len(row) > 1 else "",
+        "body_star": int(row[2]) if len(row) > 2 else 0,
+        "tier": tier, "tier_name": tier_name, "skin": skin,
+    })
+    return out
+
+
 def puppet_realm_lv(puppet: Optional[dict]) -> int:
     """傀儡战力对应的等级 —— 由**躯体**境界决定（第900章「等级之差取决炼制材料」）。
 

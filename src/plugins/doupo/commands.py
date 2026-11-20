@@ -370,7 +370,7 @@ MENU_GROUPS = (
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
-        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂"),
+        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯"),
         ("傀儡遗迹", "每日副本六段自动连打至力竭：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿"),
     )),
     ("炼药 · 宝库", (
@@ -2804,7 +2804,7 @@ async def cmd_pick(store, qq, n) -> str:
 # 都读它。此前 handler 无条件出傀儡卡，把淬炼/结阵/收服/融魂/配方的回执整条丢掉
 # ——玩家花了雷淬石和金币、只收到一张没变化的名录卡（2026-11-20 第十一轮，用户报
 # 「傀儡淬炼口令没触发」，真相是命令触发了、也真扣了料，只是回执被卡吞了）。
-PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂")
+PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂", "换躯")
 
 
 def puppet_is_subcmd(arg) -> bool:
@@ -2860,7 +2860,9 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     if arg.startswith("收服"):
         return await _cmd_puppet_claim(store, qq, p, arg, pstore)
     if arg.startswith("融魂"):
-        return await _cmd_puppet_awaken(store, qq, p, roster, elig, pstore)
+        return await _cmd_puppet_awaken(store, qq, p, roster, elig, pstore, arg)
+    if arg.startswith("换躯"):
+        return await _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg)
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
@@ -2905,7 +2907,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     ]
     if len(roster) > 1:
         lines.append("　持有 %d 具；发「傀儡 结阵」查看合击" % len(roster))
-    lines.append("　子命令：配方 / 淬炼 / 结阵 / 收服 / 融魂")
+    lines.append("　子命令：配方 / 淬炼 / 结阵 / 收服 / 融魂 / 换躯")
     return "\n".join(lines)
 
 
@@ -3277,6 +3279,42 @@ async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore, times: int = 1)
         times, lei, int(new["purity"]), new["tier_name"], new["skin"], vein_txt)
 
 
+async def _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg) -> str:
+    """P2 换躯重炼（E10/U11）：消耗新躯体材料，五维木桶重算档位，存量全继承。
+
+    🚨 旧躯不返还（原著换躯是覆盖），新躯体名必须是 PUPPET_BODY_TIERS 里的真名；
+    非法名/缺料如实报错、不扣任何东西。purity/bonded/awakened/soul_strength
+    原样保留 —— 换躯只换「躯体」这一维。
+    """
+    from . import puppet_core as pc
+    cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
+    name = (arg or "").replace("换躯", "").strip()
+    if not name:
+        options = "、".join(cfg.PUPPET_BODY_TIERS)
+        return "用法：傀儡 换躯 <躯体名>。可选：%s（去遗迹四~六段取）。" % options
+    if name not in cfg.PUPPET_BODY_TIERS:
+        return "无此躯体「%s」。可选：%s。" % (name, "、".join(cfg.PUPPET_BODY_TIERS))
+    if str(name) == str(cur.get("body_name") or ""):
+        return "【%s】已是%s之躯，无须重炼。" % (cur["name"], name)
+    new = pc.reforge_body(cur, name)
+    if not new:
+        return "换躯失败：躯体数据异常，未扣任何材料。"
+    mats = await pstore.materials(qq)
+    if int(mats.get(name, 0)) < 1:
+        return "缺少躯体「%s」（遗迹四~六段可得），未扣任何材料。" % name
+    if not await pstore.take_materials(qq, {name: 1}):
+        return "躯体在校验后被取用，换躯中断。"
+    payload = {k: v for k, v in new.items() if k in _PUPPET_COLUMNS}
+    await pstore.update_puppet(qq, cur["id"], **payload)
+    old_tier = cfg.PUPPET_TIER_BY_IDX[int(cur["tier"])][0]
+    new_tier = cfg.PUPPET_TIER_BY_IDX[int(new["tier"])][0]
+    return ("🦴 换躯重炼：【%s】躯体换为【%s】（%s%s），档位 %s→%s；"
+            "雷淬纯度/有灵/认主全部保留，旧躯不返还。"
+            % (cur["name"], name, new["body_realm"],
+               ("·%d星" % new["body_star"]) if new["body_star"] else "",
+               old_tier, new_tier))
+
+
 async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
     """结阵回执（P0-1）：3 具同档 → 领头本场临时升一档，战后退回。
 
@@ -3318,17 +3356,41 @@ async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
         return "遗迹无主残傀：%s。发「傀儡 收服 <id>」降服（需 %d 金）。" % (
             listing, cfg.PUPPET_CLAIM_COST)
     pid = int(m.group(1))
+    # P2 印记强度（D06/E03）：先找到残傀，按档位算印记，确定性判定能否抹除。
+    wild = await pstore.wild_puppets()
+    target = next((x for x in wild if int(x["id"]) == pid), None)
+    if not target:
+        return "该傀儡已被他人收服或并不存在，收服失败。"
+    craft_n = int(p.get("craft_count", 0))
+    strength = pc.mark_strength(target)
+    if craft_n < int(cfg.PUPPET_MARK_DISCOVER_MIN):
+        return "你尚未亲手炼制过傀儡，探不破残傀的原主印记——先炼一具再来。"
+    need = pc.mark_exp_needed(target)
+    if craft_n < need:
+        # 失败如实反馈退金币（这里还没扣任何东西），绝不静默扣钱
+        return ("🩸 原主印记强度 %d，你炼制经验 %d 不足（需 %d）——抹除失败，"
+                "未扣金币。多炼几具再来。" % (strength, craft_n, need))
     if int(p.get("gold", 0)) < cfg.PUPPET_CLAIM_COST:
         return "金币不足，收服需 %d 金。" % cfg.PUPPET_CLAIM_COST
     if not await pstore.claim_puppet(qq, pid):
         return "该傀儡已被他人收服或并不存在，收服失败。"
     p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_CLAIM_COST
     await store.put_player(p)
-    return "🩸 收服成功：残傀已认主（原主印记被你的灵魂覆写）。发「傀儡」查看。"
+    return ("🩸 收服成功：原主印记强度 %d 已被你的灵魂覆写，残傀认主。"
+            "发「傀儡」查看。" % strength)
 
 
-async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore) -> str:
-    """E43/E44：熔入残魂生灵智（北王式改良），不是基础款。"""
+async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore, arg="") -> str:
+    """E43/E44 + P2 融魂反噬（D07/Q3）：熔入残魂生灵智，须先设陷阱拦反噬。
+
+    原著（E04 北王）：融魂必有反噬，北王是先布陷阱再动手 —— 本作 100% 发生，
+    由「设陷阱」这一步确定性拦下，不掷骰（养成链全确定）。
+
+    口令：
+      * ``傀儡 融魂 设陷阱`` —— 布置陷阱并熔魂（额外耗 PUPPET_AWAKEN_TRAP_SOUL
+        枚无主灵魂），一次完成；
+      * 裸 ``傀儡 融魂`` —— 拒绝，如实提示反噬会反扑，未扣任何材料。
+    """
     from . import puppet_core as pc
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     if cur.get("awakened"):
@@ -3336,15 +3398,21 @@ async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore) -> str:
     ok, why = pc.gate_soul(p)
     if not ok:
         return "❌ 熔魂须灵魂力量够强：" + why
+    trap = "设陷阱" in (arg or "")
+    if not trap:
+        return ("⚠️ 融魂必有反噬：残魂入体时会反扑夺舍。须发「傀儡 融魂 设陷阱」"
+                "先布下陷阱拦住反噬，再一举熔成（额外耗 %d 枚无主灵魂）。"
+                "未布陷阱，未扣任何材料。" % int(cfg.PUPPET_AWAKEN_TRAP_SOUL))
     mats = await pstore.materials(qq)
-    need = {"无主灵魂": cfg.PUPPET_AWAKEN_SOUL}
+    need = {"无主灵魂": int(cfg.PUPPET_AWAKEN_SOUL) + int(cfg.PUPPET_AWAKEN_TRAP_SOUL)}
     lack = [k for k, v in need.items() if int(mats.get(k, 0)) < int(v)]
     if lack:
-        return "融魂缺少：" + "、".join(lack) + "（去「傀儡遗迹」第二段取）"
+        return "设陷阱+融魂缺少：" + "、".join(lack) + "（去「傀儡遗迹」第二段取）"
     if int(p.get("gold", 0)) < cfg.PUPPET_AWAKEN_COST:
         return "金币不足，融魂需 %d 金。" % cfg.PUPPET_AWAKEN_COST
     await pstore.take_materials(qq, need)
     p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_AWAKEN_COST
     await store.put_player(p)
     await pstore.update_puppet(qq, cur["id"], awakened=True)
-    return "🔥 熔魂入体：【%s】生出灵智，可主动出手——已是北王式改良傀儡，非基础款。" % cur["name"]
+    return ("🔥 陷阱已成，反噬被拦下！熔魂入体：【%s】生出灵智，可主动出手——"
+            "已是北王式改良傀儡，非基础款。" % cur["name"])

@@ -278,9 +278,13 @@ async def main() -> None:
     check("收服改主+认主+修复", claimed and got and got["origin"] == "other"
           and got["bonded"] and not got["damaged"], str(got)[:120])
     check("重复收服失败不静默改坏", not await db.claim_puppet(QQ, wild_id), "")
-    await db.add_material(QQ, "无主灵魂", 2)
+    await db.add_material(QQ, "无主灵魂", 3)
     p2 = await store.get_player(QQ)
-    awaken_txt = await cmds.cmd_puppet(store, QQ, "融魂", db)
+    # P2/Q3：反噬须设陷阱拦下；裸「融魂」应被拒（不扣料）
+    bare = await cmds.cmd_puppet(store, QQ, "融魂", db)
+    check("融魂不设陷阱被拒（反噬拦下不静默）",
+          "设陷阱" in bare and not (await db.active_puppet(QQ))["awakened"], bare[:80])
+    awaken_txt = await cmds.cmd_puppet(store, QQ, "融魂 设陷阱", db)
     awakened = await db.active_puppet(QQ)
     check("北王式融魂生灵智",
           "熔魂" in awaken_txt and awakened["awakened"], awaken_txt[:80])
