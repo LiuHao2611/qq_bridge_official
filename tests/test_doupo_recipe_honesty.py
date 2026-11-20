@@ -212,8 +212,11 @@ def test_text_recipes_renders_impl():
               and n.name == "cmd_recipes")
     body = ast.get_source_segment(src, fn) or ""
     assert "cfg.recipe_impl(" in body, "「炼药」文本必须用 cfg.recipe_impl"
-    assert "本作：" in body, "文本要先说本作效果"
-    assert "原著：" in body, "手写 impl 的丹药要保留原著对照"
+    # 2026-11-20 第三轮：玩家可见处不许有「原著：…」这种对照行（用户两次投诉）。
+    # 手写 impl 的丹药改为只印一行「效果：…」，考据留在 recipe_impl 的内部字段里。
+    assert "效果：" in body, "文本要先说这枚丹在本作里干什么（效果：…）"
+    assert "原著：" not in body, "丹方文本又把原著对照行印给玩家了"
+    assert "本作：" not in body, "「本作：」是开发向措辞，玩家看不懂"
 
 
 # ---------------------------------------------------------------------------

@@ -144,16 +144,25 @@ def test_cmd_flames_shows_active_passive_and_source():
     out = asyncio.run(commands.cmd_flames(MemStore(p), "10001"))
     assert "主动【青莲火】" in out, "异火面板没显示主动技"
     assert "被动【地心精纯】" in out, "异火面板没显示被动"
-    assert "第二百章「青莲地心火」" in out, "异火面板没显示原著出处"
+    # 2026-11-20 第三轮改向：章节引文（novel）是内部考据，玩家面板**不许印**。
+    # 出处没丢，也仍在 fs.FLAME_SKILLS[*]["active"]["novel"] 里，由另一条测试守。
+    assert "第二百章「青莲地心火」" not in out, "异火面板又把章节引文印给玩家了"
+    assert "原著" not in out, "异火面板出现「原著」字样"
     assert "上阵" in out, "没告诉玩家怎么把主动技放进四槽"
 
 
 def test_config_desc_no_banned_words_and_has_cite():
+    """desc 是玩家看的：不许有原著 0 命中词，也不许印章节引文。
+
+    出处改由内部台账承担（fs.FLAME_SKILLS[*]["active"]["novel"]），
+    见 test_every_flame_has_unique_active_and_passive 的「章「」断言。
+    """
     banned = ("不生不死", "无色无相", "天地源气", "净化世间万物")
     for f in cfg.FLAMES:
         for w in banned:
             assert w not in f["desc"], f"{f['name']} 描述仍含原著 0 命中词 {w}"
-        assert "章「" in f["desc"], f"{f['name']} 描述没带原著出处"
+        assert "章「" not in f["desc"], f"{f['name']} 描述把章节引文印给玩家了"
+        assert "原著" not in f["desc"], f"{f['name']} 描述出现「原著」字样"
 
 
 # ---------------------------------------------------------------------------

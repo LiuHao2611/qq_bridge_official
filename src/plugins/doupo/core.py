@@ -888,6 +888,22 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     notes: list[str] = []
     heal_ratio = 0.0
     dmg = base
+    # 2026-11-20 修真 bug：**目标侧的闪避从没被结算过**。
+    # 玩家打怪时只算了防御减伤，怪身上挂着「身法」也不会闪；于是
+    # ① 怪物的 evade 类效果纯文案，② 玩家 7 门「控场·压闪避」斗技
+    # （凶熊碎地拳 / 青湮剑罡 / 湮幻刺 / 气化天地 / 邪风斩 / 光耀印 /
+    # 千幻玄冰刺）压了个不存在的属性 → 等于只加了描述。
+    # 现在补上：目标闪避 = 自身 evade + 被压制的量（debuff_evade 为负）。
+    # 位置在 on_hit **之前**：闪掉了就不该挂毒/降攻（miss 不产生命中效果）。
+    # ⚠️ t_ev<=0 时**不掷骰**，所以普通战斗的 rng 序列逐字节不变。
+    if fx_target is not None:
+        t_ev = max(0.0, float(fx_target.get("evade", 0))
+                   + fx.target_evade_delta(fx_target))
+        if t_ev > 0 and rng() < t_ev:
+            return {"dmg": 0, "crit": False, "kind": kind, "skill": entry is not None,
+                    "move": kind, "tier": str((entry or {}).get("tier") or ""),
+                    "notes": ["被对手闪过"], "heal_ratio": 0.0,
+                    "raw": int(raw), "def_cut": 0, "evaded": True}
     if entry is not None and fx_target is not None:
         self_st = fx_self if fx_self is not None else fx.new_state()
         effs = list(entry.get("effects") or []) + list(extra_effects or [])
@@ -1238,6 +1254,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     var = max(0.0, float(cfg.MON_DMG_VAR))
     # 2026-11-15 多维效果：本场临时状态（战后即弃，绝不写回 p/mon）
     p_fx, m_fx = fx.new_state(), fx.new_state()
+    # 2026-11-20：怪物可带固有闪避（mon["dodge"]，0~0.9）。默认 0 → 既有战斗不变；
+    # 一旦某物种/词缀给了身法，玩家的「压闪避」才有东西可压（见 _hit 目标闪避结算）。
+    m_fx["evade"] = max(0.0, min(0.9, float(mon.get("dodge") or 0)))
     m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
 
     # 2026-11-17 完整战斗回看的「逐条快照」：每条 log 都带当时的敌我血量/斗气，

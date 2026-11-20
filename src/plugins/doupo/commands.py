@@ -271,7 +271,7 @@ MENU_GROUPS = (
         ("出塔", "离开炼气塔，开始消解火毒（每分钟 -2）"),
         ("火能", "看聚火壶状态：火晶卡 / 火能 / 火毒 / 心火倍率 / 岩浆世界"),
         ("换卡", "升一档火晶卡（黑→蓝→青→赤→紫，消耗火能，解锁更深塔层）"),
-        ("突破", "修为满时晋升一星；九星跨境界须先战原著强敌（胜则概率掉兽火/异火）；斗帝看机缘"),
+        ("突破", "修为满时晋升一星；九星跨境界须先战一名强敌（胜则概率掉兽火/异火）；斗帝看机缘"),
         ("战斗", "随机遭遇一只同阶妖兽，回合制结算"),
         ("战斗回看", "查看最后一次战斗完整过程：逐招、气血/斗气、词条（出卡片）"),
         ("战斗评价", "根据最后一场战斗的真实数据，给一句/一段毒舌评语"),
@@ -295,7 +295,7 @@ MENU_GROUPS = (
         ("上阵 1 3 5 7", "按「斗技 全部」名录卡序号选四槽；也可打技名，异火主动技同样能上阵"),
         ("宗门", "看本门与可转宗门（进阶池 lv40 / 隐世池 lv90）"),
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
-        ("异火", "看 5 种异火的主动技 / 被动、原著出处与喂养进度"),
+        ("异火", "看 5 种异火的主动技 / 被动、来历与喂养进度"),
         ("收服 火云水炎", "主动收服异火：数值火可直接收，大后期火须境界+主线达标；隐藏彩蛋火不在此列"),
         ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
@@ -377,7 +377,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("异火", (
         "青莲地心火 斗气槽+25%/级；陨落心炎 经验+50%/级；",
         "三千焱炎火 吸血+2%/级；净莲妖火 暴击闪避+10%/级；帝炎 斗帝专属",
-        "九星跨境界突破须先战原著强敌（药老/云棱/摘星老鬼/魂灭生等，各有台词与绝技）：胜则概率掉兽火/异火，入「异火」查看",
+        "九星跨境界突破须先战一名强敌（药老/云棱/摘星老鬼/魂灭生等，各有台词与绝技）：胜则概率掉兽火/异火，入「异火」查看",
     )),
     ("斗帝", (
         "102 级九星斗圣冲 103 级：成功率 = 30% + 机缘/2000，帝炎 100%",
@@ -392,15 +392,15 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "升一级伤害 +20%（耗焚血散，最高 5 级）；同名技跨宗共享等级",
         "入道只领悟 1 门低阶技，其余靠「学斗技」逐个领悟：达解锁等级+战力门槛、花金币，随机得一门未学技",
         "领悟的技要用「上阵 <技名>」或「上阵 1 3 5 7」（名录卡序号）放进四槽才会自动释放；未领悟的技不能上阵",
-        "解锁按原著阶位：黄/玄 lv1 ｜ 地阶 20/30/40 ｜ 天阶 50/60/70 ｜ 秘法 40 ｜ 体质血脉 50 ｜ 异火 60",
-        "完整说明见「斗技详情 <技名>」（施展流程 + 数值 + 出处 + 原著章句）",
+        "解锁按阶位：黄/玄 lv1 ｜ 地阶 20/30/40 ｜ 天阶 50/60/70 ｜ 秘法 40 ｜ 体质血脉 50 ｜ 异火 60",
+        "完整说明见「斗技详情 <技名>」（施展流程 + 数值 + 来历）",
     )),
     ("宗门", (
         "入道按 QQ 定种子随机分宗，不可重掷：",
         "新手池 8 派 lv1 可进 ｜ 进阶池 11 派 lv40 ｜ 隐世池 6 派 lv90",
         "转宗价 = 3000 + 等级×200 金币；只换师门并重配四槽，",
         "不发该派入道物品；已升的技能等级按技名保留（转回去还在）",
-        "少数门派原著斗技就少（蛇人族 / 毒宗 / 炼药师公会各 3 门、慕兰谷 2 门），",
+        "少数门派斗技本就稀少（蛇人族 / 毒宗 / 炼药师公会各 3 门、慕兰谷 2 门），",
         "进池时四槽填不满属正常，随等级解锁会补齐",
     )),
     ("挂机", (
@@ -837,6 +837,21 @@ async def cmd_skills(store, qq) -> str:
     return "\n".join(out)
 
 
+#: 出戏词：出现在「出处」里就等于把考据台账摊给玩家看，一律不印。
+_SOURCE_META = ("游戏自设", "游戏补白", "原著无载", "原著无", "语料", "考据",
+                "游戏原创", "游戏命名", "本作")
+#: 考据标签（[C1] / [G1] / [S2]…）是写给我自己溯源用的，不进玩家视野。
+_SOURCE_TAG = re.compile(r"\s*\[[A-Z]\d+\]")
+
+
+def _clean_source(src) -> str:
+    """把「出处」洗成玩家能看的一句话；纯考据来源直接返回空串（整行不印）。"""
+    t = _SOURCE_TAG.sub("", str(src or "")).strip()
+    if not t or any(w in t for w in _SOURCE_META):
+        return ""
+    return t
+
+
 async def cmd_skill_info(store, qq, name) -> str:
     """斗技详情：完整说明（施展→效果→增益/副作用→限制）+ 数值 + 来源 + 原著。
 
@@ -878,12 +893,12 @@ async def cmd_skill_info(store, qq, name) -> str:
            nfmt,
            ""]
     out.append(hit.get("desc") or "（暂无说明）")
-    if hit.get("source"):
-        out += ["", f"出处：{hit['source']}"]
-    if hit.get("novel") and not str(hit["novel"]).startswith("原著无载"):
-        # 2026-11-20 沉浸式铁律：只有真能对上原文的才印；
-        # 「原著无载 · 游戏自设」这类缺考据的声明一律不印（玩家不关心台账缺口）。
-        out.append(f"原著：{hit['novel']}")
+    src = _clean_source(hit.get("source"))
+    if src:
+        out += ["", f"出处：{src}"]
+    # 2026-11-20 沉浸式铁律（第二轮加严）：章节引文（novel）是考据台账，
+    # 玩家不需要在斗技详情里看到「第X章「标题」」——那是写给我自己核对的。
+    # novel 字段继续保留给 _verify_novel / 守门逐字校验，只是不再渲染。
     out += ["", f"　升级 +20%/级（需 {cfg.SKILL_UP_ITEM}）｜ 用法：升级 {hit['name']}"]
     return "\n".join(out)
 
@@ -1220,9 +1235,7 @@ async def cmd_flames(store, qq) -> str:
             out.append(f"　　主动【{a['name']}】{a['brief']}")
         if pv:
             out.append(f"　　被动【{pv['name']}】{pv['effect']}")
-        if a:
-            cite = a["novel"].split(" —— ")[0].split("；")[0]
-            out.append(f"　　原著：{cite}")
+        # 招式章节引文（a["novel"]）只作内部考据，不印——玩家看主动/被动说明就够。
     # B 线数值异火：只列已收服（新号 1 朵 starter），无招式特效、只给数值加成。
     b_owned = [f for f in getattr(cfg, "BONUS_FLAMES", [])
                if int(fl.get(f["name"], 0)) > 0]
@@ -1417,12 +1430,12 @@ async def cmd_recipes(store, qq, page=1) -> str:
             else:
                 out.append(f"　{badge}{r['name']}　（{int(r.get('buy', 0))} 金购买）　{rate_txt}")
             # 2026-11-18 假药普查：先说「本作真会发生什么」（唯一源 cfg.recipe_impl），
-            # 只有与自动口径不同（配方里手写了 impl）时才补一行原著出处对照。
+            # 2026-11-20 起不再补「原著对照」那一行：玩家只看本作承诺，
+            # 功效出处留在 rec["desc"] / rec["src"] 内部字段。
             body = cfg.recipe_impl(r)
             if body:
-                out.append(f"　　本作：{body}")
-            if r.get("impl") and r.get("desc"):
-                out.append(f"　　原著：{r['desc']}")
+                out.append(f"　　效果：{body}")
+
     out.append("")
     if total_pages > 1:
         out.append(f"　发「炼药2」…「炼药{total_pages}」翻页，或点下方按钮")
@@ -1466,7 +1479,7 @@ async def cmd_craft(store, qq, name) -> str:
         return "无此丹方。发「炼药」看全部。"
     res = core.craft(p, hit)
     if res.get("reason") == "buyonly":
-        return f"【{hit}】原著未载药方，无法炼制——去「宝库」或直接「买 {hit}」（{res['buy']} 金）。"
+        return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」（{res['buy']} 金），或先寻得丹方。"
     if res.get("reason") == "cd":
         await store.put_player(p)
         return f"丹炉尚温，需再候 {res['left']} 秒。"
@@ -1477,7 +1490,7 @@ async def cmd_craft(store, qq, name) -> str:
     over = int(res.get("diff") or 0)
     over_hint = ""
     if over == 1:
-        over_hint = "　⚠ 越1档勉强开炉（原著：状态巅峰才成，成功率骤降）\n"
+        over_hint = "　⚠ 越1档勉强开炉（药力未熟，成功率骤降）\n"
     elif over >= 2:
         over_hint = f"　⚠ 越{over}档——几无可能，仅可勉强尝试\n"
     if not res.get("ok"):
@@ -1510,7 +1523,7 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
         return "无此丹方。发「炼药」看全部。"
     res = core.craft_batch(p, hit, n)
     if res.get("reason") == "buyonly":
-        return f"【{hit}】原著未载药方，无法炼制——去「宝库」或「买 {hit}」。"
+        return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」。"
     if res.get("reason") == "cd":
         await store.put_player(p)
         return f"丹炉尚温，需再候 {res['left']} 秒。"
@@ -1717,7 +1730,7 @@ async def cmd_furnace_exit(store, qq) -> str:
              f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
              f"（本次修炼 +{res['poison_add']}）",
              f"　离开后每分钟火毒 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}，"
-             f"冷却完再来（原著：修炼半天，休息一夜）。"]
+             f"冷却完再来（火毒未散，须歇一夜）。"]
     return "\n".join(lines)
 
 
@@ -2627,7 +2640,7 @@ async def cmd_craft_puppet(store, qq, pstore=None) -> str:
     pid = await pstore.add_puppet(qq, puppet)
     if not elig["ready"]:
         await pstore.set_ready(qq, True)
-    return ("⚗️ 炼制成功！【%s】人级铜傀儡（id=%d）——原著首炼即人级，"
+    return ("⚗️ 炼制成功！【%s】人级铜傀儡（id=%d）——首炼即成，难者其后，"
             "靠雷池淬炼可升地级银、天级金。发「傀儡」查看。" % (puppet["name"], pid))
 
 
@@ -2710,17 +2723,31 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
         idx + 1, len(stages), tail))
 
 
+#: 傀儡「真实列」白名单（与 PuppetStore.update_puppet 的 allowed 保持一致）。
+#: 派生字段（capped / formation / move …）只用于文案，绝不写库。
+_PUPPET_COLUMNS = frozenset({
+    "name", "tier", "tier_name", "skin", "body_name", "body_realm", "body_star",
+    "body_fresh", "body_fresh_until", "core_tier", "core_attr", "soul_source",
+    "soul_strength", "mind_stripped", "metal_name", "metal_grade", "fire_tier",
+    "fire_attr", "purity", "bonded", "awakened", "origin", "damaged",
+})
+
+
 async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
     from . import puppet_core as pc
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     if cur["tier"] >= 2 and cur["purity"] >= cfg.PUPPET_PURITY_MAX:
-        return "【%s】已是天级金，原著上限，无需再淬。" % cur["name"]
+        return "【%s】已是天级金，此界上限，无需再淬。" % cur["name"]
     if int(p.get("gold", 0)) < cfg.PUPPET_TEMPER_COST:
         return "金币不足，雷淬需 %d 金。" % cfg.PUPPET_TEMPER_COST
     p["gold"] = int(p.get("gold", 0)) - cfg.PUPPET_TEMPER_COST
     await store.put_player(p)
     new = pc.temper(cur)
-    await pstore.update_puppet(qq, cur["id"], **new)
+    # 2026-11-20 修 bug：temper() 会带出 capped 这类**派生标记**（不是库列），
+    # 原样 **new 塞给 update_puppet 会撞字段白名单 → 抛 PuppetStoreError，
+    # 玩家点「淬炼」直接报错。这里只把真列挑出来写库。
+    payload = {k: v for k, v in new.items() if k in _PUPPET_COLUMNS}
+    await pstore.update_puppet(qq, cur["id"], **payload)
     if new.get("capped"):
         return "⚡ 雷霆淬炼圆满！【%s】进化为【%s】（%s皮）——已至天妖傀上限。" % (
             cur["name"], new["tier_name"], new["skin"])
@@ -2732,9 +2759,9 @@ async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
     from . import puppet_core as pc
     n = pc.formation_count(roster)
     if n < 2:
-        return "结阵须至少两具傀儡（原著十具地妖傀结阵进化）。你目前 %d 具。" % n
+        return "结阵须至少两具傀儡（十具同阶连成循环可短暂进化）。你目前 %d 具。" % n
     names = "、".join(x["name"] for x in roster[:10])
-    return "【傀儡结阵】%d 具同场：%s\n　阵法合击，全员攻击 +%d%%（原著：银芒连成循环，可临时进阶）。" % (
+    return "【傀儡结阵】%d 具同场：%s\n　阵法合击，全员攻击 +%d%%（银芒连成循环，可临时进阶）。" % (
         n, names, int((n - 1) * 15))
 
 

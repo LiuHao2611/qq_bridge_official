@@ -170,10 +170,11 @@ def test_four_cards_render_valid_png_and_export():
         assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000, tpl
         img = Image.open(io.BytesIO(png)).convert("RGB")
         # 菜单卡 2026-11-16 增到 33 条（+切磋三口令）约 2320；2026-11-17 再加
-        # 电梯/周副本/周本状态 3 条 → 40 条，实渲染 2722px，故放宽到 2900。
+        # 电梯/周副本/周本状态 3 条 → 40 条，实渲染 2722px；2026-11-20 菜单定稿
+        # 52 条（含应战/拒战），实渲染 3474px，故放宽到 3600。
         # 宝库卡 2026-11-16 并入 32 种原著药材（41 项商品）后约 3440px；
         # 分别放宽这两张内容确实变多的卡，其余仍守 2200 防布局 bug 导致高度暴增。
-        height_cap = {"doupo_menu": 2900, "doupo_list": 3600}.get(tpl, 2200)
+        height_cap = {"doupo_menu": 3600, "doupo_list": 3600}.get(tpl, 2200)
         assert img.width == 720 and 400 < img.height < height_cap, (
             "%s 尺寸异常 %s" % (tpl, img.size))
         raw = img.resize((80, 80)).tobytes()

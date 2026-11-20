@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import types
 
@@ -62,12 +63,14 @@ for _p in (ROOT, os.path.join(ROOT, "src", "plugins")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from doupo import config as cfg, core, battle_review as br  # noqa: E402
+from doupo import config as cfg, core, battle_review as br, card  # noqa: E402
 from doupo import commands, skill_book as sb  # noqa: E402
 
 #: 只在**声明"我们没有这个"**时才用的词。引文（第X章「标题」）不算。
-META_WORDS = ("未载", "不代编", "代编", "游戏原创", "游戏命名", "游戏设定",
-              "语料", "原文只有", "非原著角色", "原著无")
+#: 2026-11-20 第三轮：用户原话是「比如原著xxx，原著里没有xxx」，
+#: 所以「原著」这两个字本身也要拦 —— 玩家不该在游戏里被提醒自己在玩改编。
+META_WORDS = ("原著", "未载", "不代编", "代编", "游戏原创", "游戏命名", "游戏设定",
+              "语料", "考据", "原文", "非原著角色", "本作", "台账", "设定集")
 #: 内部考据字段，玩家看不到，不参与扫描。
 INTERNAL_KEYS = {"source", "novel", "note"}
 
@@ -83,6 +86,24 @@ def _p(lv=1):
     p["lv"] = lv
     core._refill(p)
     return p
+
+
+def _scan_deep(obj, label="", out=None):
+    """递归扫玩家可见字符串：禁词 + 考据标签（[C1]/[G1]/[S2]…）。"""
+    out = [] if out is None else out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k) in INTERNAL_KEYS:
+                continue
+            _scan_deep(v, "%s/%s" % (label, k), out)
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            _scan_deep(v, "%s[%d]" % (label, i), out)
+    elif isinstance(obj, str):
+        hits = _hit_meta(obj) + (["[标签]"] if re.search(r"\[[A-Z]\d+\]", obj) else [])
+        if hits:
+            out.append((label, hits, obj))
+    return out
 
 
 def _hit_meta(text: str) -> list[str]:
@@ -129,12 +150,14 @@ class _StubStore:
 # A. 玩家可见文案零元说明
 # ---------------------------------------------------------------------------
 def test_config_player_text_has_no_meta():
+    from doupo import factions as fac
     for label, obj in (("角色包", cfg.MONSTER_CHARACTERS),
                        ("突破BOSS", cfg.BREAK_BOSSES),
                        ("出场描写", cfg.CHARACTER_APPEARANCE),
                        ("异火", cfg.FLAMES),
                        ("数值异火", cfg.BONUS_FLAMES),
-                       ("其他火焰", getattr(cfg, "OTHER_FLAMES", []))):
+                       ("其他火焰", getattr(cfg, "OTHER_FLAMES", [])),
+                       ("宗门传承异火/特殊斗技", fac.FACTIONS)):
         bad = _scan(obj)
         check("%s 玩家可见字段零元说明" % label, not bad,
               "%d 处：%s" % (len(bad), bad[:3]))
@@ -186,9 +209,52 @@ def test_cmd_outputs_has_no_meta():
              if _nov(e["name"]).strip() and not _nov(e["name"]).startswith("原著无载")]
     check("本宗池里确有真引文斗技（反向验证样本）", bool(cited), str(cited[:3]))
     if cited:
-        out_ok = asyncio.run(commands.cmd_skill_info(store, "QIMM", cited[0]))
-        check("斗技详情仍保留真引文（没一刀切删干净）",
-              "原著：" in out_ok, out_ok[-120:])
+        nm = cited[0]
+        out_ok = asyncio.run(commands.cmd_skill_info(store, "QIMM", nm))
+        # 2026-11-20 第三轮改向：章节引文（novel）是内部考据台账，玩家不需要在
+        # 斗技详情里读「第X章「标题」」。所以这里反过来钉死：**不许印**。
+        check("斗技详情不印章节引文：%s" % nm,
+              not re.search(r"第[零〇一壹二三四五六七八九十百千\d]+章「", out_ok),
+              out_ok[-120:])
+        check("斗技详情不印「原著」字样：%s" % nm,
+              "原著" not in out_ok, out_ok[-120:])
+        # 但内容不能被"去元说明"顺手删空 —— 描述正文必须还在。
+        desc = str((sb.SKILL_BOOK.get(nm) or {}).get("desc") or "")
+        check("斗技详情仍完整保留效果描述：%s" % nm,
+              bool(desc) and desc[:10] in out_ok, "%s||%s" % (desc[:20], out_ok[:80]))
+
+
+def test_all_factions_render_clean():
+    """25 个宗门逐一过：宗门卡数据 + 宗门/异火文本 + 每个特殊斗技详情。
+
+    2026-11-20 第三轮补：玩家不只在"自己的宗门"看文案，转宗后能看到别派的
+    传承异火与特殊斗技，所以必须**全派遍历**，不能只测一个天冥宗。
+    """
+    from doupo import factions as fac
+    bad = []
+    for fid, fdef in fac.FACTIONS.items():
+        p = _p(60)
+        p["faction"] = fid
+        p["faction_name"] = fdef.get("name") or fid
+        for label, obj in (("宗门卡", card.build_faction_data(p)),
+                           ("宗门文本", asyncio.run(commands.cmd_faction(_StubStore(p), "QIMM", ""))),
+                           ("异火文本", asyncio.run(commands.cmd_flames(_StubStore(p), "QIMM")))):
+            for path, hits, txt in _scan_deep(obj, label):
+                bad.append("%s/%s %s <<%s>>" % (fid, path, hits, txt[:40]))
+    check("25 宗门逐一渲染零元说明", not bad, "；".join(bad[:3]))
+
+
+def test_skill_source_cleaned():
+    """斗技「出处」不许印考据来源（游戏自设 / 原著无载 / [C1] 这类）。"""
+    samples = ["游戏自设，云岚宗宗门合击（原著无同名设定）。",
+               "原著无载 · 游戏自设",
+               "某派秘传（第一千三百章）[C1]",
+               "迦南学院内院天焚炼气塔下封印，萧炎收服"]
+    cleaned = [commands._clean_source(x) for x in samples]
+    check("考据来源整行不印（返回空串）", cleaned[0] == "" and cleaned[1] == "",
+          str(cleaned[:2]))
+    check("考据标签被剥掉", "[C1]" not in cleaned[2], cleaned[2])
+    check("正常出处照旧保留", cleaned[3].startswith("迦南学院"), cleaned[3])
 
 
 def test_card_marks_has_no_meta():
@@ -361,6 +427,8 @@ def main() -> int:
     for fn in (test_config_player_text_has_no_meta,
                test_appearance_quality,
                test_cmd_outputs_has_no_meta,
+               test_all_factions_render_clean,
+               test_skill_source_cleaned,
                test_card_marks_has_no_meta,
                test_break_text_has_no_meta,
                test_appearance_wired_into_fight,
