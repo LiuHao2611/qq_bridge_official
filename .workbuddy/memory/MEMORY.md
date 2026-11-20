@@ -49,3 +49,5 @@ API 绕 502：`tmp/push_incremental.py <基线commit>` 走 base_tree 只提 diff
 **九星突破必须连带重标定**：`BOSS_BREAK_HP_MULT 1.60→1.15`、`ATK_MULT 1.15→1.10`（必须 >1，测试断言"BOSS 攻击高于同阶基准"），否则 92%→22%。12 档现 35%~98%。
 `_balance.py::species_pool` 已改为与 `pick_monster` 同口径；旧版"取不到退全表最后两只"会让 1~6 级判成打 lv102，报告假数据。改完 `_balance.py` **全部达标**。
 守门 `tests/test_doupo_hit_rate.py` 25 条 + `tools/mutate_hit_rate.py` 9 组。**手搓怪用例必须满级怪 + 拖满 30 回合**，否则小样本抓不住。镜像无 pytest；插件测试不能同进程跑（Plugin already exists: doupo）。
+⚠️ **别再引入「基准闪避补偿」常量**：`DODGE_DESIGN=0.30` 那条路（反解怪攻除以 `1-0.30`）对没被削闪避的低等级同样放大 1.43× → 全等级越界，已试过否决并删掉常量（config 里只留一行警告注释）。正解是眼力抵掉等级白拿的身法，不碰 hp/atk 反解。
+⚠️ 九星突破测试真实路径 `src/plugins/doupo/test_nine_star_breakthrough.py`（不在 tests/）；容器内跑测试必须 `/opt/venv/bin/python`（系统 `python3` 无 nonebot）。
