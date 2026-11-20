@@ -1442,8 +1442,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     # 🚨 红线：挡伤骰**只在 `if puppet` 分支内消耗 rng**。不传傀儡的战斗一次都
     #    不多掷 —— 否则 218 条逐招回看快照会整片翻红（含 test_battle_review）。
     _pup_prof = {"hp_max": 0, "armor": 0, "chance": 0.0,
-                 "threshold": 0, "leak": 0.0, "tier": 0}
+                 "threshold": 0, "leak": 0.0, "tier": 0, "awakened": False}
     _pup_hp = 0
+    # P0-1：临时升档标记来自命令层的只读副本；只本场有效，战后不写回库。
+    _burst = bool(puppet and puppet.get("_formation_burst"))
+    _burst_noted = False
     # 护主累计（只供 res 展示；不带傀儡时恒为 0，且不会写进 res）
     _guard_n = 0
     _guard_soak_sum = 0
@@ -1524,6 +1527,10 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             p_dmg = min(p_dmg, m_hp)
             m_hp -= p_dmg
             p_entry = pc.puppet_log_entry(puppet, p_dmg, formation_n)
+            if _burst and not _burst_noted:
+                # 阵成高光：只在第一击插一次，不新增 log kind（回看卡白名单不动）。
+                p_entry["notes"] = ["阵成，金光暂取代银芒"] + list(p_entry.get("notes") or [])
+                _burst_noted = True
             dmg_log.append(_mark(p_entry, m_hp))
         # 吸血：异火被动 + 技能自带（只回血，不改伤害主值）× 塔禁疗倍率
         # 减疗（2026-11-19 修）：对手挂到 p_fx 的 debuff_heal 压低本次回血。
@@ -1670,11 +1677,16 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 # 部分不需要傀儡再拿肉身去填（否则傀儡白挨，观感更假）。
                 _guard_soak = 0
                 _guard_take = 0
+                # P0-2：有灵＝主动拦截，小额伤害也进判定，且自身残血不打折
+                # （原著「北王」心念一动便出手、悍不畏死拖住魂焱）。
+                # 🚨 概率上限 GUARD_CAP/LEAK 不变，仍不抢玩家风头；rng 只在这一条分支消耗。
+                # 门槛已由 guard_profile() 按有灵状态算好（唯一口径，卡面同源）。
                 if (puppet and _pup_hp > 0
                         and int(inc["final"]) >= int(_pup_prof["threshold"])):
                     _gch = float(_pup_prof["chance"])
-                    if _pup_hp < float(_pup_prof["hp_max"]) * float(cfg.PUPPET_GUARD_HURT_AT):
-                        # 自己快报废时反而护不住（原著第952处：频临报废就不能再抗敌）
+                    if (not _pup_prof.get("awakened")
+                            and _pup_hp < float(_pup_prof["hp_max"]) * float(cfg.PUPPET_GUARD_HURT_AT)):
+                        # 无灵傀儡快报废时反而护不住（原著第952处：频临报废就不能再抗敌）
                         _gch *= float(cfg.PUPPET_GUARD_HURT_MULT)
                     if rng() < _gch:
                         _g_raw = int(inc["final"])
@@ -1731,7 +1743,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                     # 到末尾会被静默截掉 —— 玩家一辈子看不见护主，等于机制没做。
                     notes.insert(0, _pcg.guard_note(puppet, _g_raw, _guard_soak,
                                                     _guard_take, _pup_hp,
-                                                    int(_pup_prof["hp_max"])))
+                                                    int(_pup_prof["hp_max"]),
+                                                    awakened=bool(_pup_prof.get("awakened"))))
                 if notes:
                     log_entry["notes"] = notes
                 if sk_name:
@@ -1778,6 +1791,10 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     hp_end = max(1, int(hp)) if win else floor_hp
     mp_end = max(0, int(mp))
     foe_hp_end = max(0, int(m_hp))
+    if _burst and dmg_log:
+        # 退档收场：原著「金光消散，再度化为地妖傀」。必须让玩家看见它是临时的。
+        _last = dmg_log[-1]
+        _last["notes"] = ["金光散，复为地妖傀"] + list(_last.get("notes") or [])
     p["hp"] = hp_end
     p["mp"] = mp   # 斗气结转：写回本场消耗后的剩余值，不再强制回满
     if downed:
@@ -1799,6 +1816,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         "hero_aid": aid,  # None 或 {name,rate,luck}，文案层据此标注机缘因果
         "puppet": (str(puppet.get("name") or "傀儡") if puppet else None),
         "formation": int(formation_n or 0),
+        # P0-1：本场是否真的临时升了档（纯展示，供战报/回看标记「阵成」）。
+        "formation_burst": bool(_burst),
         # 2026-11-19 战斗事件（供战报/回看卡渲染；数值层不消费）
         # 终局快照：战斗结束那一刻的真实血/斗气（不是战后重置值），回看卡据此
         # 显示「气血归零而败」而不是误导性的战后血量。

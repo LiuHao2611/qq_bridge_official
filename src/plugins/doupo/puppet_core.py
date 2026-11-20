@@ -681,7 +681,7 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     """
     if not puppet:
         return {"hp_max": 0, "armor": 0, "chance": 0.0,
-                "threshold": 0, "leak": 0.0, "tier": 0}
+                "threshold": 0, "leak": 0.0, "tier": 0, "awakened": False}
     from . import core  # 延迟导入避免与 core 循环
 
     tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
@@ -699,16 +699,23 @@ def guard_profile(puppet: Optional[dict], p: Optional[dict] = None,
     chance = (float(cfg.PUPPET_GUARD_CHANCE[tier])
               + max(0, n_eff - 1) * float(cfg.PUPPET_FORMATION_GUARD_STEP))
     chance = min(float(cfg.PUPPET_GUARD_CAP), max(0.0, chance))
+    _th = max(1, int(int(st["体力"]) * float(cfg.PUPPET_GUARD_THRESHOLD)))
+    # P0-2：有灵＝主动拦截，门槛在此处（唯一口径）下调，卡面与战斗同步。
+    if puppet.get("awakened"):
+        _th = max(1, int(_th * float(cfg.PUPPET_AWAKEN_GUARD_THRESHOLD_MULT)))
     return {
         "hp_max": hp_max, "armor": armor, "chance": chance,
-        "threshold": max(1, int(int(st["体力"]) * float(cfg.PUPPET_GUARD_THRESHOLD))),
+        "threshold": _th,
         "leak": float(cfg.PUPPET_GUARD_LEAK),
         "tier": tier,
+        # P0-2：有灵行为由战斗侧读取（小额也拦、残血不打折），卡面也读同一个
+        # 字段做说明，避免「写了 awakened 却只改卡面」的白守。
+        "awakened": bool(puppet.get("awakened")),
     }
 
 
 def guard_note(puppet: dict, raw: int, soak: int, taken: int,
-               hp_left: int, hp_max: int) -> str:
+               hp_left: int, hp_max: int, awakened: bool = False) -> str:
     """护主成功的一句战报文案（挂到「兽击」条目的 notes 上）。
 
     **不新增 log kind**：回看卡的 kind 白名单与配色是按既有条目写的，
@@ -719,7 +726,8 @@ def guard_note(puppet: dict, raw: int, soak: int, taken: int,
     括号就成了 `兽击（…抢身挡下 6868（自损 5360））`，两层中文括号读起来像嵌套
     报错。用逗号断句，外层括号只留一层。
     """
-    return "%s 抢身挡下 %d，自损 %d，余血 %d/%d" % (
+    return "%s%s 抢身挡下 %d，自损 %d，余血 %d/%d" % (
+        "心念一动，" if awakened else "",
         str(puppet.get("name") or "傀儡"), int(soak), int(taken),
         max(0, int(hp_left)), int(hp_max))
 
@@ -733,6 +741,44 @@ def formation_count(puppets: List[dict]) -> int:
     """
     n = len([x for x in (puppets or []) if x])
     return min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), n)
+
+
+def formation_burst(puppet: Optional[dict], roster: Optional[list] = None,
+                    formation_n: Optional[int] = None) -> dict:
+    """P0-1：3 具同档成阵 → 领头**临时升一档**，返回只读副本。
+
+    原著「收服」章：十具地妖傀成阵 → 领头暂化金色天妖傀，战后金光消散复为地妖傀。
+    本作结阵封顶 3 具，故门槛取 3，且必须同档（原著「十具地妖傀」）。
+
+    🚨 三条红线：
+      1. 绝不改传入的 dict —— 它是 ``PuppetStore`` 读出的存档数据，就地改 tier
+         会随下一次写库变成**永久升档白嫖**；
+      2. 天级无更高档时不升档，紫皮变体由既有结阵护主步进表达，输出不叠倍率；
+      3. 副本只在 ``fight()`` 生命周期内存活，战后丢弃，不进任何持久化路径。
+
+    返回值：升档副本（带 ``_formation_burst=True``）或原 dict（未成阵）。
+    """
+    if not puppet:
+        return puppet
+    tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
+    if tier not in tuple(getattr(cfg, "PUPPET_FORMATION_BURST_TIERS", (0, 1))):
+        return puppet
+    need = int(getattr(cfg, "PUPPET_FORMATION_BURST_N", 3))
+    if formation_n is None:
+        n = formation_count(roster)
+    else:
+        n = min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), max(0, int(formation_n)))
+    if n < need:
+        return puppet
+    same = sum(1 for x in (roster or []) if x
+               and max(0, min(2, int(x.get("tier", 0) or 0))) == tier)
+    if same < need:
+        return puppet
+    up = dict(puppet)
+    up["tier"] = min(2, tier + 1)
+    up["tier_name"], up["skin"] = cfg.PUPPET_TIER_BY_IDX[up["tier"]]
+    up["_formation_burst"] = True
+    return up
 
 
 def puppet_log_entry(puppet: dict, dmg: int, formation_n: int = 0) -> dict:

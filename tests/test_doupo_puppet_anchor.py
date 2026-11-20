@@ -528,6 +528,62 @@ def test_tower_anchors_reference_not_player():
 
 
 # ---------------------------------------------------------------------------
+# P0-1 结阵临时升档（2026-11-20 设计文档）：成阵=升档，不是 +15% 百分比
+# ---------------------------------------------------------------------------
+def test_formation_burst_same_tier_three():
+    """3 具同档才升档，且绝不改原对象（写回=永久升档白嫖）。"""
+    roster = [dict(PU_REN, name="铜尸甲"), dict(PU_REN, name="铜尸乙"),
+              dict(PU_REN, name="铜尸丙")]
+    src = copy.deepcopy(PU_REN)
+    up = pc.formation_burst(src, roster, 3)
+    check(bool(up.get("_formation_burst")), "3 具同档未标记成阵")
+    check(int(up.get("tier", 0)) == src["tier"] + 1,
+          "成阵未升一档：%s → %s" % (src["tier"], up.get("tier")))
+    check(src == PU_REN and "_formation_burst" not in src,
+          "formation_burst 就地改了传入的存档 dict —— 会写回成永久升档")
+    check(pc.formation_burst(src, roster[:2], 2) is src, "2 具不该成阵")
+    mixed = [dict(PU_REN), dict(PU_REN), dict(PU_DI)]
+    check(pc.formation_burst(src, mixed, 3) is src, "混档不该成阵")
+    check(pc.formation_burst(PU_TIAN, [dict(PU_TIAN)] * 3, 3) is PU_TIAN,
+          "天级没有更高档，不该再从伤害上升档")
+
+
+def test_formation_burst_low_level_not_zero():
+    """旧结阵在低等级全 +0%（假机制）；升档后必须真的打出来。"""
+    for lv in (20, 50, 81):
+        p = core.tower_ref_player(lv)
+        roster = [dict(PU_REN, name="甲"), dict(PU_REN, name="乙"),
+                  dict(PU_REN, name="丙")]
+        up = pc.formation_burst(PU_REN, roster, 3)
+        old = pc.puppet_expected_damage(PU_REN, 3, p=p)
+        new = pc.puppet_expected_damage(up, 3, p=p)
+        cap = round_out(p) * float(cfg.PUPPET_ATK_CAP[1])
+        check(new > old, "lv%d 升档后 %.0f 未高于旧结阵 %.0f" % (lv, new, old))
+        check(new <= cap + 1.0,
+              "lv%d 升档后 %.0f 越过新档 CAP %.0f（不抢风头红线）" % (lv, new, cap))
+
+
+def test_formation_burst_battle_notes_no_persist():
+    """战报必须写「阵成/退档」，且临时副本不能写回原 dict。"""
+    src = copy.deepcopy(PU_REN)
+    roster = [dict(PU_REN, name="甲"), dict(PU_REN, name="乙"),
+              dict(PU_REN, name="丙")]
+    up = pc.formation_burst(src, roster, 3)
+    p = core.tower_ref_player(50)
+    r = core.fight(p, core.monster_scaled(p, dict(SPEC, lv=50)),
+                   rng=random.Random(1).random, puppet=up,
+                   formation_n=3, auto_pill=True)
+    check(bool(r.get("formation_burst")), "res 未标记本场升档")
+    all_notes = []
+    for e in (r.get("log") or []):
+        all_notes.extend(e.get("notes") or [])
+    check(any("阵成" in str(n) for n in all_notes), "战报缺「阵成」高光提示")
+    check(any("金光散" in str(n) for n in all_notes), "战报缺「退档」提示，玩家会以为永久升档")
+    check(src == PU_REN and "_formation_burst" not in src,
+          "战斗把临时升档写回了原 dict")
+
+
+# ---------------------------------------------------------------------------
 def _run() -> int:
     for fn in (test_signatures, test_command_layer_passes_puppet,
                test_anchor_follows_level, test_not_negligible_at_high_level,
@@ -540,7 +596,10 @@ def _run() -> int:
                test_five_battle_entries_bring_puppet,
                test_card_shows_realm_label,
                test_fight_single_source,
-               test_tower_anchors_reference_not_player):
+               test_tower_anchors_reference_not_player,
+               test_formation_burst_same_tier_three,
+               test_formation_burst_low_level_not_zero,
+               test_formation_burst_battle_notes_no_persist):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

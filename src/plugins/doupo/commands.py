@@ -77,9 +77,13 @@ async def _puppet_ctx(qq, p):
     if not pu:
         return (None, 0, 1.0)
     try:
-        n = pc.formation_count(await DEFAULT_PUPPET_STORE.list_puppets(qq))
+        roster = await DEFAULT_PUPPET_STORE.list_puppets(qq)
     except Exception:
-        n = 1
+        roster = []
+    n = pc.formation_count(roster)
+    # P0-1：成阵只在这里生成只读临时副本（3 具同档 → 领头临时升一档）。
+    # 绝不写回 PuppetStore —— 副本随本条命令结束即丢弃，战报另有退档提示。
+    pu = pc.formation_burst(pu, roster, n)
     try:
         flame_mult = 1.0 + float(fb.puppet_atk_bonus(p))
     except Exception:
@@ -3215,20 +3219,29 @@ async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore) -> str:
 
 
 async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
-    """结阵展示。**只说真实生效的规则**，不再写「十具循环可短暂进化」这种空话。
+    """结阵回执（P0-1）：3 具同档 → 领头本场临时升一档，战后退回。
 
-    实机：``puppet_expected_damage`` 里只有 ``1 + 0.15×(n-1)``，且 ``fight`` 每次
-    只带**一具**出战傀儡——所谓「十具同阶连成循环进化」从来没有任何实现
-    （2026-11-20 审计确认）。这里如实说明：阵中每多一具，出战那具 +15%，上限 +135%。
+    🚨 旧文案写「每多一具 +15%，十具封顶 +135%」而 ``FORMATION_MAX=3``、
+    低等级实测 +0%，是骗人文案，已删除。这里只说实际生效的规则。
     """
     from . import puppet_core as pc
     n = pc.formation_count(roster)
     if n < 2:
         return "结阵须至少两具傀儡。你目前 %d 具。" % n
     names = "、".join(x["name"] for x in roster[:10])
-    bonus = int(min(n, 10) - 1) * 15
-    return "【傀儡结阵】%d 具同场：%s\n　出战傀儡攻击 +%d%%（每多一具 +15%%，十具封顶 +135%%）。" % (
-        n, names, bonus)
+    need = int(getattr(cfg, "PUPPET_FORMATION_BURST_N", 3))
+    cur = next((x for x in roster if elig and x["id"] == elig.get("active_id")), roster[0])
+    tier = max(0, min(2, int(cur.get("tier", 0) or 0)))
+    same = sum(1 for x in roster if x and max(0, min(2, int(x.get("tier", 0) or 0))) == tier)
+    if n < need or same < need or tier not in tuple(
+            getattr(cfg, "PUPPET_FORMATION_BURST_TIERS", (0, 1))):
+        return ("【傀儡结阵】%d 具同场：%s\n"
+                "　本场须 %d 具同档方可成阵；当前同档 %d 具。成阵后领头临时升一档，战后退回，"
+                "结阵本身零消耗。" % (n, names, need, same))
+    nxt = cfg.PUPPET_TIER_BY_IDX[min(2, tier + 1)][0]
+    return ("【傀儡结阵】%d 具同场：%s\n"
+            "　阵成！【%s】本场暂化【%s】；金光散后复为原档，不永久升档、零消耗。"
+            % (n, names, cur["name"], nxt))
 
 
 async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
