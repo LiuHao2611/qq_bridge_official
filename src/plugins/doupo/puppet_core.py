@@ -393,50 +393,106 @@ def make_puppet(p: dict, body: dict, core_info: dict, soul: dict,
 # ---------------------------------------------------------------------------
 # 战斗集成（红线：唯一期望输出函数）
 # ---------------------------------------------------------------------------
-def puppet_attack(puppet: Optional[dict]) -> float:
-    """傀儡肉身攻击（E32/E33/E35）：不吃 mp/斗技，纯躯体+魔核+灵魂。
+def _ref_player(tier: int) -> dict:
+    """无玩家上下文时的「标尺玩家」：走 core.tower_ref_player，与爬塔同一套标尺。
 
-    2026-11-20 多配方：**金属与炼制之火进公式**（原著第900章「等级之差，取决
-    炼制材料以及炼制之火」）。此前两者只存库不进公式，同档傀儡毫无差别。
+    不另造一份假玩家——两份标尺一定会漂，卡面与实战就成了两张皮。
+    """
+    from . import core  # 延迟导入避免环
+    lv = int(cfg.PUPPET_REF_LV[max(0, min(2, int(tier)))])
+    return core.tower_ref_player(lv)
 
-    基准点刻意取旧档值（``metal_grade=2`` / ``fire_tier=7``），故：
-      * 老傀儡（全存 2 / 7）倍率恒为 1.0 → 数值逐字节不变；
-      * 手搓 dict 缺这两个键、或库列为 0（未记录）→ 同样按基准算，不吃惩罚。
+
+def _player_round_output(p: dict) -> float:
+    """玩家平均每回合期望原始输出（未乘减伤），与 damage_schedule 同口径。
+
+    取 ``TTK_PLAYER`` 个回合的均值而不是第一回合：第一回合玩家斗气满、放的是
+    最高倍率斗技，用它当锚会让傀儡在斗气耗尽后强得离谱（实测 lv81 首回合
+    111493 vs 续航期 28389，差 4 倍）。
+    """
+    from . import core  # 延迟导入避免环（core.damage_schedule 不回调本模块）
+    n = max(1, int(round(float(cfg.TTK_PLAYER))))
+    try:
+        sch = core.damage_schedule(p, n)
+        return max(1.0, float(sum(sch) / len(sch)))
+    except Exception:  # noqa: BLE001  脏存档兜底，绝不因算不出锚就返回 0
+        try:
+            return max(1.0, float(core.stats(p)["力量"] * cfg.WEAPON_BASE_MULT))
+        except Exception:  # noqa: BLE001
+            return 1.0
+
+
+def _material_mult(puppet: dict) -> float:
+    """材料系数（同档之内的差异）：基准 core7 / soul900 / metal2 / fire7 = 1.00。
+
+    老傀儡全存这四个基准值 ⇒ 系数恰为 1.0，与「同档新傀同料」完全一致。
+    """
+    core_t = int(puppet.get("core_tier") or 7)
+    soul = int(puppet.get("soul_strength") or 900)
+    mg = int(puppet.get("metal_grade") or 2)
+    ft = int(puppet.get("fire_tier") or 7)
+    m = (1.0
+         + (core_t - 7) * cfg.PUPPET_CORE_STEP
+         + (soul - 900) * cfg.PUPPET_SOUL_STEP
+         + (mg - 2) * cfg.PUPPET_METAL_MULT_STEP
+         + (ft - 7) * cfg.PUPPET_FIRE_MULT_STEP)
+    return max(0.5, float(m))
+
+
+def puppet_attack(puppet: Optional[dict], p: Optional[dict] = None) -> float:
+    """傀儡肉身攻击（E32/E33/E35）：不吃 mp/斗技，纯躯体+魔核+灵魂+材料。
+
+    **2026-11-20 第二轮：锚定玩家，不再是绝对常数。**
+    旧版 ``(120/900/4200 + core×40 + soul×0.15) × 0.42`` 在 lv81 玩家身上只有
+    224.7，占其每回合输出 0.2%、同阶怪血 0.08% —— 用户原话「低得离谱」，
+    实测确认属实。
+
+    新口径：``玩家平均每回合期望输出 × PUPPET_TIER_RATIO[tier] × 材料系数``。
+    ``p=None``（卡面/旧脚本只给 puppet dict）时用 ``PUPPET_REF_LV`` 的标尺玩家，
+    保证任何调用点都能拿到一个同量级的确定值，不会出现「卡面 224 / 实战 9 千」。
     """
     if not puppet:
         return 0.0
-    base = cfg.PUPPET_TIER_BASE[int(puppet.get("tier", 0))]
-    core = int(puppet.get("core_tier", 0)) * cfg.PUPPET_CORE_K1
-    soul = int(puppet.get("soul_strength", 0)) * cfg.PUPPET_SOUL_K2
-    metal_grade = int(puppet.get("metal_grade") or 2)
-    fire_tier = int(puppet.get("fire_tier") or 7)
-    metal_mult = 1.0 + (metal_grade - 2) * cfg.PUPPET_METAL_MULT_STEP
-    fire_mult = 1.0 + (fire_tier - 7) * cfg.PUPPET_FIRE_MULT_STEP
-    return (base + core + soul) * cfg.PUPPET_ATK_FACTOR * metal_mult * fire_mult
+    tier = max(0, min(2, int(puppet.get("tier", 0) or 0)))
+    anchor_p = p if p is not None else _ref_player(tier)
+    anchor = _player_round_output(anchor_p)
+    return anchor * float(cfg.PUPPET_TIER_RATIO[tier]) * _material_mult(puppet)
 
 
 def puppet_expected_damage(puppet: Optional[dict], formation_n: int = 0,
-                           flame_mult: float = 1.0) -> float:
+                           flame_mult: float = 1.0,
+                           p: Optional[dict] = None) -> float:
     """傀儡每回合期望输出——**唯一函数**。
 
-    ``fight`` 注入傀儡击、``damage_schedule`` 计入反解都必须调它，同涨同落。
-    结阵（E36/E38）增益也在这里统一算，避免只加 fight 不进反解。
+    ``fight`` 注入傀儡击、``damage_schedule``/``monster_scaled`` 计入反解都必须
+    调它，同涨同落。
 
     ``flame_mult``（2026-11-19）：B 线傀儡异火的攻击倍率（1.0+加成），由命令层从
-    玩家已收服的火聚合传入（flame_bonus.puppet_atk_bonus）。**必须两处同源**：
-    怪血反解（commands 传给 monster_scaled）与实战傀儡击都吃同一个 bonus。
-    默认 1.0 → 旧调用逐字节不变。
+    玩家已收服的火聚合传入（flame_bonus.puppet_atk_bonus）。**必须两处同源**。
+
+    ``p``（2026-11-20 第二轮）：锚定玩家输出用。**同一个 p 必须同时喂给
+    ``monster_scaled(puppet_bonus=...)`` 与 ``fight(puppet=...)``**，否则怪血按
+    一个锚变厚、实战按另一个锚出手，就是两张皮。默认 None → 标尺玩家。
     """
     if not puppet:
         return 0.0
-    atk = puppet_attack(puppet)
-    bonus = 1.0 + max(0, formation_n - 1) * 0.15  # 结阵每人 +15% [调参]
+    atk = puppet_attack(puppet, p)
+    # 结阵加成（2026-11-20 第二轮加上限）：`formation_count` 数的是玩家**拥有的
+    # 全部**傀儡，人级材料便宜，不封顶就能靠堆垃圾傀儡白拿 +60% → 封顶 3 具。
+    n_eff = min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), max(0, formation_n))
+    bonus = 1.0 + max(0, n_eff - 1) * float(getattr(cfg, "PUPPET_FORMATION_STEP", 0.15))
     return atk * bonus * max(1.0, float(flame_mult))
 
 
 def formation_count(puppets: List[dict]) -> int:
-    """E36/E38：同场傀儡数≥2 才算结阵。"""
-    return len([x for x in (puppets or []) if x])
+    """E36/E38：同场傀儡数≥2 才算结阵。
+
+    返回**参与结阵的具数**，已按 ``cfg.PUPPET_FORMATION_MAX`` 封顶（2026-11-20
+    第二轮）。封顶放在这里而不是只放公式里，是因为命令层/卡面也用这个数报
+    「结阵 N 具」—— 报的数与真正吃到的加成必须是同一个数，否则又是一张皮。
+    """
+    n = len([x for x in (puppets or []) if x])
+    return min(int(getattr(cfg, "PUPPET_FORMATION_MAX", 3)), n)
 
 
 def puppet_log_entry(puppet: dict, dmg: int, formation_n: int = 0) -> dict:

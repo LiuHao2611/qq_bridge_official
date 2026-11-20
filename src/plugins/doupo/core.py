@@ -569,7 +569,8 @@ def is_nine_star_breakthrough(p) -> bool:
     return cfg.realm_index(lv) != cfg.realm_index(lv + 1)
 
 
-def make_breakthrough_boss(p, rng=random.random) -> dict:
+def make_breakthrough_boss(p, rng=random.random, puppet=None, formation_n=0,
+                           puppet_flame_mult=1.0) -> dict:
     """九星突破 BOSS：**原著有名有姓的反派** + 内部战力快照锁难度。
 
     2026-11-20 用户澄清原话：「战力快照要有，只是不要发出来，发出来会影响游戏体验」。
@@ -599,7 +600,14 @@ def make_breakthrough_boss(p, rng=random.random) -> dict:
         "skill": dict(ch["skill"]),
         "character": _ch,
     }
-    mon = monster_scaled(snap, species)
+    # 傀儡（2026-11-20 第二轮）：怪血锚快照 snap（锁难度），实战锚真人 p。
+    # 只经 PUPPET_ENEMY_COMP 折扣后计入血量，攻击不受影响 —— 带傀儡是净赚而不是对消。
+    _pu_bonus = 0.0
+    if puppet:
+        from . import puppet_core as _pc
+        _pu_bonus = _pc.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=snap)
+    mon = monster_scaled(snap, species, puppet_bonus=_pu_bonus)
     mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
     mon["atk"] = max(1, int(mon["atk"] * float(cfg.BOSS_BREAK_ATK_MULT)))
     mon["is_boss"] = True
@@ -610,7 +618,9 @@ def make_breakthrough_boss(p, rng=random.random) -> dict:
     return mon
 
 
-def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
+def nine_star_breakthrough(p, rng=random.random, locked=None,
+                           puppet=None, formation_n=0,
+                           puppet_flame_mult=1.0) -> dict:
     """九星突破 BOSS 战完整流程（命令层调用；core 只做逻辑不改存档持久化）。
 
     前置必须由调用方先用 ``is_nine_star_breakthrough(p)`` 判定。本函数：
@@ -619,9 +629,15 @@ def nine_star_breakthrough(p, rng=random.random, locked=None) -> dict:
       3. 胜利 → 掉火焰（roll_breakthrough_flame）→ level_up 完成突破；
          失败 → 保留战斗损耗（掉血/耗药），经验不扣，可再次挑战。
     返回 dict 给命令层渲染文案；``p`` 就地被修改（胜负都由 fight / level_up 写）。
+
+    ``puppet``（2026-11-20 第二轮）：出战傀儡。突破必须允许带傀儡，否则「炼傀儡」
+    在唯一的境界关口上毫无意义。
     """
-    mon = make_breakthrough_boss(p, rng)
-    res = fight(p, mon, rng=rng, locked=locked or set(), auto_pill=True)
+    mon = make_breakthrough_boss(p, rng, puppet=puppet, formation_n=formation_n,
+                                 puppet_flame_mult=puppet_flame_mult)
+    res = fight(p, mon, rng=rng, locked=locked or set(), auto_pill=True,
+                puppet=puppet, formation_n=formation_n,
+                puppet_flame_mult=puppet_flame_mult)
     out = {
         "boss": mon, "win": bool(res.get("win")),
         "rounds": int(res.get("rounds", 0)),
@@ -851,8 +867,12 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
 
     # 玩家打完需要几回合（等级差只影响时长，不影响难度）
     k_rounds = cfg.TTK_PLAYER * (1.0 + delta)
-    # 傀儡期望输出计入反解：玩家多一个打手，怪血同步变厚（红线，与 fight 同源）
-    m_hp = int(cum_damage(p, k_rounds, puppet_bonus=puppet_bonus) * mitigation(m_def))
+    # 傀儡期望输出计入反解，但**只按 PUPPET_ENEMY_COMP 比例变厚**（2026-11-20 第二轮）。
+    # 全额计入（旧口径）会让「多一个打手」与「怪血同步变厚」在数学上完全对消：
+    # 回合数、胜率、承伤全都不变，带傀儡等于白带 —— 这正是用户说「没意义」的根因。
+    # 0.55 折扣后带傀儡净赚 45% 傀儡输出，回合数实打实变少。
+    _pu_hp = float(puppet_bonus) * float(cfg.PUPPET_ENEMY_COMP)
+    m_hp = int(cum_damage(p, k_rounds, puppet_bonus=_pu_hp) * mitigation(m_def))
     # 怪打死玩家需要几回合 —— 物种难度直接就是这个比值，hard 越小越可怕
     m_rounds = k_rounds * cfg.MON_ROUND_RATIO * float(mon["hard"])
     m_atk = int(st["体力"] / m_rounds / mitigation(st["防御"]))
@@ -1405,6 +1425,15 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
             "notes": _notes,
         }))
 
+    # 傀儡每回合原始输出（2026-11-20 第二轮）：只依赖 puppet / 玩家 / 异火倍率，
+    # 是循环不变量 → 提到循环外算一次。锚定玩家输出（puppet_attack(puppet, p)），
+    # 与命令层喂给 monster_scaled 的 puppet_bonus 用**同一个 p 与同一个函数**。
+    _pup_atk = 0.0
+    if puppet:
+        from . import puppet_core as _pc0  # 延迟导入避免与 core 环
+        _pup_atk = (_pc0.puppet_attack(puppet, p)
+                    * max(1.0, float(puppet_flame_mult)))
+
     # 机缘·贵人相助：默认单敌调用自己掷一次（极低概率），命中则一招制敌。
     # 多敌 encounter 传 roll_aid=False + 传入整场预掷的 aid，把掷骰权上收到
     # 整场一次——修复「每敌各掷 → 累积概率突破 2% 硬顶」的 bug（2026-11-16）。
@@ -1463,9 +1492,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # log 字段齐 .get() 消费（2026-11-16 回包事故）。
         if puppet and m_hp > 0:
             from . import puppet_core as pc  # 延迟导入避免与 core 环
-            p_atk = pc.puppet_attack(puppet)
-            # B 线傀儡异火加成：与怪血反解用的 puppet_expected_damage(flame_mult) 同源。
-            p_atk = p_atk * max(1.0, float(puppet_flame_mult))
+            # 2026-11-20 第二轮：锚定玩家输出，故传入 p（与反解同一个锚）。
+            p_atk = _pup_atk
             p_dmg = max(1, int(p_atk * mitigation(m_def)))
             p_dmg = min(p_dmg, m_hp)
             m_hp -= p_dmg
@@ -1782,7 +1810,8 @@ def pick_encounter(p, n, rng=random.random) -> list[dict]:
     return out[:n]
 
 
-def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
+def encounter(p, rng=random.random, locked=None, auto_pill=True,
+              puppet=None, formation_n=0, puppet_flame_mult=1.0) -> dict:
     """一场遭遇战：连续打 1~5 个敌人，逐个调用 ``fight``（单敌内核零改动）。
 
     设计要点（守既有纪律）：
@@ -1798,11 +1827,23 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
         ``detail`` 保留每个敌人的独立战报（名字/胜负/回合/ log），供战报分节。
       * ``fight`` 内部已写 p 的 wins/losses/exp/gold/hp —— 本层不再重复结算，
         只做气血结转与统计聚合（唯一的写入是 p["hp"] 的连战回血）。
+
+    ``puppet``（2026-11-20 第二轮）：出战傀儡真实列 dict。**每一敌都带**——
+    傀儡是常驻打手，不是一次性外援。怪血反解与实战出手用**同一个 p 与同一个
+    ``puppet_expected_damage``**（红线），不会出现「带傀儡怪血变厚却不见它出手」。
     """
     specs = pick_encounter(p, roll_encounter_count(p, rng), rng)
     st = stats(p)
     fade = max(0.0, float(cfg.ENCOUNTER_FADE))
     heal = max(0.0, float(cfg.ENCOUNTER_REST_HEAL))
+
+    # 傀儡每回合期望输出：整场算一次（p / puppet / 异火倍率都不变），
+    # 每敌反解与实战注入共用这一个数 —— 两处同源是红线。
+    _pu_bonus = 0.0
+    if puppet:
+        from . import puppet_core as _pc  # 延迟导入避免与 core 环
+        _pu_bonus = _pc.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=p)
 
     # 机缘·贵人相助：**整场只掷一次**（2026-11-16 修正）。
     # 旧实现让 fight() 每敌各掷一次，N 敌场累积概率 1-(1-2%)^N，5 敌≈9.6%，
@@ -1822,7 +1863,7 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
     pill_budget = {"hp": 0, "mp": 0,
                    "cap": min(6, int(cfg.AUTO_PILL_MAX_PER_FIGHT) * max(1, len(specs)))}
     for i, spec in enumerate(specs):
-        mon = dict(monster_scaled(p, spec))
+        mon = dict(monster_scaled(p, spec, puppet_bonus=_pu_bonus))
         # 连战第 i 敌削弱（首敌不削），只缩放 hp/atk，def 与产出不动
         scale = max(0.8, 1.0 - i * fade)
         if i:
@@ -1834,7 +1875,9 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True) -> dict:
                           int(p.get("hp") or 0) + int(st["体力"] * heal))
         # 整场机缘已预掷：传 aid + roll_aid=False，禁止每敌重复掷骰。
         r = fight(p, mon, rng=rng, aid=whole_aid, roll_aid=False,
-                  pill_budget=pill_budget, locked=locked, auto_pill=auto_pill)
+                  pill_budget=pill_budget, locked=locked, auto_pill=auto_pill,
+                  puppet=puppet, formation_n=formation_n,
+                  puppet_flame_mult=puppet_flame_mult)
         total_rounds += int(r["rounds"])
         total_taken += int(r["taken"])
         total_exp += int(r.get("exp") or 0)
@@ -2064,7 +2107,8 @@ def tower_ref_player(ref_lv: int) -> dict:
 
 
 def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
-                temp_effects=None) -> dict:
+                temp_effects=None, puppet=None, formation_n=0,
+                puppet_flame_mult=1.0) -> dict:
     """打塔里的一层（第 st['floor']+1 层）。
 
     :param p        玩家（只读；战斗在深副本上进行）
@@ -2076,6 +2120,11 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     难度（2026-11-19 改造）：怪物数值由 ``td.floor_ref_lv(floor)`` 的标尺玩家
     反解 —— **同层永远同一只怪**，与打它的玩家是谁、多少战力无关。玩家变强只
     体现在「能爬更高」，而不是「同一层越来越难」。
+
+    ``puppet``（2026-11-20 第二轮）：出战傀儡。**注意塔的特殊性**——怪血反解
+    必须锚在**标尺玩家**上（否则同层怪血会随打它的人变厚，破坏「同层同一只怪」），
+    而实战傀儡击锚在真人 ``fp`` 上。带傀儡时怪血只按标尺傀儡贡献变厚，
+    真人傀儡若是同档更强的一具，收益全部落袋。
     """
     floor = int(st.get("floor", 0)) + 1
     kind = td.floor_kind(floor)
@@ -2105,7 +2154,14 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
         "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": "塔·" + kind,
     }
-    mon = monster_scaled(tower_ref_player(ref_lv), species)
+    # 傀儡：塔的怪血必须锚标尺（同层同一只怪），故反解用 _ref、实战用 fp（见 docstring）。
+    _ref = tower_ref_player(ref_lv)
+    _pu_bonus = 0.0
+    if puppet:
+        from . import puppet_core as _pc  # 延迟导入避免与 core 环
+        _pu_bonus = _pc.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=_ref)
+    mon = monster_scaled(_ref, species, puppet_bonus=_pu_bonus)
     mod = tower_mod_from_affixes(affixes, temp_effects)
     # 武器专属效果注入（2026-11-17 用户"武器影响斗技效果"）：当前装备武器的
     # special 按 DIM_MAP 映射到 tower_mod。仅玄重尺默认时同样生效，
@@ -2132,7 +2188,10 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     mod["hp_mult"] = float(mod.get("hp_mult", 1.0)) * diff["hp_mult"]
     # 深副本战斗不自动嗑药（fp 是 deepcopy，真实背包不会减少；
     # 打了「服药」日志却不扣药 = 文案与数据两张皮）。塔/周本有各自的三选一补给。
-    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False)
+    # 傀儡（2026-11-20 第二轮）：实战锚真人 fp，怪血则已按标尺 _ref 反解（同层同一只怪）。
+    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False,
+              puppet=puppet, formation_n=formation_n,
+              puppet_flame_mult=puppet_flame_mult)
 
     # 层间回血：胜利后回一口，写进返回 hp（由调用方写回会话），避免连爬必死。
     # 战斗副本 fp 的 hp 已被 fight 写为剩余；这里只在胜利时加成。
@@ -2243,11 +2302,15 @@ def weekly_snapshot(p: dict, week: str) -> dict:
     return profile
 
 
-def weekly_floor(p, snapshot: dict, st: dict, rng=random.random) -> dict:
+def weekly_floor(p, snapshot: dict, st: dict, rng=random.random,
+                 puppet=None, formation_n=0, puppet_flame_mult=1.0) -> dict:
     """打周副本的一层（第 st['floor']+1 层），不改玩家永久存档。
 
     怪物由**快照画像**反解（难度锁定），战斗用**当前玩家**深副本（当周变强生效）。
     返回 {win, floor, kind, name, affixes, rounds, hp, mp, log, reward}。
+
+    ``puppet``（2026-11-20 第二轮）：出战傀儡。与无限塔同口径——怪血锚**快照画像**
+    （当周锁定，不因当周新炼的傀儡而变厚），实战傀儡击锚真人 ``fp``。
     """
     from . import weekly_data as wd_weekly
 
@@ -2263,7 +2326,13 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random) -> dict:
         "kind": "周本·" + kind,
     }
     # 难度源头：快照画像反解怪血/攻；玩家侧用当前真实 p 的深副本。
-    mon = monster_scaled(snapshot, species)
+    # 傀儡贡献同样锚快照（当周难度锁定），实战则锚真人 fp。
+    _pu_bonus = 0.0
+    if puppet:
+        from . import puppet_core as _pc
+        _pu_bonus = _pc.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=snapshot)
+    mon = monster_scaled(snapshot, species, puppet_bonus=_pu_bonus)
     fp = copy.deepcopy(p)
     fp["hp"] = int(st.get("temp_hp") if st.get("temp_hp") is not None
                    else stats(fp)["体力"])
@@ -2301,7 +2370,10 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random) -> dict:
 
     # 深副本战斗不自动嗑药（fp 是 deepcopy，真实背包不会减少；
     # 打了「服药」日志却不扣药 = 文案与数据两张皮）。塔/周本有各自的三选一补给。
-    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False)
+    # 傀儡：实战锚真人 fp（怪血已按快照反解，见上）。
+    r = fight(fp, mon, rng=rng, tower_mod=mod, auto_pill=False,
+              puppet=puppet, formation_n=formation_n,
+              puppet_flame_mult=puppet_flame_mult)
     hp_after = int(fp.get("hp", 0))
     rest = 0
     if r["win"]:
@@ -2381,11 +2453,18 @@ def weekly_commit(p, st: dict) -> dict:
             "items": dict(staged.get("items") or {}), "weapons": granted}
 
 
-def duel(p, vic, rng=random.random) -> dict:
+def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
+         puppet_flame_mult=1.0, vic_puppet=None, vic_formation_n=0,
+         vic_flame_mult=1.0) -> dict:
     """掠夺：双方各用自己四槽随机互殴（p 先手）。斗气不足转武器普攻。
 
     只算胜负与战报，不改双方 hp/gold（结算由 commands.cmd_rob 负责），
     与 `fight` 共用四槽 / 按阶斗气 / 普攻兜底逻辑。
+
+    ``puppet`` / ``vic_puppet``（2026-11-20 第二轮）：双方各自的出战傀儡。
+    PVP 没有「怪血反解」这一步，所以傀儡是**净增输出**——这正是「炼傀儡要有用」
+    的落点。谁炼了谁受益，双方对称：被挑战方若也有出战傀儡，按存档一起带。
+    时序与 ``fight`` 对齐：本人出手 → 傀儡出手 → 对方行动。
     """
     sp, sv = stats(p), stats(vic)
     # 根基裁定（隐形）：双方各自的隐藏系数，防御侧按本人系数打折；输出侧在
@@ -2394,6 +2473,19 @@ def duel(p, vic, rng=random.random) -> dict:
     hp_p, hp_v = int(sp["体力"]), int(sv["体力"])
     mp_p, mp_v = mp_max(p), mp_max(vic)
     log, rounds = [], 0
+    # 傀儡每回合输出：循环不变量，提前算一次（与 fight 同函数同锚）。
+    _pup_atk_p = _pup_atk_v = 0.0
+    if puppet or vic_puppet:
+        from . import puppet_core as _pc0  # 延迟导入避免与 core 环
+        if puppet:
+            _pup_atk_p = (_pc0.puppet_attack(puppet, p)
+                          * max(1.0, float(puppet_flame_mult)))
+        if vic_puppet:
+            _pup_atk_v = (_pc0.puppet_attack(vic_puppet, vic)
+                          * max(1.0, float(vic_flame_mult)))
+    # 防御侧有效值（与对应 _hit 调用同口径，含根基打折）
+    _def_v = max(0, int(sv["防御"] * root_v))
+    _def_p = max(0, int(sp["防御"] * root_p))
     # 2026-11-15 多维效果：p 的增益在 p_fx、挂给 vic 的减益在 v_fx，反之亦然
     p_fx, v_fx = fx.new_state(), fx.new_state()
     v_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
@@ -2434,6 +2526,14 @@ def duel(p, vic, rng=random.random) -> dict:
             # 减疗（2026-11-19 修）：vic 挂到 p_fx 的 debuff_heal 压低 p 回血
             hp_p = min(hp_p0, hp_p + int(hit["dmg"] * hit["heal_ratio"] * fx.heal_mult(p_fx)))
             log[-1]["hp_after"] = int(hp_p)
+        # 傀儡击（2026-11-20 第二轮）：与 fight 同时序 —— 本人出手后、对手行动前。
+        if _pup_atk_p > 0 and hp_v > 0:
+            from . import puppet_core as _pcp
+            _pd = max(1, int(_pup_atk_p * mitigation(_def_v)))
+            _pd = min(_pd, hp_v)
+            hp_v -= _pd
+            log.append(_mark(_pcp.puppet_log_entry(puppet, _pd, formation_n),
+                             "p", hp_p, mp_p, hp_v))
         if hp_v <= 0:
             break
         # vic 行动前：DoT + 控制
@@ -2476,6 +2576,14 @@ def duel(p, vic, rng=random.random) -> dict:
         else:
             log.append(_mark({"dmg": 0, "kind": "被控", "miss": True,
                               "move": "被控"}, "v", hp_v, mp_v, hp_p))
+        # vic 的傀儡击（对称）：被控则该轮傀儡同罚不出手，与 vic 本人一致。
+        if _pup_atk_v > 0 and hp_p > 0 and not vs["skip"]:
+            from . import puppet_core as _pcq
+            _vd = max(1, int(_pup_atk_v * mitigation(_def_p)))
+            _vd = min(_vd, hp_p)
+            hp_p -= _vd
+            log.append(_mark(_pcq.puppet_log_entry(vic_puppet, _vd, vic_formation_n),
+                             "v", hp_v, mp_v, hp_p))
         if hp_p <= 0:
             break
         fx.expire_turn(p_fx)

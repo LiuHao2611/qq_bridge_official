@@ -121,26 +121,38 @@ def test_material_names_are_novel():
     check(not selfmade, "出现原著没有的八/九阶魔核：%s" % selfmade)
 
 
-# --- 3. 老傀儡数值逐字节不变（系数基准点）-----------------------------------
+# --- 3. 老傀儡不吃材料惩罚（口径见下：绝对值必须变，惩罚不许有）-------------
 def test_legacy_puppet_unchanged():
-    legacy_old = (cfg.PUPPET_TIER_BASE[0] + 7 * cfg.PUPPET_CORE_K1
-                  + 900 * cfg.PUPPET_SOUL_K2) * cfg.PUPPET_ATK_FACTOR
+    """老存档傀儡不被倒扣。
+
+    ⚠️ 2026-11-20 第二轮**口径变更**：上一轮这里断言「数值逐字节不变」，锚的是
+    旧绝对常数 `PUPPET_TIER_BASE / PUPPET_CORE_K1 / PUPPET_SOUL_K2 /
+    PUPPET_ATK_FACTOR`。那几个常数已在第二轮删除 —— 它们正是用户说的
+    「傀儡战力低得离谱」的根因（绝对常数不跟等级走，lv81 只占玩家输出 0.2%）。
+
+    现在能守、也必须守的是：**老存档（库列缺 metal/fire、或为 0）不被倒扣**，
+    即材料倍率恰为 1.0，输出 = 该玩家每回合输出 × 该档 ratio。
+    """
+    p60 = core.tower_ref_player(60)
+    out60 = pc._player_round_output(p60)
     for t in (0, 1, 2):
-        want = (cfg.PUPPET_TIER_BASE[t] + 7 * cfg.PUPPET_CORE_K1
-                + 900 * cfg.PUPPET_SOUL_K2) * cfg.PUPPET_ATK_FACTOR
+        want = out60 * float(cfg.PUPPET_TIER_RATIO[t])
         pu = {"tier": t, "core_tier": 7, "soul_strength": 900,
               "metal_grade": 2, "fire_tier": 7}
-        check(abs(pc.puppet_attack(pu) - want) < 1e-9,
-              "老傀儡 tier=%d 数值变了：%r vs %r" % (t, pc.puppet_attack(pu), want))
+        check(abs(pc.puppet_attack(pu, p60) - want) < 1e-6,
+              "基准材料 tier=%d 应为 玩家输出×%.2f=%.2f，实得 %.2f"
+              % (t, cfg.PUPPET_TIER_RATIO[t], want, pc.puppet_attack(pu, p60)))
         # 库列缺失 / 为 0（未记录）也必须按基准算，不能吃惩罚
         for variant in ({"tier": t, "core_tier": 7, "soul_strength": 900},
                         {"tier": t, "core_tier": 7, "soul_strength": 900,
-                         "metal_grade": 0, "fire_tier": 0}):
-            check(abs(pc.puppet_attack(variant) - want) < 1e-9,
-                  "缺键/0 值傀儡 tier=%d 被扣分：%r" % (t, pc.puppet_attack(variant)))
-    check(abs(pc.puppet_attack({"tier": 0, "core_tier": 7, "soul_strength": 900,
-                                "metal_grade": 2, "fire_tier": 7}) - legacy_old) < 1e-9,
-          "旧公式口径必须完全一致")
+                         "metal_grade": 0, "fire_tier": 0},
+                        {"tier": t}):
+            got = pc.puppet_attack(variant, p60)
+            check(abs(got - want) < 1e-6,
+                  "缺键/0 值傀儡 tier=%d 被扣分：%.2f ≠ %.2f（%s）"
+                  % (t, got, want, variant))
+        check(abs(pc._material_mult({"tier": t}) - 1.0) < 1e-9,
+              "老档材料倍率必须恰为 1.0，实得 %.6f" % pc._material_mult({"tier": t}))
 
 
 # --- 4. 金属与火真的进公式（同档内拉开差距，且不失控）-----------------------
