@@ -1969,6 +1969,12 @@ PUPPET_ENEMY_COMP = 0.55
 PUPPET_FORMATION_MAX = 3
 #: 结阵每多一具的加成（与 PUPPET_FORMATION_MAX 配套）。
 PUPPET_FORMATION_STEP = 0.15
+#: P0-1（2026-11-20 设计文档）：成阵不是加百分比，是**临时升档**。
+#: 原著「收服」章：十具地妖傀成阵 → 领头暂化金色天妖傀、可抗二星斗尊，
+#: 战后「金光消散，再度化为地妖傀」。本作封顶 3 具，故门槛取 3。
+#: 只对人/地级生效；天级无更高档，走紫皮变体（护主增强，输出不叠倍率）。
+PUPPET_FORMATION_BURST_N = 3
+PUPPET_FORMATION_BURST_TIERS = (0, 1)
 
 # ---------------------------------------------------------------------------
 # 傀儡护主（2026-11-20 第三轮）：大额伤害时有较低概率替主人挡下
@@ -2026,6 +2032,11 @@ PUPPET_FORMATION_GUARD_STEP = 0.06
 #: 傀儡自身残血时反而更容易护不住（它自己快废了）：概率 × 此系数。
 PUPPET_GUARD_HURT_MULT = 0.5
 PUPPET_GUARD_HURT_AT = 0.30
+#: P0-2 有灵（awakened）：原著「北王」只需心念一动便主动出手、悍不畏死拖住强敌。
+#: 落地为两条可观测行为：① 小额伤害也进入挡伤判定（大额阈值乘此系数）；
+#: ② 傀儡自身残血时不再乘 PUPPET_GUARD_HURT_MULT 惩罚。
+#: 🚨 概率上限 GUARD_CAP=0.40、泄漏 GUARD_LEAK=0.35 不因有灵放宽 —— 不抢风头。
+PUPPET_AWAKEN_GUARD_THRESHOLD_MULT = 0.5
 
 #: 战斗集成唯一函数口径：傀儡每回合期望输出，fight 与 damage_schedule 都只调它。
 #: 这条是红线——两处同源，谁只改一处守门必红。

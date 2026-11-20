@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import copy
 import os
+import re
 import random
 import sys
 import types
@@ -493,6 +494,66 @@ def test_guard_share_stays_below_half():
 
 
 # ---------------------------------------------------------------------------
+# P0-2 有灵主动拦截（2026-11-20 设计文档）：小额也挡、残血不打折
+# ---------------------------------------------------------------------------
+def test_awakened_intercepts_small_hits():
+    """同种子 A/B：伤害落在「有灵门槛~无灵门槛」之间时，只有有灵会拦。"""
+    p = _p(81)
+    st = core.stats(p)
+    base_th = max(1, int(int(st["体力"]) * float(cfg.PUPPET_GUARD_THRESHOLD)))
+    aw = dict(PU_REN, awakened=True)
+    g = pc.guard_profile(aw, p, 1)
+    check(bool(g.get("awakened")), "guard_profile 未透出 awakened —— 卡面与战斗会两张皮")
+    aw_th = g["threshold"]
+    check(aw_th < base_th,
+          "有灵门槛 %d 未低于无灵门槛 %d —— 主动拦截没有扩大触发范围"
+          % (aw_th, base_th))
+    mit = core.mitigation(st["防御"])
+    # 取两道门槛的中点：无灵绝不触发，有灵才有机会触发。
+    mon = core.monster_scaled(p, dict(SPEC, lv=81))
+    mon["atk"] = max(1, int(((aw_th + base_th) // 2) / max(0.01, mit)))
+    raw = max(1, int(mon["atk"] * mit))
+    check(aw_th <= raw < base_th,
+          "构造失败：实收 %d 未落在有灵门槛 %d ~ 无灵门槛 %d 之间"
+          % (raw, aw_th, base_th))
+    fired_aw = fired_plain = 0
+    for seed in range(25):
+        r = core.fight(_p(81), copy.deepcopy(mon), rng=random.Random(seed).random,
+                       puppet=dict(aw), formation_n=1, auto_pill=True)
+        fired_aw += int((r.get("puppet_guard") or {}).get("count") or 0)
+        r0 = core.fight(_p(81), copy.deepcopy(mon), rng=random.Random(seed).random,
+                        puppet=dict(PU_REN), formation_n=1, auto_pill=True)
+        fired_plain += int((r0.get("puppet_guard") or {}).get("count") or 0)
+    check(fired_aw > 0, "有灵后小伤害仍一次都不拦 —— 主动拦截没落地")
+    check(fired_plain == 0, "无灵也拦了 %d 次 —— 大额门槛被破坏" % fired_plain)
+
+
+def test_awakened_skips_hurt_penalty():
+    """有灵＝悍不畏死：自身残血不再乘 0.5 惩罚（源码级钉死整段条件）。"""
+    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
+               encoding="utf-8").read()
+    # 🚨 必须钉整段结构：只搜子串会被 `if (True or not ...)` 这种注入骗过（实测白守）。
+    check(bool(re.search(r'if \(not _pup_prof\.get\("awakened"\)', src)),
+          "残血惩罚未按有灵分支跳过 —— 北王式主动拦截只剩卡面文案")
+    check(0.0 < float(cfg.PUPPET_AWAKEN_GUARD_THRESHOLD_MULT) < 1.0,
+          "有灵门槛系数越界：%s" % cfg.PUPPET_AWAKEN_GUARD_THRESHOLD_MULT)
+    note = pc.guard_note(PU_REN, 100, 60, 30, 10, 100, awakened=True)
+    check("心念一动" in note,
+          "有灵拦下时战报无「心念一动」提示：%s" % note)
+    plain = pc.guard_note(PU_REN, 100, 60, 30, 10, 100)
+    check("心念一动" not in plain, "无灵傀儡的战报被误加了有灵文案")
+
+
+def test_awakened_still_not_stealing_show():
+    """有灵只改行为，不放宽概率上限与泄漏率（不抢风头红线）。"""
+    g = pc.guard_profile(dict(PU_TIAN, awakened=True), _p(81), 3)
+    check(float(g["chance"]) <= float(cfg.PUPPET_GUARD_CAP) + 1e-9,
+          "有灵后挡伤概率 %.3f 越过 CAP %.3f" % (g["chance"], cfg.PUPPET_GUARD_CAP))
+    check(abs(float(g["leak"]) - float(cfg.PUPPET_GUARD_LEAK)) < 1e-9,
+          "有灵后泄漏率 %.3f ≠ %.3f（变成免伤了）" % (g["leak"], cfg.PUPPET_GUARD_LEAK))
+
+
+# ---------------------------------------------------------------------------
 def _run():
     for fn in (test_tier_monotonic,
                test_armor_is_reverse_solved_from_take,
@@ -509,7 +570,10 @@ def _run():
                test_guard_visible_in_review,
                test_guard_note_no_nested_bracket,
                test_probability_config_sane,
-               test_guard_share_stays_below_half):
+               test_guard_share_stays_below_half,
+               test_awakened_intercepts_small_hits,
+               test_awakened_skips_hurt_penalty,
+               test_awakened_still_not_stealing_show):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
