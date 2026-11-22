@@ -556,11 +556,13 @@ def build_flames_data(p: dict) -> dict:
     if trad:
         for i, t in enumerate(trad):
             rows.append({"title": (f"{fname}·本宗传承" if i == 0 else "　"),
-                         "right": "", "sub": str(t), "note": ""})
+                         "right": "", "head": i == 0, "sub": str(t), "note": ""})
     else:
-        rows.append({"title": f"{fname}·本宗传承", "right": "无",
+        rows.append({"title": f"{fname}·本宗传承", "right": "无", "head": True,
                      "sub": "本宗无传承异火。以下异火皆为游历中所遇，与师门无关。", "note": ""})
-    rows.append({"title": "可收服的异火", "right": "",
+    # head=True：这两行是**分类标题**不是条目，模板据此画成「菱形 + 楷体金字」，
+    # 否则它和「青莲地心火」一样是白色粗体，玩家读不出层级（2026-11-22 实拍）。
+    rows.append({"title": "可收服的异火", "right": "", "head": True,
                  "sub": "须先收服才可喂养；未收服不显示下级需求。", "note": ""})
     for f in cfg.FLAMES:
         name = f["name"]

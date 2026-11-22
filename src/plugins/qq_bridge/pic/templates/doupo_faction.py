@@ -46,16 +46,20 @@ from ..canvas import Canvas
 from ..theme import Theme
 
 # 与人物卡 / 斗技卡共用同一套配色与度量工具
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
 # ---- 排版 ----
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 FS_TITLE = 36
 FS_NAME = 30            # 宗门名
 FS_BODY = 20
 FS_SUB = 17             # 段落正文（清晰下限）
 FS_LABEL = 15
+FS_KAI = 22             # 卡池名（楷体，游戏牌匾字）——POOL_HEAD_H=26 内放得下
 FS_STAT = 36            # 统计大数字
 FS_TIP = 16
 
@@ -68,7 +72,7 @@ LINE_H = FS_SUB + 8
 BLOCK_GAP = 12
 SECTION_H = FS_SUB + 12     # 分区标题行高
 
-H_TITLE = FS_TITLE + 26
+H_TITLE = UI.TITLE_H    # 牌匾标题区（内核统一）
 H_HEADER = FS_NAME + 12 + PILL_H + 14 + FS_LABEL + 8
 H_STATS = SECTION_H + STAT_CELL_H + BLOCK_GAP
 H_TIP = 12 + FS_TIP + 8
@@ -217,7 +221,7 @@ def _measure(data: dict, width: int) -> int:
             y += _pool_block_h(len(_rows(entries))) + BLOCK_GAP
 
     y += H_TIP
-    return max(420, y + PAD)
+    return max(420, y + UI.PAD_B)   # 底部比左右宽 18（见 doupo_ui.PAD_B）
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -234,9 +238,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label: str, txt: str, x: int, y: int, size: int, role: str,
             anchor: str) -> None:
@@ -276,19 +277,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "宗门")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = FS_TITLE + 10
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, "globe", tx + FS_TITLE // 2, y + FS_TITLE // 2, FS_TITLE,
-               p["title_color"], style=ICON_STYLE)
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE, "light", "lm")
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE, "kai", "mm")
 
     # ---- 宗门概览 ----
     name = str(data.get("name") or "无宗门")
@@ -337,8 +329,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     counts = data.get("tier_counts") or {}
     for i, tier in enumerate(tiers):
         cx = x0 + i * (cell_w + cell_gap)
-        c.rounded_rect((cx, y, cx + cell_w, y + STAT_CELL_H), radius=12,
-                       fill=p["cell_bg"], outline=p["cell_line"], width=1)
+        UI.panel(c, p, (cx, y, cx + cell_w, y + STAT_CELL_H), state="done",
+                 radius=12, watermark=False)
         ktext("stat_%s" % tier, cx + cell_w // 2, y + 34,
               str(int(counts.get(tier, 0))), FS_STAT, p[TIER_COLORS[i]], anchor="mm")
         stext("stat_label_%s" % tier, cx + cell_w // 2, y + STAT_CELL_H - 20,
@@ -398,12 +390,16 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             rows = _rows(entries)
             bh = _pool_block_h(len(rows))
             # 块底：浅底圆角，与统计格同色系，视觉上把该池条目圈起来
-            c.rounded_rect((x0, y, x0 + content_w, y + bh), radius=12,
-                           fill=p["cell_bg"], outline=p["cell_line"], width=1)
+            UI.panel(c, p, (x0, y, x0 + content_w, y + bh), state="done",
+                     radius=13)
             # 块头：池名（左，accent）+ 该池宗门数 / 转宗金币（右锚，灰）
             hy = y + POOL_PAD + POOL_HEAD_H // 2
-            ktext("pool_%d" % gi, x0 + POOL_PAD, hy, str(g.get("pool") or ""),
-                  FS_SUB, p["accent_color"])
+            UI.kai_text(c, (x0 + POOL_PAD, hy), str(g.get("pool") or ""),
+                        FS_KAI, p["gold_hi"], anchor="lm")
+            if boxes is not None:
+                pw_ = _w(str(g.get("pool") or ""), FS_KAI, "regular")
+                boxes.append(("pool_%d" % gi, x0 + POOL_PAD, hy - FS_KAI // 2,
+                              x0 + POOL_PAD + pw_, hy + FS_KAI // 2))
             head_right = "共 %d 宗门 · 需 %d 金币" % (len(entries), cost)
             stext("pool_head_right_%d" % gi, x0 + content_w - POOL_PAD, hy,
                   head_right, FS_LABEL, p["dim_color"], anchor="rm")
@@ -423,11 +419,11 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                         bx1 = cell_right
                         c.rounded_rect((bx1 - badge_w, cy - BADGE_H // 2,
                                         bx1, cy + BADGE_H // 2),
-                                       radius=BADGE_H // 2, fill=p["pill_bg"],
-                                       outline=p["pill_line"], width=1)
+                                       radius=BADGE_H // 2, fill="#1C1830",
+                                       outline=p["gold_dk"], width=1)
                         stext("badge_%d_%d_%d" % (gi, ri, ci),
                               bx1 - BADGE_PAD, cy, cnt, BADGE_FS,
-                              p["accent_color"], anchor="rm")
+                              p["gold_hi"], anchor="rm")
             y += bh + BLOCK_GAP
 
     # ---- 底部提示 ----

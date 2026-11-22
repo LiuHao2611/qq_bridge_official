@@ -20,27 +20,36 @@
   icon      标题图标名（icons.ICONS 之一，缺省/非法回退 sword）
   title     标题
   subtitle  副标题（可留空）
-  rows      [{"badge","title","right","sub","note","bar":{"cur","max"},"accent"}]
+  rows      [{"badge","title","right","sub","note","bar":{"cur","max"},"accent",
+              "head"}]
              note = 可选的「下一行提示」（如「下级需 60 药渣」），独立成行、
              用显式 NOTE_GAP 与副行拉开，**禁止用全角空格塞进 sub 凑间距**。
+             head = True 表示这一行是**分类标题**（如异火卡的「可收服的异火」），
+             模板画成「玫红菱形 + 楷体金字」，与普通条目分层；行高不变。
   tip      底部提示（可留空）
 """
 from __future__ import annotations
+
+from PIL import ImageDraw
 
 from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
 # 与人物卡 / 菜单卡共用配色/度量/进度条工具（同包内复用，避免两份 _pal 各自漂移）
-from .doupo import _bar, _card_alpha, _fit, _pal, _w
+from .doupo import _bar, _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
 # ---- 排版（2026-11-14 统一字号规范）----
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 FS_TITLE = 34
 FS_SUB = S.FS_SUB + 1          # 18 副标题
 FS_ITEM = S.FS_KEY             # 24 主标题 / 价格 / 战力（重点，加粗）
 FS_SMALL = S.FS_SUB            # 17 说明
+TIP_GAP = 12             # 最后一行到回纹横带
 FS_TIP = S.FS_LABEL            # 16 底部提示
 FS_BADGE = S.FS_SUB + 1        # 18 快捷键 / 名次
 ICON = 22
@@ -110,7 +119,7 @@ def _col_width(content_w: int, cols: int) -> int:
 
 def _measure(data: dict, content_w: int) -> int:
     """总高度（与 build 里的 y 步进严格一致，否则卡底留白会歪）。"""
-    y_head = PAD + FS_TITLE + 8 + 1 + 18
+    y_head = UI.TITLE_H
     if data.get("subtitle"):
         y_head += FS_SUB + 10
     cols = _cols(data)
@@ -119,8 +128,9 @@ def _measure(data: dict, content_w: int) -> int:
     for i, r in enumerate(_rows_of(data)):
         k = i % cols
         ys[k] += _row_h(r, cw) + ROW_PAD
-    y = max(ys) - ROW_PAD + 1 + 12 + FS_TIP + PAD
-    return max(300, y)
+    # 末尾留白用 UI.PAD_B(54)：底部两角只有短 L 线，26 收尾会贴框（2026-11-22）
+    y = max(ys) - ROW_PAD + 1 + TIP_GAP + FS_TIP + UI.PAD_B
+    return max(330, y)
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -136,9 +146,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label: str, txt: str, x: int, y: int, size: int, role: str,
             anchor: str) -> None:
@@ -159,22 +166,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
-    icon = str(data.get("icon") or "sword")
-    if not icons.exists(icon):
-        icon = "sword"
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "斗破")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = FS_TITLE + 10
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, icon, tx + FS_TITLE // 2, y + FS_TITLE // 2, FS_TITLE,
-               p["title_color"], style=ICON_STYLE)
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE, "light", "lm")
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE, "kai", "mm")
 
     # ---- 副标题 ----
     sub = data.get("subtitle")
@@ -224,12 +219,29 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         right_w = _w(str(right), FS_ITEM, "bold") + 14 if right else 0
 
         # 主标题（放大加粗）
-        tcolor = p["accent_color"] if item.get("accent") else p["text_color"]
+        title_txt = str(item.get("title") or "")
         title_max = (cx0 + cw) - title_x - 8 - right_w
-        S.key(c, (title_x, ty), str(item.get("title") or ""),
-              size=FS_ITEM, color=tcolor, max_w=title_max)
-        rec("r%d.title" % ri, S.fit(str(item.get("title") or ""), title_max, FS_ITEM, "bold"),
-            title_x, ty, FS_ITEM, "bold", "lm")
+        if item.get("head"):
+            # 分组头行（数据层显式标 head=True，如异火卡的「本宗传承 / 可收服的异火」）：
+            # 玫红菱形 + 楷体金字。以前这种行和普通条目一样是白色粗体，玩家分不清
+            # 「这是分类」还是「这是某一项」（2026-11-22 实拍确认层级不清）。
+            txx = cx0 + 20
+            ImageDraw.Draw(UI.img_of(c)).polygon(
+                [(cx0 + 6, ty - 7), (cx0 + 13, ty), (cx0 + 6, ty + 7), (cx0 - 1, ty)],
+                fill=UI.rgb(p["fret"]) + (255,))
+            UI.kai_text(c, (txx, ty), S.fit(title_txt, (cx0 + cw) - txx - 8 - right_w,
+                                            FS_ITEM, "kai"),
+                        FS_ITEM, p["gold_hi"], anchor="lm")
+            rec("r%d.title" % ri,
+                S.fit(title_txt, (cx0 + cw) - txx - 8 - right_w, FS_ITEM, "kai"),
+                txx, ty, FS_ITEM, "kai", "lm")
+            title_x = txx
+        else:
+            tcolor = p["accent_color"] if item.get("accent") else p["text_color"]
+            S.key(c, (title_x, ty), title_txt,
+                  size=FS_ITEM, color=tcolor, max_w=title_max)
+            rec("r%d.title" % ri, S.fit(title_txt, title_max, FS_ITEM, "bold"),
+                title_x, ty, FS_ITEM, "bold", "lm")
         # 右侧信息（价格 / 战力 / 状态，同为重点：暗金加粗）
         if right:
             S.key(c, (cx0 + cw, ty), right, size=FS_ITEM,
@@ -273,7 +285,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
     # ---- 底部提示 ----
     y = max(col_y) - ROW_PAD
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
+    UI.divider(c, p, y, x0 + 6, x0 + content_w - 6, style="band")
     y += 12
     tip = data.get("tip")
     if tip:

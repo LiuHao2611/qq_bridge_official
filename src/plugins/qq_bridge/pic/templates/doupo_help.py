@@ -25,10 +25,13 @@ from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 FS_TITLE = 30
 FS_GROUP = S.FS_BODY          # 20 分组标题
 FS_BODY = S.FS_SUB            # 17 要点正文（清晰下限）
@@ -108,13 +111,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     plans, blocks_h = _layout(data, content_w)
     boxes = kw.pop("boxes", None)
 
-    h = PAD + FS_TITLE + 8 + 1 + 18 + blocks_h + 12 + FS_BODY + PAD
-    h = max(360, h)
+    h = UI.TITLE_H + blocks_h + 14 + FS_BODY + 28
+    h = max(400, h)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label, txt, x, y, size, anchor="lm"):
         if boxes is None:
@@ -130,27 +130,17 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         boxes.append((label,) + bb)
 
     x0 = PAD
-    y = PAD
 
-    # ---- 标题 ----
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "斗破玩法")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = 16 + 12
-    tx = x0 + (content_w - tw - ico_w) // 2
-    _list_glyph(c, tx + 8, y + FS_TITLE // 2, p["title_color"])
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE)
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE)
 
     # ---- 分组气泡 + 组内要点 ----
     for gi, gp in enumerate(plans):
         gh = gp["h"]
-        # 气泡包裹：淡紫底 + 淡紫边，与 doupo_ruin 分段气泡同一套语义。
-        c.rounded_rect((x0, y, x0 + content_w, y + gh), radius=12,
-                       fill=p["cell_bg"], outline=p["border_color"], width=1)
+        # 游戏面板：深底 + 暗金边 + 面板内祥云水印（与 doupo_ruin 同一套语义）
+        UI.panel(c, p, (x0, y, x0 + content_w, y + gh), state="done", radius=12)
         # 组标题：左侧靛紫竖条 + 靛紫粗体名。
         gy = y + GROUP_PAD
         c.rounded_rect((x0 + GROUP_PAD, gy + 3, x0 + GROUP_PAD + 4,
@@ -183,8 +173,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         y -= GROUP_GAP
 
     # ---- 底部提示 ----
-    c.line((x0, y + 4, x0 + content_w, y + 4), fill=p["line_color"], width=1)
-    y += 12
+    UI.divider(c, p, y + 6, x0 + 6, x0 + content_w - 6, style="band")
+    y += 16
     tip = str(data.get("tip") or "发「斗破菜单」看全部口令 · 数值改动以本卡为准")
     s = _fit(tip, content_w, FS_BODY, "regular")
     icons.draw(c, "bolt", x0 + 8, y + FS_BODY // 2, 14, p["accent_color"], style=ICON_STYLE)

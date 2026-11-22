@@ -31,11 +31,15 @@ from ..canvas import Canvas
 from ..theme import Theme
 
 from . import doupo_battle as _battle
-from .doupo import _card_alpha, _fit, _pal, _w
+from . import doupo_ui as UI
+from .doupo import _fit, _pal, _w
 from . import doupo_style as S
 
-PAD = 28
+PAD = UI.PAD_X        # 内容左右内边距 36（外框画在 10、内线 17 → 距框线 19px）
+PAD_B = UI.PAD_B      # 底部 54（底部两角只有短 L 线，36 收尾会贴框）
 FS_TITLE = 30
+TIP_GAP = 18              # 最后一段到回纹横带
+TIP_LEAD = 14             # 横带到 tip 文字
 FS_SEG = S.FS_KEY          # 24 段名（粗体）
 FS_LABEL = S.FS_LABEL      # 16 chip / 小标签
 FS_BODY = S.FS_SUB         # 17 描述 / 怪物掉落行
@@ -99,24 +103,24 @@ def _rich(data: dict) -> bool:
 
 
 def _status_color(p: dict, status: str) -> str:
-    """语义色统一（2026 前沿配色）：已通关=薄荷绿 / 可挑战=靛紫焦点 / 未解锁=灰。
+    """语义色：已通关=金 / 可挑战=玫红 / 未解锁=灰紫（与 :func:`doupo_ui.panel` 同源）。
 
-    青色（mp_to）专供战斗斗气条，不在这里复用——否则紫+青+绿三套强调色同时
-    出现显得杂。焦点一律靛紫，完成一律薄荷绿，弱信息灰紫。
+    2026-11-22 游戏风化：旧的「薄荷绿 + 靛紫」是浅色卡时代的强调色，放在深蓝紫
+    回纹卡上发灰，改用游戏本体的金色（完成）与玫红（当前）两档焦点色。
     """
     if status == "done":
-        return p["pill_text"]
+        return p["gold"]
     if status == "current":
-        return p["title_color"]
-    return p["dim_color"]
+        return p["fret_hi"]
+    return p["weak"]
 
 
 def _status_bg(p: dict, status: str) -> str:
     if status == "done":
-        return p["pill_bg"]
+        return "#1E1A30"
     if status == "current":
-        return p["chip_bg"]
-    return p["track_color"]
+        return "#2A1A28"
+    return "#241E3C"
 
 
 def _drops_text(drops) -> str:
@@ -191,15 +195,13 @@ def _fmt_hp(v) -> str:
 
 # ---------------------------------------------------------------- 绘制
 def _draw_prog(c: Canvas, plan: dict, x0: int, y: int, content_w: int, p: dict, rec) -> None:
-    """顶部 7 段进度气泡条 + 今日进度文案。"""
+    """顶部段进度徽条 + 今日进度文案（已通关=金底勾 / 当前=玫红描边 / 未解锁=暗底）。"""
     done, total = plan["done"], plan["total"]
-    # 文案与气泡条同一行：左侧文案，气泡条右对齐（显式列，不用空格凑）。
+    # 文案与徽条同一行：左侧文案，徽条右对齐（显式列，不用空格凑）。
     label = "今日进度 %d/%d" % (done, total)
     if plan.get("day"):
         label += " · " + plan["day"]
-    lw = _w(label, FS_BODY, "regular")
-    c.text((x0, y + PROG_BUBBLE_H // 2), label, size=FS_BODY,
-           color=p["dim_color"], role="regular", anchor="lm")
+    UI.kai_text(c, (x0, y + PROG_BUBBLE_H // 2), label, FS_BODY, p["gold_hi"], anchor="lm")
     rec("prog_label", label, x0, y + PROG_BUBBLE_H // 2, FS_BODY)
 
     bar_w = total * PROG_BUBBLE_W + (total - 1) * PROG_GAP
@@ -207,41 +209,37 @@ def _draw_prog(c: Canvas, plan: dict, x0: int, y: int, content_w: int, p: dict, 
     for i in range(total):
         bxx = bx + i * (PROG_BUBBLE_W + PROG_GAP)
         if i < done:
-            # 已通关=薄荷绿渐变（完成态 Neo Mint），与段气泡/状态 chip 同语义。
             c.gradient_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H),
-                            p["pill_line"], p["pill_text"], radius=10)
-            # 勾（对勾图标，白色，实心）压在气泡中心。
+                            p["gold_dk"], p["gold"], radius=10)
             icons.draw(c, "check", bxx + PROG_BUBBLE_W // 2,
-                       y + PROG_BUBBLE_H // 2, 14, _WHITE, style="solid")
+                       y + PROG_BUBBLE_H // 2, 14, "#3A2006", style="solid")
         elif i == done:
-            # 当前可挑战=靛紫焦点色（Digital Lavender），青色留给战斗斗气条。
             c.rounded_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H), radius=10,
-                           fill=p["chip_bg"], outline=p["title_color"], width=2)
+                           fill="#2A1420", outline=p["fret"], width=2)
             c.text((bxx + PROG_BUBBLE_W // 2, y + PROG_BUBBLE_H // 2), str(i + 1),
-                   size=FS_LABEL, color=p["title_color"], role="regular", anchor="mm")
+                   size=FS_LABEL, color=p["fret_hi"], role="bold", bold=True, anchor="mm")
         else:
             c.rounded_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H), radius=10,
-                           fill=p["track_color"], outline=p["border_color"], width=1)
+                           fill="#241E3C", outline=p["panel_ln"], width=1)
             c.text((bxx + PROG_BUBBLE_W // 2, y + PROG_BUBBLE_H // 2), str(i + 1),
-                   size=FS_LABEL, color=p["dim_color"], role="regular", anchor="mm")
+                   size=FS_LABEL, color=p["weak"], role="regular", anchor="mm")
         rec("prog_%d" % i, str(i + 1), bxx, y, PROG_BUBBLE_H)
 
 
 def _draw_run(c: Canvas, plan: dict, x0: int, y: int, content_w: int, p: dict, rec) -> None:
-    """本次挑战气泡：整块包裹，逐段 chip 分色。"""
+    """本次挑战面板：整块包裹，逐段按胜负分色。"""
     h = plan["run_h"]
-    c.rounded_rect((x0, y, x0 + content_w, y + h - 4), radius=12,
-                   fill=p["cell_bg"], outline=p["cell_line"], width=1)
+    UI.panel(c, p, (x0, y, x0 + content_w, y + h - 4), state="current", radius=13)
     ty = y + RUN_PAD
-    c.text((x0 + RUN_PAD, ty + RUN_HEADER_H // 2), "本次挑战", size=S.FS_KEY,
-           color=p["title_color"], role="bold", bold=True, anchor="lm")
-    rec("run_head", "本次挑战", x0 + RUN_PAD, ty + RUN_HEADER_H // 2, S.FS_KEY, role="bold")
+    UI.kai_text(c, (x0 + RUN_PAD + 2, ty + RUN_HEADER_H // 2), "本次挑战",
+                S.FS_KEY, p["gold"], anchor="lm")
+    rec("run_head", "本次挑战", x0 + RUN_PAD + 2, ty + RUN_HEADER_H // 2, S.FS_KEY)
     ty += RUN_HEADER_H
-    tone_color = {"accent": p["title_color"], "done": p["pill_text"],
-                  "foe": p["hp_to"], "dim": p["dim_color"]}
+    tone_color = {"accent": p["gold_hi"], "done": p["green"],
+                  "foe": p["red"], "dim": p["dim"]}
     for i, (txt, tone) in enumerate(plan["run_rows"]):
         c.text((x0 + RUN_PAD + BULLET(), ty + RUN_ROW_H // 2), txt, size=FS_BODY,
-               color=tone_color.get(tone, p["text_color"]), role="regular", anchor="lm")
+               color=tone_color.get(tone, p["text"]), role="regular", anchor="lm")
         rec("run_%d" % i, txt, x0 + RUN_PAD + BULLET(), ty + RUN_ROW_H // 2, FS_BODY)
         ty += RUN_ROW_H
 
@@ -252,38 +250,28 @@ def BULLET() -> int:
 
 def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec,
               idx: int) -> None:
-    """一段 = 一个包裹气泡：暖色（已通关）/ 高亮（可挑战）/ 灰（未解锁）。"""
+    """一段 = 一个游戏面板：金（已通关）/ 玫红描边（可挑战）/ 暗紫（未解锁）。"""
     s = sp["stage"]
     status = str(s.get("status") or "locked")
     h = sp["h"]
-    # 气泡底色：已通关=薄荷绿淡底，可挑战=靛紫高亮描边，未解锁=中性底。
-    if status == "done":
-        fill, outline, ow = p["pill_bg"], p["pill_line"], 1
-    elif status == "current":
-        fill, outline, ow = p["chip_bg"], p["title_color"], 2
-    else:
-        fill, outline, ow = p["cell_bg"], p["border_color"], 1
-    c.rounded_rect((x0, y, x0 + content_w, y + h), radius=12,
-                   fill=fill, outline=outline, width=ow)
+    UI.panel(c, p, (x0, y, x0 + content_w, y + h), state=status, radius=13)
 
-    # 序号圆标。
+    # 段序号徽（金 / 玫红 / 暗紫三态，见 doupo_ui.ord_badge）。
     oc = _status_color(p, status)
     ocx = x0 + SEG_PAD + SEG_ORD // 2
     ocy = y + SEG_PAD + SEG_HEAD_H // 2
-    c.ellipse((ocx - SEG_ORD // 2, ocy - SEG_ORD // 2,
-               ocx + SEG_ORD // 2, ocy + SEG_ORD // 2), fill=oc)
     no = s.get("no") or (idx + 1)
-    c.text((ocx, ocy), str(no), size=S.FS_KEY, color=_WHITE,
-           role="bold", bold=True, anchor="mm")
+    UI.ord_badge(c, p, ocx, ocy, no, status if status != "done" else "done",
+                 r=SEG_ORD // 2)
     rec("seg%d_ord" % idx, str(no), ocx - SEG_ORD // 2, ocy - SEG_ORD // 2, SEG_ORD)
 
-    # 段名（粗体，分层）+ 状态 chip（右端）。
+    # 段名（楷体分层）+ 状态 chip（右端）。
     name_x = x0 + SEG_PAD + SEG_ORD + SEG_INNER_GAP
     name_max = content_w - (name_x - x0) - SEG_PAD - SEG_STATUS_W - SEG_INNER_GAP
-    name = _fit(str(s.get("name") or ""), name_max, FS_SEG, "bold")
-    c.text((name_x, ocy), name, size=FS_SEG, color=p["text_color"],
-           role="bold", bold=True, anchor="lm")
-    rec("seg%d_name" % idx, name, name_x, ocy - FS_SEG // 2, FS_SEG, role="bold")
+    name = _fit(str(s.get("name") or ""), name_max, FS_SEG, "kai")
+    UI.kai_text(c, (name_x, ocy), name, FS_SEG,
+                p["gold_hi"] if status != "locked" else p["dim"], anchor="lm")
+    rec("seg%d_name" % idx, name, name_x, ocy - FS_SEG // 2, FS_SEG)
 
     st_txt = str(s.get("status_text") or "")
     chip_x = x0 + content_w - SEG_PAD - SEG_STATUS_W
@@ -292,10 +280,10 @@ def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec
                    radius=8, fill=_status_bg(p, status), outline=oc, width=1)
     # 已通关加勾图标；其余写状态文字。
     if status == "done":
-        icons.draw(c, "check", chip_x + 11, chip_y + PROG_CHIP_H // 2, 12, oc, style="solid")
-        c.text((chip_x + 22, chip_y + PROG_CHIP_H // 2), st_txt, size=FS_LABEL,
+        icons.draw(c, "check", chip_x + 12, chip_y + PROG_CHIP_H // 2, 12, oc, style="solid")
+        c.text((chip_x + 24, chip_y + PROG_CHIP_H // 2), st_txt, size=FS_LABEL,
                color=oc, role="regular", anchor="lm")
-        rec("seg%d_status" % idx, st_txt, chip_x + 22, chip_y + PROG_CHIP_H // 2, FS_LABEL)
+        rec("seg%d_status" % idx, st_txt, chip_x + 24, chip_y + PROG_CHIP_H // 2, FS_LABEL)
     else:
         c.text((chip_x + SEG_STATUS_W // 2, chip_y + PROG_CHIP_H // 2), st_txt,
                size=FS_LABEL, color=oc, role="regular", anchor="mm")
@@ -305,12 +293,14 @@ def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec
     dy = y + SEG_PAD + SEG_HEAD_H
     for li, line in enumerate(sp["desc_lines"]):
         c.text((x0 + SEG_PAD, dy + LINE_H // 2), line, size=FS_BODY,
-               color=p["text_color"], role="regular", anchor="lm")
+               color=p["text"] if status != "locked" else p["dim"],
+               role="regular", anchor="lm")
         rec("seg%d_desc%d" % (idx, li), line, x0 + SEG_PAD, dy + LINE_H // 2, FS_BODY)
         dy += LINE_H
     # 怪物 / 掉落行。
     c.text((x0 + SEG_PAD, dy + SEG_META_H // 2), sp["meta"], size=FS_BODY,
-           color=p["dim_color"], role="regular", anchor="lm")
+           color=p["cyan"] if status != "locked" else p["weak"],
+           role="regular", anchor="lm")
     rec("seg%d_meta" % idx, sp["meta"], x0 + SEG_PAD, dy + SEG_META_H // 2, FS_BODY)
 
 
@@ -328,17 +318,13 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     plan = _ruin_plan(data, content_w)
     boxes = kw.pop("boxes", None)
 
-    sub_h = FS_BODY + 8 if str(data.get("subtitle") or "") else 0
+    sub_h = 0   # 副标题「今日进度 X/Y」已由 _draw_prog 的 label 覆盖，不再单独留高度
     blocks_h = (PROG_BUBBLE_H + PROG_AFTER + plan["run_h"] + RUN_AFTER
                 + sum(sp["h"] for sp in plan["stages"])
                 + GROUP_GAP * max(0, len(plan["stages"]) - 1))
-    h = PAD + FS_TITLE + 8 + 1 + 18 + sub_h + blocks_h + 12 + FS_BODY + PAD
-    h = max(360, h)
+    h = max(400, UI.TITLE_H + blocks_h + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label, txt, x, y, size, anchor="lm", role="regular"):
         if boxes is None:
@@ -354,24 +340,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         boxes.append((label,) + bb)
 
     x0 = PAD
-    y = PAD
-    # 标题
-    title = str(data.get("title") or "傀儡遗迹")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = 16 + 12
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, "sword", tx + 8, y + FS_TITLE // 2, 16, p["title_color"], style="line")
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE)
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
-    # 副标题（进度条已含进度文案，这里保留兼容 subtitle 但画淡色小字于气泡条上方留白；
-    # 实际上不重复——进度气泡条自带「今日进度 X/Y」，subtitle 仅在无 progress.day 时补日期）
-    if sub_h:
-        # 不重复「今日进度 X/Y」：subtitle 由 _draw_prog 内的 label 覆盖，此处跳过。
-        y += 0
+    # 牌匾标题区（整卡外壳：底色 + 云纹 + 回纹外框 + 牌匾）
+    y = UI.card_shell(c, p, str(data.get("title") or "傀儡遗迹"), width=width)
 
     # 进度气泡条
     _draw_prog(c, plan["prog"], x0, y, content_w, p, rec)
@@ -386,18 +356,18 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     if plan["stages"]:
         y -= GROUP_GAP
 
-    # 底部提示
-    c.line((x0, y + 4, x0 + content_w, y + 4), fill=p["line_color"], width=1)
-    y += 12
+    # 底部：回纹横带 + 提示
+    y += TIP_GAP
+    UI.divider(c, p, y, x0 + 6, x0 + content_w - 6, style="band")
+    y += TIP_LEAD
     tip = str(data.get("tip") or "")
-    s = _fit(tip, content_w - 26, FS_BODY, "regular")
-    icons.draw(c, "bolt", x0 + 8, y + FS_BODY // 2, 14, p["accent_color"], style="line")
-    c.text((x0 + 26, y + FS_BODY // 2), s, size=FS_BODY,
-           color=p["dim_color"], role="regular", anchor="lm")
-    rec("tip", s, x0 + 26, y + FS_BODY // 2, FS_BODY)
+    s = _fit(tip, content_w - 24, FS_BODY, "regular")
+    c.text((x0 + 10, y + FS_BODY // 2), s, size=FS_BODY,
+           color=p["dim"], role="regular", anchor="lm")
+    rec("tip", s, x0 + 10, y + FS_BODY // 2, FS_BODY)
 
     if source:
-        c.text((width - PAD, h - PAD + 6), source, size=14, color=p["dim_color"], anchor="rb")
+        c.text((width - PAD, h - 34), source, size=14, color=p["weak"], anchor="rb")
     return c
 
 
@@ -408,8 +378,7 @@ def card_height(data: dict, content_w: int) -> float:
     blocks_h = (PROG_BUBBLE_H + PROG_AFTER + plan["run_h"] + RUN_AFTER
                 + sum(sp["h"] for sp in plan["stages"])
                 + GROUP_GAP * max(0, len(plan["stages"]) - 1))
-    sub_h = FS_BODY + 8 if str(data.get("subtitle") or "") else 0
-    return PAD + FS_TITLE + 8 + 1 + 18 + sub_h + blocks_h + 12 + FS_BODY + PAD
+    return UI.TITLE_H + blocks_h + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B
 
 
 def split_pages(data: dict, width: int | None = None, **kw) -> list[dict]:

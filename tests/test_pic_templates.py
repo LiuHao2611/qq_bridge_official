@@ -174,6 +174,10 @@ def test_doupo_panel_png_and_layout():
     替代原 H_NAME=44，总高 644 → 712。
     2026-11-22：配色升级为 2026 前沿色板，色值断言改为读模板常量、不再硬编码 hex
     ——换配色时测试自动跟随，不会因为「颜色变了」误报失败。
+    2026-11-22 二次重做：整卡换「游戏本体 UI」风（深色渐变底 + 回纹外框 +
+    青蓝牌匾），标题区从 60px 变 TITLE_H=112 → 总高 712→788。本断言同时钉
+    「固定高度」与「_measure 与 build 一致」两件事：只钉前者会在改设计时漏掉
+    测高漂移，只钉后者则测高写错也发现不了。
     """
     t = theme.get(LIGHT)
     from src.plugins.qq_bridge.pic.templates import doupo
@@ -181,7 +185,9 @@ def test_doupo_panel_png_and_layout():
     c = doupo.build(t, data=DOUPO_DATA)
     data = c.to_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
-    assert c.height == 712, c.height  # 与 _measure 同步的版式高度
+    # 788 → 810：底部留白由 PAD(36) 提到 doupo_ui.PAD_B(54)，避免末行贴下边框
+    assert c.height == 810, c.height  # 游戏风基线（牌匾标题区 112 + 底部 54）
+    assert c.height == doupo._measure(DOUPO_DATA), "测高必须与实画高度一致"
     # 标题色（标题 + 境界 chip + 进度条末端）必须出现
     assert _color_count(data, doupo.C_TITLE, tol=60) > 200
     # 强调色（武器图标等）必须出现

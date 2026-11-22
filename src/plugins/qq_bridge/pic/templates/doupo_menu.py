@@ -47,11 +47,14 @@ from ..canvas import Canvas
 from ..theme import Theme
 
 # 与人物卡共用配色/度量工具（同包内复用，避免两份 _pal 各自漂移）
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
 # ---- 排版（4 的倍数 token；改这里必须同步跑 tools/check_doupo_typography.py）----
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 FS_TITLE = 34
 FS_GROUP = S.FS_KEY - 2        # 22 分组名（真粗体）
 FS_CMD = S.FS_KEY              # 24 口令——整张卡最重要的可扫读信息
@@ -186,10 +189,11 @@ def layout(data: dict | None = None, width: int | None = None) -> dict:
     nodes: list[dict] = []
 
     y = PAD
-    nodes.append({"k": "title", "cy": y + FS_TITLE // 2})
-    y += FS_TITLE + 8
+    # 标题由 doupo_ui.card_shell 画成青蓝云纹牌匾，节点只占位（高度 = TITLE_H）
+    nodes.append({"k": "title", "cy": y + UI.TITLE_H // 2})
+    y += UI.TITLE_H
     nodes.append({"k": "line", "y": y, "strong": True})
-    y += 1 + 18
+    y += 1 + 6
 
     for gi, g in enumerate(groups):
         if gi:
@@ -289,24 +293,14 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     content_w, cmd_col = L["content_w"], L["cmd_col"]
 
     c = Canvas(w, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, w - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
+    UI.card_shell(c, p, L["title"], width=w)
 
     for n in L["nodes"]:
         k = n["k"]
         if k == "title":
-            # ---- 标题（sword 图标 + 居中标题，与人物卡同一品牌标识） ----
-            tw = _w(L["title"], FS_TITLE, "light")
-            ico_w = FS_TITLE + 10
-            tx = x0 + (content_w - tw - ico_w) // 2
-            icons.draw(c, "sword", tx + FS_TITLE // 2, n["cy"], FS_TITLE,
-                       p["title_color"], style=ICON_STYLE)
-            c.text((tx + ico_w, n["cy"]), L["title"], size=FS_TITLE,
-                   color=p["title_color"], role="light", anchor="lm")
+            continue        # 牌匾由 UI.card_shell 统一绘制
         elif k == "line":
-            c.line((x0, n["y"], x0 + content_w, n["y"]),
-                   fill=p["accent_color"] if n["strong"] else p["line_color"], width=1)
+            UI.divider(c, p, n["y"], x0 + 6, x0 + content_w - 6, style="gold")
         elif k == "divider":
             # 分组分隔线贯通、行分隔线从口令缩进处起：层级一眼可分，又不喧宾夺主
             left = x0 if n["strong"] else x0 + CMD_INSET
@@ -314,9 +308,12 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                    fill=p["accent_color"] if n["strong"] else p["line_color"], width=1)
         elif k == "group":
             c.rounded_rect((x0 + 1, n["bar"][0], x0 + 5, n["bar"][1]),
-                           radius=2, fill=p["accent_color"])
-            S.key(c, (x0 + CMD_INSET, n["cy"]), n["name"],
-                  size=FS_GROUP, color=p["accent_color"])
+                           radius=2, fill=p["fret"])
+            c.rounded_rect((x0 + 1, n["bar"][0], x0 + 2, n["bar"][1]),
+                           radius=1, fill=p["fret_hi"])
+            # 分组标题：玫红竖条 + 楷体金字（与 recipes/ruin/craft 的段标题同一套字）
+            UI.kai_text(c, (x0 + CMD_INSET, n["cy"]), n["name"], FS_GROUP,
+                        p["gold_hi"], anchor="lm")
         elif k == "row":
             cx = n["cx"]
             desc_x = n["desc_x"]

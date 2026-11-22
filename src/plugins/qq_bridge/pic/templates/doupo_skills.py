@@ -57,12 +57,15 @@ from ..canvas import Canvas
 from ..theme import Theme
 
 # 与人物卡 / 菜单卡 / 通用列表卡共用同一套配色与度量工具
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 # 四张卡共用同一份字号/字重规范（本卡是首个按该规范落地的模板，数值不变）
 from . import doupo_style as S
 
 # ---- 排版（字比通用列表卡大一圈：用户 2026-11-14 要求「不放大图片也能看重点」）----
-PAD = 28
+PAD = UI.PAD_X        # 内容左右内边距 36（外框画在 10、内线 17 → 距框线 19px；
+                      # 2026-11-22 由 28 提到 36，与其余 11 张卡统一）
+PAD_B = UI.PAD_B      # 底部 54（底部两角只有短 L 线，36 收尾会贴框）
 FS_TITLE = 38
 FS_SUB = S.FS_SUB + 1          # 18
 FS_ITEM_LABEL = 15
@@ -78,6 +81,8 @@ FS_SEG = 16                    # 段内「一…五」
 FS_LABEL = 15                  # 伤害面板标签
 FS_VALUE = S.FS_KEY + 2        # 26 伤害面板大字
 FS_NEXT = S.FS_SUB             # 17 下级预估（小字不加粗，只靠字号与强调色）
+TIP_GAP = 18              # 最后一块到回纹横带
+TIP_LEAD = 14             # 横带到 tip 文字
 FS_TIP = S.FS_LABEL            # 16
 
 ICON = 22
@@ -244,7 +249,7 @@ def _row_h(item: dict, inner_w: int) -> int:
 
 def _content_y(data: dict) -> int:
     """第一个技能块的顶边 y（标题 / 副标题 / 材料横幅 / 伤害口径之后）。"""
-    y = PAD + FS_TITLE + 8 + 1 + 18           # 标题 + 分割线
+    y = UI.TITLE_H                            # 标题（牌匾）区高度
     if data.get("subtitle"):
         y += FS_SUB + 10
     y += BANNER_H + 10                        # 升级材料横幅
@@ -284,8 +289,9 @@ def _measure(data: dict, inner_w: int) -> int:
     y = _content_y(data)
     for r in _rows_of(data):
         y += _row_h(r, inner_w) + ROW_GAP
-    y += -ROW_GAP + 1 + 12 + FS_TIP + PAD
-    return max(320, y)
+    # 底部：回纹横带 + 提示行 + 底部留白（PAD_B 比左右宽 18）
+    y += -ROW_GAP + TIP_GAP + TIP_LEAD + FS_TIP + PAD_B
+    return max(340, y)
 
 
 def segment_boxes(x: int, y: int, w: int, item: dict) -> list[tuple[int, int, int, int]]:
@@ -388,9 +394,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label: str, txt: str, x: int, y: int, size: int, role: str,
             anchor: str) -> None:
@@ -412,21 +415,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
-    icon = str(data.get("icon") or "bolt")
-    if not icons.exists(icon):
-        icon = "sword"
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "斗技")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = FS_TITLE + 10
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, icon, tx + FS_TITLE // 2, y + FS_TITLE // 2, FS_TITLE,
-               p["title_color"], style=ICON_STYLE)
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, 34, "kai", "mm")
 
     # ---- 副标题 ----
     sub = data.get("subtitle")
@@ -575,18 +567,19 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
         _draw_damage_panel(c, inner_x, seg_top + SEG_H + 8, inner_w, item, p)
 
-    # ---- 底部提示 ----
+    # ---- 底部：回纹横带 + 提示 ----
     y = (layout[-1][1] + layout[-1][2]) if layout else (_content_y(data) - ROW_GAP)
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 12
+    y += TIP_GAP
+    UI.divider(c, p, y, x0 + 6, x0 + content_w - 6, style="band")
+    y += TIP_LEAD
     tip = data.get("tip")
     if tip:
-        tip_txt = _fit(str(tip), content_w, FS_TIP)
-        c.text((x0, y + FS_TIP // 2), tip_txt, size=FS_TIP,
-               color=p["dim_color"], anchor="lm")
-        rec("tip", tip_txt, x0, y + FS_TIP // 2, FS_TIP, "regular", "lm")
+        tip_txt = _fit(str(tip), content_w - 20, FS_TIP)
+        c.text((x0 + 10, y + FS_TIP // 2), tip_txt, size=FS_TIP,
+               color=p["dim"], anchor="lm")
+        rec("tip", tip_txt, x0 + 10, y + FS_TIP // 2, FS_TIP, "regular", "lm")
 
     if source:
-        c.text((width - PAD, h - PAD + 6), source, size=14,
-               color=p["dim_color"], anchor="rb")
+        c.text((width - PAD, h - 34), source, size=14,
+               color=p["weak"], anchor="rb")
     return c
