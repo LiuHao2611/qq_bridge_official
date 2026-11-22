@@ -932,32 +932,55 @@ def build_ruin_data(state: dict, day: str = "", report: dict | None = None) -> d
     """
     stages = cfg.PUPPET_RUIN_STAGES
     done = int((state or {}).get("stage", 0))
+    total = len(stages)
     groups = []
     if report:
-        groups.append({"name": "本次挑战", "rows": _ruin_report_rows(report)})
+        groups.append({"name": "本次挑战", "rows": _ruin_report_rows(report, done=done)})
+    # 结构化段列表（遗迹专用富版式用）：气泡渲染读这里，不再靠解析 rows 文本。
+    # 每段 status: done=已通关 / current=可挑战（本次要打的）/ locked=未解锁。
+    stage_cards = []
     for i, sg in enumerate(stages):
-        status = "已通关" if i < done else ("可挑战" if i == done else "未解锁")
-        drops = "、".join("%s×%d" % (k, int(v))
-                         for k, v in (sg.get("drops") or {}).items())
+        status = "done" if i < done else ("current" if i == done else "locked")
+        status_text = "已通关" if status == "done" else ("可挑战" if status == "current" else "未解锁")
+        drops = [(str(k), int(v)) for k, v in (sg.get("drops") or {}).items()]
+        stage_cards.append({
+            "no": i + 1,   # 序号圆标用阿拉伯数字（汉字「一」在圆标里像减号，视觉歧义）
+            "ord": "一二三四五六七八九十"[i] if i < 10 else str(i + 1),
+            "name": str(sg["name"]),
+            "desc": str(sg.get("desc") or ""),
+            "monster": str(sg["monster"]),
+            "drops": drops,
+            "status": status,
+            "status_text": status_text,
+        })
+        drop_txt = "、".join("%s×%d" % (k, v) for k, v in drops)
         groups.append({
-            "name": "%s · %s" % ("一二三四五六七八九十"[i] if i < 10 else str(i + 1),
-                                 sg["name"]),
-            "rows": [str(sg.get("desc") or ""),
-                     "%s ｜ 掉 %s ｜ %s" % (sg["monster"], drops, status)],
+            "name": "%s · %s" % (stage_cards[-1]["ord"], sg["name"]),
+            "rows": [stage_cards[-1]["desc"],
+                     "%s ｜ 掉 %s ｜ %s" % (sg["monster"], drop_txt, status_text)],
         })
     return {
         "title": "傀儡遗迹",
-        "subtitle": "今日进度 %d/%d%s" % (done, len(stages), (" · " + day) if day else ""),
+        "subtitle": "今日进度 %d/%d%s" % (done, total, (" · " + day) if day else ""),
+        # 富版式字段：进度气泡条 + 分段气泡。groups 保留供兼容与外部调用。
+        "progress": {"done": done, "total": total, "day": str(day or "")},
+        "stage_cards": stage_cards,
+        "report": report or {},
         "groups": groups,
         "tip": "发「傀儡遗迹」自动连打至力竭 · 发「傀儡」看名录 · 发「炼制傀儡」开炉",
     }
 
 
-def _ruin_report_rows(report: dict) -> list:
+def _ruin_report_rows(report: dict, done: int | None = None) -> list:
     """本次挑战 → 卡片行（胜负/回合/承伤/掉落），与文本战报同一批字段。
 
     2026-11-20 第九轮：遗迹改为自动连打，``report["runs"]`` 一段一条。
     老的单段 report（只有 stage_idx/win/rounds）仍照旧解析，兼容既有测试与外部调用。
+
+    2026-11-22 用户反馈「连过 1/7 展示不对，应该 6/7」：分母是**今日累计通关段数**
+    （state.stage），不是本次 runs 里赢了几段。玩家从第 6 段水位线接着打，本次只赢
+    1 段，但今日已通关 6 段——那句应读作「今日累计 6/7」，本次连胜另起一句说明。
+    ``done`` 由 build_ruin_data 传入；缺省时回退旧口径，兼容直接调本函数的测试。
     """
     rep = report or {}
     total = int(rep.get("total") or len(cfg.PUPPET_RUIN_STAGES))
@@ -965,7 +988,13 @@ def _ruin_report_rows(report: dict) -> list:
     if runs:
         wins = [r for r in runs if r.get("win")]
         loss = next((r for r in runs if not r.get("win")), None)
-        head = "本次自动挑战 · 连过 %d/%d 段" % (len(wins), total)
+        if done is None:
+            head = "本次自动挑战 · 连过 %d/%d 段" % (len(wins), total)
+        else:
+            # 主数字 = 今日累计通关（用户要的 6/7）；本次连胜作补充，不再当主计数。
+            head = "本次自动挑战 · 今日累计 %d/%d 段" % (int(done), total)
+            if len(wins) != int(done):
+                head += "（本次再连胜 %d 段）" % len(wins)
         if loss is not None:
             head += " · 第 %d 段力竭" % (int(loss.get("stage_idx") or 0) + 1)
         elif len(wins) >= total:
