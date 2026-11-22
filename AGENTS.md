@@ -9,6 +9,9 @@
 
 | 规则 | 由什么拦住 |
 |---|---|
+| **生产环境 = 手机（2026-11-21 起），不再走 Windows + Docker**：任何「部署 / 重启 / 看日志 / 改配置」的操作都必须按 `docs/生产环境说明_手机服务器_2026-11-21.md` 执行；`README` 的「本机部署步骤（Windows）」已降级为历史回退方案，照它操作会得出错误结论（例如以为 bot 跑在容器里、以为端口是 8080） | 该手册 §0 速查表 + §4 服务清单；现实判据：`ssh pmos@192.168.0.50 'docker ps'` 为空、`netstat -ltnp` 显示 8081 由 `python` 监听、`sudo rc-status default` 里 `qq-bridge`/`qq-doupo-agent`/`logview`/`wifi-watchdogd` 全 `started` |
+| **手机端代码更新必须过部署闸门 `tools/phone_deploy.py`，禁止裸 scp/tar + 口头「应该生效了」**（2026-11-21 立）：原 Docker 闸门 `check_bridge_deploy.py`（三层 md5 / rebuild / recreate / docker diff）在手机无 Docker 环境下**完全失效**，`tools/check_bridge_sanity.py` 同样绑 docker；旧的手工 scp 无机器校验，是 11-08「commit 了没部署」事故的手机版重演条件。用法：`python tools/phone_deploy.py push <文件...> [--grep "特征串"]` / `verify` / `selftest`。闸门把红线编码进工具内部、调用方无法绕过：① 拒推 `data/`、`logs/`、`.env`（覆盖生产存档=数据回退），只允许白名单后缀；② 三层 md5（电脑源 == 手机临时区 == 手机正式位）全等才 PASS，不符 `exit 1` 且旧版已 `.bak`；③ 落位前守卫 .env 的 `*_DATA_PATH` 存在且不指包内示例库、存档表行数非 0、包内无示例 sqlite；④ restart 后查 pid 存活 + 可选特征串 grep；⑤ 写手机 `.deployed`（commit + 每文件 md5 + 时间）作唯一版本对账。首次用 `--no-restart` 安全验证全链路已通过 | `tools/phone_deploy.py selftest` 6/6 反例全拦（data/logs/.env/目录穿越/后缀/不存在源）+ 正例放行；真实环境 `verify` 读到 DATA_PATH 正确、存档 4 行、服务存活；`push tools/phone_deploy.py --no-restart` 三层 md5 全等 + `.deployed` 写入成功。**手机端不联网、无 git，`.deployed` 是回答「线上现在是哪版」的唯一真相** |
+| **手机端三条物理红线**（违反任一条都要停机重启，且不可逆地浪费时间）：① 绝不 `unbind/bind ath10k_snoc`（WCN3990 会进 `msa info req rejected: 90` 死态，`wlan0` 永久消失）；② 大文件必须走 USB `172.16.42.1`，WiFi 持续传约 20 秒必被 RX 停摆打断（实测 500KB/3MB 都在 ~19.5s 断）；③ 绝不删 `.env` 的 `DOUPO_DATA_PATH`/`XIUXIAN_DATA_PATH`（回落示例库会让老玩家被要求重新入道） | 手册 §8 危险操作黑名单 + §5.1 传输通道表 + §5.4 三条红线；机器判据：`dmesg \| grep -c "msa info req rejected"` 必须为 0；`ls src/plugins/doupo/data/*.sqlite` 必须无输出（initd `start_pre` 也会 `ewarn`） |
 | **交差前代码必须上传 GitHub**：本次任务涉及的源码 / 配置等**受 git 管理**的文件必须 `commit` + `push` 到项目远程，不能只留在工作区或 Docker 镜像；无远程 / 历史分叉 / 门禁拦截 / 用户要求「只本地」时必须在交差中显式申报并确认 | `prove-it`「交差之前」第 4 条 + 交差格式新增 `代码：` 行（正本与 `.bak` 副本一致）；`manju-dev-guard` 收尾段；机器判定：`git status --short -- <本次文件>` 无输出且 `git ls-remote origin <branch>` 含该 commit |
 | **出图口令必须出图，禁止降级纯文字 / 禁止限流 / 禁止静默**（用户 2026-11-07 21:17 明确要求并说「记住了」）：斗破里凡是会出自绘卡片的口令，任何频率下都必须真的发 image 段；`_throttle.py` 已从链路移除，禁止重新接入 `Throttle.check()` 或任何冷却 / 降级 / 静默逻辑，也不许用无参数 `finish()` 掐断 handler；若担心账号风控只能先问用户 | `doupo/__init__.py` 完全不 import `_throttle`，8 个出图 handler 无条件 `if png:` 发图；`doupo/test_e2e.py` 末尾 7 条「建号 + 连续 6 条出图口令必须真的带 image 段」行为断言（全部落在旧 25s 冷却窗口内）；注入验证：把限流接回 → 6 条 FAIL；`_throttle.py` 顶部「已停用 · 禁止重新接入」 |
 | **人物卡头像必须画在卡片里，不许再单独发动态小人 GIF**（用户 2026-11-07 22:3x：「人物卡片里不用放动态人物小人了，截图一个头像就行，放在卡片里」）：`人物/属性/面板` 回包只能有 **1 个 image 段**，且必须是 PNG 卡片；头像用对应档位 GIF **首帧**裁 96×96 静态图，base64 经 `card.build_data()` 传给模板画进左侧圆角框；不得回退成「动图 + 卡片」两张图，也不得把头像从卡片里拿掉 | `doupo/__init__.py::panel` 只读 `card.render_panel(p)` 并无条件 `finish(MessageSegment.image(png))`，链路里没有 `avatar_for`；`avatar.py::HEADSHOT_BOXES` 四档裁剪 + `headshot_for()` 产出 base64 PNG；`pic/templates/doupo.py` 用 `paste_alpha(av, ..., rounded_mask(...))` 画头像，`H_HEADER=112` 与 `_measure()` 同步；`doupo/test_e2e.py` 连续 3 次「人物」断言「恰好 1 个 image 段 + PNG 魔数 + 无 GIF + 头像框深色像素 >1500」，且**自清 pic 磁盘缓存**防旧图假通过；`test_card.py` 用 `render_sync` 绕开缓存做有无头像的像素对比；`tests/test_pic_templates.py` 固定高度 712 + 纯色假头像 9216 像素探针；注入验证：接回 GIF → 6 项 FAIL、模板不画头像 → 3 项 FAIL，还原后 75/75 |
@@ -3363,3 +3366,102 @@ tower 17 / tower_fixed 7 / root_factor 11 / save_sqlite 12 / persistence 8 全�
 * 出图肉眼核对：宗门卡「传承异火」只剩一句世界观；斗技卡无〔自设〕；战斗回看【登场】段
   = 出场描写 + 台词（药老·药尘：黑袍裹得严严实实…「就是因为没有，才能显出我这功法的独特啊！」）。
 * BOSS 出场描写覆盖率：突破 12 档全有；爬塔 BOSS 30/30；周本 boss/elite 有；野外精英全覆盖。
+
+---
+
+## 变更记录 · 2026-11-21 20:00 → 21:05　生产环境迁到手机 + 日志面板换代
+
+### 一、这件事改变了「部署」的定义
+
+此前所有部署纪律都假设「生产 = Windows 上的 Docker 容器」（`docker-compose.official.yml` /
+`--force-recreate` / 三层 md5 闸门）。**2026-11-21 起生产环境是一台裸机 Linux 手机**，
+容器全部停用（`docker ps` 为空），服务改由 OpenRC 管理。因此：
+
+* `README` 的「本机部署步骤（Windows）」**降级为历史回退方案**，并在开头加了醒目声明；
+* 顶部新增「★ 当前生产环境」一节，含机器/SSH/面板/存档路径/端口/服务/管服务命令七要素；
+* 新增权威手册 **`docs/生产环境说明_手机服务器_2026-11-21.md`**（13 章：一页速查、环境构成、
+  SSH 三种通道、开关机与开机自检、服务清单、部署与回滚、日常维护、调试后台（六类故障剧本）、
+  危险操作黑名单、装包姿势、验收数据、待办、相关文档）；
+* 规则表新增两行：**生产环境归属** 与 **手机端三条物理红线**。
+
+### 二、环境事实（验收态）
+
+| 项 | 值 |
+|---|---|
+| 系统 | postmarketOS v26.06（Alpine + OpenRC + mainline 6.0.0），aarch64 / 8 核 / 5.6G RAM |
+| rootfs | loop 镜像 ← `/dev/sde43`，`/` 1.3G/4.6G；`/boot` 59.8M/221M |
+| 网络 | `wlan0 192.168.0.50/24`（静态，MAC 固定 `02:53:41:47:49:54`）；USB 兜底 `172.16.42.1/16` |
+| 代码 | `/home/pmos/qq_bridge`（242M），venv `/home/pmos/venv`（Python 3.14.10） |
+| 存档 | `data/doupo/doupo.sqlite`、`data/doupo/puppet_data.sqlite`、`data/xiuxian/xiuxian.sqlite` |
+| 端口 | 22 / 8081（bot）/ 8091（面板）/ 8765（源码问答，仅本机） |
+| 自启 | `qq-bridge` `qq-doupo-agent` `logview` `wifi-watchdogd` `sshd` `nftables` `syslog` `crond` |
+
+### 三、这次踩到并修掉的真实问题（全部有实测）
+
+1. **`.env` 缺 `DOUPO_DATA_PATH`/`XIUXIAN_DATA_PATH`** → 插件回落仓库示例库（2 行占位）→
+   老玩家被要求「重新入道」。修：补全三项 + 包内 sqlite 改名 `.unused-20261121` 隔离 +
+   initd `start_pre` 加守卫（出现包内库就 `ewarn`，每次启动 `einfo` 打印真实数据路径）。
+   **零丢失证据**：生产库 `players` 仍 4 行，用户 exp 2,368,582 → 2,920,973 持续增长。
+2. **`service.err.log` 与 `qq_bridge.log` 内容重复**（插件 logger 同时写 stderr 与文件）→
+   新日志面板故意不纳 `service.err.log`，否则同样一行出现两次。
+3. **`/var/log/messages` 混时区**：`sshd`/`pam`/`supervise-daemon` 写 UTC，`elogind-daemon`
+   与交互 shell 的 `logger` 写本地 → 写死 +8 必错一半（实测把 20:37 推到次日 04:37）。
+   面板最终用「逐模块学习 + 多数票兜底」，缓存学到 `sshd=+8 / liveprobe=0`。
+4. **WiFi 大传输必断**：持续传约 20 秒触发 WCN3990 RX 停摆（`device successfully recovered`），
+   SSH `Connection reset by peer`；500KB 与 3MB 同现象，`scp -l 4000` 限速无效。
+   对策写进手册 §5.1：**大文件走 USB**（实测 3MB / 0.52s / md5 一致）。
+5. **`mktime + localtime` 把时间加两次**：时区补偿必须 `calendar.timegm + time.gmtime`。
+6. **多源快照按各自 `seq` 排序会时间倒跳**：seq 只是文件内行号，必须按时间戳排。
+7. **`ConnectionResetError` 刷 traceback**：`Server.handle_error` 吞掉，否则接进 OpenRC 后
+   `logview.err.log` 无限增长。
+
+### 四、日志面板（自研，替代 Logdy）
+
+`http://192.168.0.50:8091`，纯标准库 + SSE，按「服务/业务」双维分流。代码在
+`D:/AI/tools/pmdocker/work/logview/`，手机上 `/opt/logview/` + `/etc/init.d/logview` +
+`/etc/nftables.d/70_logview.nft`（放行 8091）。Logdy 已 `rc-update del` + `stop`（二进制保留可回滚），
+`60_logdy.nft` **保留**是因为它还放行 **8081**。
+
+机器验收：桌面 1440×900 与手机 390×844 各 700 行、`timeOrder.bad=0`、点「斗破」4 行全斗破、
+点「报错」13 行全 ERROR、`jsErrors=[]`；面板最新行与手机 `date` 差 19 秒。
+
+### 五、未验证 / 范围外（如实交代）
+
+* **没有做整机断电重启的端到端验证**（怕打断生产）。已验证的是「服务级重启」与
+  「default runlevel 全部登记」，开机顺序按依赖声明推断。
+* 手机**没有 `rsync`/`curl`/`sqlite3`/`ss`**，`ps` 不支持 `-p`/`lstart`；手册里所有命令
+  都在这台机器上真跑过，替代写法见手册 §7.2。
+* 内核未暴露 `power_supply` 节点，**电量读不到**，只能看屏幕，别指望脚本监控。
+* 每日自动备份**没做**，目前手动跑手册 §6.3 的 python3 脚本（已实跑生成
+  `data/backup-20261121-205923/`）。
+
+## 变更记录 · 2026-11-22　傀儡遗迹改「标尺固定难度」+ 后台战力推荐
+
+用户诉求：「我都四转斗尊巅峰了，按原著的战力来看，打这几个副本应该是碾压级别吧」。
+诊断（真库 + 120 场/段模拟）：满状态进段 7 段胜率 98–100%、2–3 回合，数值本身不高；
+病根是遗迹怪用**真实玩家**反解（`monster_scaled(p, ...)`）—— 玩家越强怪越厚，
+原著战力优势永远变不成碾压。用户选「标尺固定难度」（与爬塔 `tower_ref_player` 同机制）。
+
+### 红线（本轮定稿，别改回去）
+
+1. **难度唯一真值 = 每段后台 `power_rec`**，怪数值由 `core.ruin_scaled_monster(sg, ...)`
+   按 `core.ruin_ref_lv(power_rec)` 的**标尺玩家**反解，与打它的真人战力无关。
+   回退 `monster_scaled(p, ...)` = 自适应 = 永远没碾压感 ⇒ E2E 守门必红。
+2. **`power_rec` 是后台字段，绝不展示前台**（卡面/文案/帮助均无）。数值不是手拍：
+   每段 `power_rec == power(tower_ref_player(该段 lv))`，改难度只改 power_rec。
+3. 🚨 **残血暴毙是正常设计，不许「顺手修」**：用户原话「残血就残血，只要不是BUG，
+   残血就应该自动吃药，没药吃就等死，这是正常的」。连打跨段结转 hp/mp、服药整趟
+   共用一份 `pill_budget`（封顶 `PUPPET_RUIN_PILL_CAP=2`）、战败即停 —— 三件套原样保留。
+   别再加段间回满血 / `_refill(p)` / 提高药预算。
+4. 傀儡击 bonus 同样按标尺算（与 `tower_floor` 同口径）：怪血只按标尺傀儡贡献变厚，
+   真人那具更强傀儡在 `fight` 里全额出手 = 净收益全落袋。
+
+### 守门（prove-it）
+
+* `tests/test_doupo_ruin_fixed.py` 206 条：同段同怪（三等级对照）、power_rec 锚定参考
+  曲线、反查 round-trip、单调性、后台字段不泄露、连打续航三件套源码钉子、
+  **E2E 走真命令**比对不同等级玩家落库 `foe_hp_max`（白盒测试的「假装测试」解药）。
+* `tests/test_doupo_puppet_ruin_auto.py` 源门更新：钉 `ruin_scaled_monster` 入口、
+  禁直接读真实 p；连打/服药/战败即停旧门全留。
+* 变异反证：把 `commands.py` 换回 `monster_scaled(p, ...)` ⇒ E2E 红（9740 vs 23977），
+  恢复后 206/206 绿。
