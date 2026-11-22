@@ -39,6 +39,21 @@ _CANDIDATES: dict[str, tuple[str, ...]] = {
 # 兜底：系统里任意能用的字体（由 Pillow 自己找），一般是无中文能力的默认字体
 _ROLES = ("regular", "bold", "light", "kai")
 
+#: 已告警过的角色，避免每渲染一张卡就刷一条日志
+_WARNED: set[str] = set()
+
+
+def _warn_once(tag: str, msg: str) -> None:
+    if tag in _WARNED:
+        return
+    _WARNED.add(tag)
+    try:
+        from nonebot import logger
+        logger.warning("[pic.fonts] " + msg)
+    except Exception:  # noqa: BLE001  非 bot 环境（脚本/测试）不炸
+        import logging
+        logging.getLogger("pic.fonts").warning(msg)
+
 _WARNED: set[str] = set()
 _CACHE: dict[tuple[str, int], FreeTypeFont] = {}
 #: 字体文件 → 真粗体 face 下标（找不到粗体 face 时记 0，由画布层伪粗兜底）
@@ -98,8 +113,14 @@ def font_path(role: str = "regular") -> str | None:
     """
     if role == "bold" and _BUNDLED_BOLD.is_file():
         return str(_BUNDLED_BOLD)
-    if role == "kai" and _BUNDLED_KAI.is_file():
-        return str(_BUNDLED_KAI)
+    if role == "kai":
+        if _BUNDLED_KAI.is_file():
+            return str(_BUNDLED_KAI)
+        # 缺文件时不静默：牌匾字会退回等线 Bold（卡片不崩，但没有楷体味）。
+        # 生成方式见 tools/make_doupo_kai.py（2.44MB，不进 git，本机/生产机各放一份）。
+        _warn_once("kai", "缺少 doupo_kai.ttf，斗破牌匾标题将回退等线 Bold；"
+                          "运行 tools/make_doupo_kai.py 生成后拷到 "
+                          "src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/")
     for name in _CANDIDATES.get(role, _CANDIDATES["regular"]):
         for d in (_CUSTOM_DIR, _VENDOR_DIR, _SYSTEM_DIR):
             p = d / name
