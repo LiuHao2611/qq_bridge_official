@@ -237,11 +237,17 @@ def test_source_gates():
     body = src[i0:src.index("\n_PUPPET_COLUMNS", i0)]
     check("while idx < total:" in body,
           "遗迹必须一次调用连打多段（退回 if = 玩家还得点六次）")
-    check("puppet_expected_damage(pu, n, flame_mult=flame_mult, p=p)" in body,
-          "怪血反解必须传真实 p（按标尺算会让带傀儡反而吃亏）")
+    # 2026-11-22 用户改选「标尺固定难度」（与爬塔同款）：怪数值按 power_rec
+    # 反查的标尺玩家反解，与真人战力无关 —— 斗尊打斗宗段是真碾压。旧口径
+    # 「怪血反解必须传真实 p」已随这条设计决策作废，改为钉住新的唯一入口。
+    check("core.ruin_scaled_monster(sg, pu, n, puppet_flame_mult=flame_mult)" in body,
+          "怪血必须走标尺固定难度入口 ruin_scaled_monster（传真实 p = 退回自适应，"
+          "玩家越强怪越厚、永远没有碾压感）")
+    check("p=p" not in body or "monster_scaled" not in body,
+          "怪血反解不许直接读真实 p（应只在 ruin_scaled_monster 里用标尺）")
     check("core.fight(p, mon, puppet=pu, formation_n=n," in body and
           "puppet_flame_mult=flame_mult, pill_budget=pill_budget)" in body,
-          "实战必须带上傀儡与同一个 flame_mult（与反解同源）")
+          "实战必须带上真人的傀儡与同一个 flame_mult（怪按标尺、出手按真人，净收益全落袋）")
     # 六段连打 = 深副本口径：不许替玩家自动嗑药（否则「力竭」永远不来，
     # 且会在玩家不知情下吞掉几十颗丹药）。core 里深副本两处也是 False。
     # 服药预算：必须是**循环外**的一份 dict，跨段累计封顶；建在循环里等于每段

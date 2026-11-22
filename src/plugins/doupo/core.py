@@ -2240,6 +2240,54 @@ def tower_ref_player(ref_lv: int) -> dict:
     return copy.deepcopy(base)
 
 
+#: 傀儡遗迹「战力推荐 → 标尺等级」缓存（2026-11-22）。key=power_rec，value=ref_lv。
+_RUIN_REF_LV_CACHE: dict[int, int] = {}
+
+
+def ruin_ref_lv(power_rec: int) -> int:
+    """后台战力推荐 → 标尺玩家等级（与爬塔同一条参考战力曲线）。
+
+    2026-11-22 用户选定「标尺固定难度」：遗迹怪数值只由 ``power_rec`` 决定，
+    与打它的真人战力无关 —— 斗尊打斗宗段是真碾压，不是怪同步变厚原地踏步。
+
+    🚨 ``power_rec`` 是难度唯一真值；段里的 ``lv`` 只管面板/经验展示。两者初值
+    取自同一点 ``power(tower_ref_player(lv))``，但改难度只改 power_rec。
+    曲线 ``power(tower_ref_player(lv))`` 单调不降（守门
+    ``test_doupo_ruin_fixed.py::test_ref_curve_is_monotonic``），取第一个
+    power ≥ 推荐值的等级；推荐值超过封顶则钉在 MAX_LV。
+    """
+    key = max(0, int(power_rec))
+    hit = _RUIN_REF_LV_CACHE.get(key)
+    if hit is not None:
+        return hit
+    lo, hi, ans = 1, int(cfg.MAX_LV), int(cfg.MAX_LV)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if power(tower_ref_player(mid)) >= key:
+            ans, hi = mid, mid - 1
+        else:
+            lo = mid + 1
+    _RUIN_REF_LV_CACHE[key] = ans
+    return ans
+
+
+def ruin_scaled_monster(sg: dict, puppet=None, formation_n: int = 0,
+                        puppet_flame_mult: float = 1.0) -> dict:
+    """一段遗迹的实际怪物：数值锚**标尺玩家**，与真人完全无关（固定难度）。
+
+    ``puppet_bonus`` 也按标尺算（与 ``tower_floor`` 同一口径）：怪血只按标尺傀儡
+    贡献变厚，真人那具更强/同档的傀儡在 ``fight`` 里全额出手，收益全落袋。
+    """
+    ref = tower_ref_player(ruin_ref_lv(int(sg["power_rec"])))
+    _pu_bonus = 0.0
+    if puppet:
+        from . import puppet_core as _pc  # 延迟导入避免与 core 环
+        _pu_bonus = _pc.puppet_expected_damage(
+            puppet, formation_n, flame_mult=puppet_flame_mult, p=ref)
+    return monster_scaled(ref, dict(sg, name=sg.get("monster") or sg["name"]),
+                          puppet_bonus=_pu_bonus)
+
+
 def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
                 temp_effects=None, puppet=None, formation_n=0,
                 puppet_flame_mult=1.0) -> dict:

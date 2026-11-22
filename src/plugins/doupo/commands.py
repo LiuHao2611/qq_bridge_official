@@ -3161,11 +3161,11 @@ async def cmd_puppet_ruin(store, qq, pstore=None, report=None) -> str:
 
     while idx < total:
         sg = stages[idx]
-        # ⚠️ 传真实 p：不传会让怪血按标尺玩家变厚、实战却按真人出手（两张皮）。
-        bonus = pc.puppet_expected_damage(pu, n, flame_mult=flame_mult, p=p)
-        # 段名字在 ``name``、物种名在 ``monster``：喂给战斗的必须是**物种**
-        # （战报「敌方」、BOSS 名、角色包登场旁白都按它取），段名只用于段落列表。
-        mon = core.monster_scaled(p, dict(sg, name=sg["monster"]), puppet_bonus=bonus)
+        # 🚨 固定难度（2026-11-22 用户选定，与爬塔同款）：怪数值按 sg["power_rec"]
+        #    反查的标尺玩家反解，与真人战力无关 —— 斗尊打斗宗段是真碾压。
+        #    物种名在 ``monster``（段名是地点，不是对手）；bonus 同样锚标尺，
+        #    真人那具更强傀儡在 fight 里全额出手 = 净收益（见 ruin_scaled_monster）。
+        mon = core.ruin_scaled_monster(sg, pu, n, puppet_flame_mult=flame_mult)
         res = core.fight(p, mon, puppet=pu, formation_n=n,
                          puppet_flame_mult=flame_mult, pill_budget=pill_budget)
         await _finalize_battle(p, qq, res, "傀儡遗迹",

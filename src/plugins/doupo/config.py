@@ -2140,31 +2140,45 @@ PUPPET_STAT_ROLE = {
 #: 更宽松但**有硬顶**的口径：整趟最多 2 颗，够救一次急，不会洗空包裹。
 PUPPET_RUIN_PILL_CAP = 2
 
-#: 傀儡遗迹日副本三段（2026-11-18，背景见 docs/斗破傀儡材料副本_设计方案_2026-11-18.md）
-#: 难度走 core.monster_scaled 反解，与玩家战力同步；掉落只进 puppet_materials 真实列。
+#: 傀儡遗迹日副本（2026-11-18 三段 + 11-20 三段 + P3 第七段）
+#:
+#: 🚨 难度口径（2026-11-22 用户选定「标尺固定难度」，与爬塔同一机制）：
+#:   怪的全部数值由 ``power_rec`` 反查出的**标尺玩家**反解，与打它的真人战力无关。
+#:   玩家变强 ⇒ 同一段打得更快、更扛打（真碾压），而不是怪同步变厚原地踏步。
+#:   ``power_rec`` 是**后台字段**——只喂 core.ruin_ref_lv 定难度，绝不进卡面/文案；
+#:   守门 tests/test_doupo_ruin_fixed.py::test_power_rec_never_shown_to_frontend。
+#:   数值不是手拍常数：每段 power_rec == power(tower_ref_player(该段 lv))，
+#:   即现成参考战力曲线上该段的点（守门 test_power_rec_matches_ref_curve）。
+#: 掉落只进 puppet_materials 真实列。
 PUPPET_RUIN_STAGES = (
     {"name": "魔炎谷库房", "monster": "守库尸卫", "lv": 30, "hard": 0.90,
+     "power_rec": 18645,
      "exp_mul": 1.10, "gold_mul": 1.10, "kind": "魔炎谷",
      "drops": {"强者躯体": 1, "暗金玄铁": 1},
      "desc": "竹简原藏之处，残存尸卫守着未及带走的躯体与玄铁。"},
     {"name": "天墓·能量之层", "monster": "远古凶魂", "lv": 55, "hard": 0.86,
+     "power_rec": 57585,
      "exp_mul": 1.25, "gold_mul": 1.20, "kind": "天墓",
      "drops": {"无主灵魂": 1, "火属性魔核": 1},
      "desc": "能量之层游荡的无主凶魂，需炼尽神智才能取作傀儡之魂。"},
     {"name": "虚空雷池", "monster": "雷池守护者", "lv": 75, "hard": 0.80,
+     "power_rec": 97185,
      "exp_mul": 1.50, "gold_mul": 1.40, "kind": "虚空雷池", "is_boss": True,
      "drops": {"雷淬石": 2, "天妖傀竹简": 1},
      "desc": "雷霆淬体之地，守者掌天妖傀竹简，胜之方得传承。"},
     # 2026-11-20 多配方落地：追加三段（严格接在旧三段之后，旧段号/掉落不动）
     {"name": "宗骸祭坛", "monster": "守坛宗魂", "lv": 60, "hard": 0.84,
+     "power_rec": 58245,
      "exp_mul": 1.30, "gold_mul": 1.25, "kind": "宗骸祭坛",
      "drops": {"斗宗强者之躯": 1, "寒铁": 1},
      "desc": "祭坛上还留着斗宗强者的躯身，与一块未熔的寒铁同被封在石中。"},
     {"name": "尊骨陵寝", "monster": "陵寝尊者", "lv": 78, "hard": 0.78,
+     "power_rec": 97581,
      "exp_mul": 1.55, "gold_mul": 1.45, "kind": "陵寝尊者·elite",
      "drops": {"斗尊强者之躯": 1, "焰陨玄铁": 1},
      "desc": "陵寝深处的斗尊骨架尚未朽尽，陪葬的焰陨玄铁仍有余温。"},
     {"name": "圣地残殿", "monster": "残殿圣卫", "lv": 90, "hard": 0.72,
+     "power_rec": 121605,
      "exp_mul": 1.80, "gold_mul": 1.70, "kind": "圣地残殿", "is_boss": True,
      "drops": {"北龙王之躯": 1, "北龙王残魂": 1, "高阶魔核": 1},
      "desc": "圣卫守着一具斗圣躯身与它的残魂，魔核在胸腔里跳了千年。"},
@@ -2182,6 +2196,7 @@ PUPPET_RUIN_STAGES = (
     # 一枪）。取普通面板 + 全表最狠的 hard=0.70：攻/防都高于第六段，胜率低一档，
     # 打完不至于让人不想再来（每天还要靠它掉雷淬石）。
     {"name": "斗圣主殿", "monster": "远古人傀", "lv": 95, "hard": 0.70,
+     "power_rec": 175065,
      "exp_mul": 1.90, "gold_mul": 1.80, "kind": "斗圣主殿", "is_boss": True,
      "cloth": 0.60,
      "drops": {"北龙王残魂": 1, "高阶魔核": 1, "雷淬石": 3},
