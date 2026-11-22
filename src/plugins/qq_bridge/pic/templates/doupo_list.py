@@ -49,7 +49,12 @@ FS_TITLE = 34
 FS_SUB = S.FS_SUB + 1          # 18 副标题
 FS_ITEM = S.FS_KEY             # 24 主标题 / 价格 / 战力（重点，加粗）
 FS_SMALL = S.FS_SUB            # 17 说明
-TIP_GAP = 12             # 最后一行到回纹横带
+TIP_GAP = 12             # 回纹横带到下方 tip 文字的间距
+#: 最后一行内容底边到回纹横带顶边的留白。2026-11-22 生产数据实拍发现：异火卡最后
+#: 一条「下级需 120 药渣」的下缘被横带描边**压住约 2px**（note 行墨迹会比行高预算
+#: 出血 4px 以内），背包卡「地脉火芝，地灵丹主药」也只余 7px。故显式加 14px，
+#: 且 build 与 _measure 必须同源（否则卡片底部会多出/少掉一段空白）。
+BAND_GAP = 14
 FS_TIP = S.FS_LABEL            # 16 底部提示
 FS_BADGE = S.FS_SUB + 1        # 18 快捷键 / 名次
 ICON = 22
@@ -129,7 +134,7 @@ def _measure(data: dict, content_w: int) -> int:
         k = i % cols
         ys[k] += _row_h(r, cw) + ROW_PAD
     # 末尾留白用 UI.PAD_B(54)：底部两角只有短 L 线，26 收尾会贴框（2026-11-22）
-    y = max(ys) - ROW_PAD + 1 + TIP_GAP + FS_TIP + UI.PAD_B
+    y = max(ys) - ROW_PAD + BAND_GAP + 1 + TIP_GAP + FS_TIP + UI.PAD_B
     return max(330, y)
 
 
@@ -284,9 +289,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         col_y[k] += rh + ROW_PAD
 
     # ---- 底部提示 ----
-    y = max(col_y) - ROW_PAD
+    # 最后一行 -> BAND_GAP -> 回纹横带 -> TIP_GAP -> tip 文字
+    y = max(col_y) - ROW_PAD + BAND_GAP
     UI.divider(c, p, y, x0 + 6, x0 + content_w - 6, style="band")
-    y += 12
+    y += TIP_GAP
     tip = data.get("tip")
     if tip:
         S.small(c, (x0, y + FS_TIP // 2), tip, size=FS_TIP,

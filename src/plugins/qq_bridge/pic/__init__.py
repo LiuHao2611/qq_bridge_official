@@ -225,6 +225,28 @@ def _code_sig() -> str:
     return _CODE_SIG
 
 
+def _font_ver() -> str:
+    """缓存 key 里的**字体签名**：bold + kai 都要算。
+
+    2026-11-22：斗破 12 张卡新增楷体牌匾字（``doupo_kai.ttf``），但签名原来只覆盖
+    ``bold``——重新生成楷体后 size/mtime 变了、key 却没变，玩家会继续看到旧字形的
+    缓存图。这和 2026-11-15 那次「只换代码不换字体 → 吐旧糊图」是同一类坑，故把
+    所有参与自绘的字体一起纳入；缺文件时写 ``no-<role>`` 占位（保持 key 稳定）。
+    """
+    parts: list[str] = []
+    for role in ("bold", "kai"):
+        try:
+            bp = _fonts.font_path(role)
+        except Exception:  # noqa: BLE001  取不到就当缺字体，不影响出图
+            bp = None
+        if bp and Path(bp).is_file():
+            st = Path(bp).stat()
+            parts.append("%s:%d:%d" % (Path(bp).name, st.st_size, st.st_mtime_ns))
+        else:
+            parts.append("no-" + role)
+    return "|".join(parts)
+
+
 def render_sync(template: str, theme_name: str | None = None, card: str | None = None, **params) -> bytes:
     """同步渲染（**纯 CPU，勿在事件循环里直接调用**，请用 `render()`）。
 
@@ -297,15 +319,7 @@ async def render(template: str, theme_name: str | None = None, card: str | None 
     # 字体 + 渲染代码签名纳入缓存 key：2026-11-15 斗破卡从「伪粗描边」换成真粗体后，
     # 磁盘缓存（data/pic_cache，bind mount、重建容器不清）仍返回旧糊图；随后重排菜单
     # 版式时又发现「只换代码不换字体」同样会命中旧布局。两者都不算进 key，改了也白改。
-    try:
-        _bp = _fonts.font_path("bold")
-        if _bp and Path(_bp).is_file():
-            _st = Path(_bp).stat()
-            fver = "%s:%d:%d" % (Path(_bp).name, _st.st_size, _st.st_mtime_ns)
-        else:
-            fver = "no-bold-font"
-    except Exception:
-        fver = "no-bold-font"
+    fver = _font_ver()
     key = make_key((template or "").strip().lower() + "|c=" + str(card or "") +
                    "|f=" + fver + "|v=" + _code_sig(),
                    resolved + ("@" + sig if sig else ""), params)
