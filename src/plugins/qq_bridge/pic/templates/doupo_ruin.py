@@ -99,11 +99,15 @@ def _rich(data: dict) -> bool:
 
 
 def _status_color(p: dict, status: str) -> str:
-    """已通关=暖金（主色）/ 可挑战=斗气蓝（强调）/ 未解锁=灰。"""
+    """语义色统一（2026 前沿配色）：已通关=薄荷绿 / 可挑战=靛紫焦点 / 未解锁=灰。
+
+    青色（mp_to）专供战斗斗气条，不在这里复用——否则紫+青+绿三套强调色同时
+    出现显得杂。焦点一律靛紫，完成一律薄荷绿，弱信息灰紫。
+    """
     if status == "done":
-        return p["title_color"]
+        return p["pill_text"]
     if status == "current":
-        return p["mp_to"]
+        return p["title_color"]
     return p["dim_color"]
 
 
@@ -203,16 +207,18 @@ def _draw_prog(c: Canvas, plan: dict, x0: int, y: int, content_w: int, p: dict, 
     for i in range(total):
         bxx = bx + i * (PROG_BUBBLE_W + PROG_GAP)
         if i < done:
+            # 已通关=薄荷绿渐变（完成态 Neo Mint），与段气泡/状态 chip 同语义。
             c.gradient_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H),
-                            p["bar_from"], p["bar_to"], radius=10)
+                            p["pill_line"], p["pill_text"], radius=10)
             # 勾（对勾图标，白色，实心）压在气泡中心。
             icons.draw(c, "check", bxx + PROG_BUBBLE_W // 2,
                        y + PROG_BUBBLE_H // 2, 14, _WHITE, style="solid")
         elif i == done:
+            # 当前可挑战=靛紫焦点色（Digital Lavender），青色留给战斗斗气条。
             c.rounded_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H), radius=10,
-                           fill=p["chip_bg"], outline=p["mp_to"], width=2)
+                           fill=p["chip_bg"], outline=p["title_color"], width=2)
             c.text((bxx + PROG_BUBBLE_W // 2, y + PROG_BUBBLE_H // 2), str(i + 1),
-                   size=FS_LABEL, color=p["mp_to"], role="regular", anchor="mm")
+                   size=FS_LABEL, color=p["title_color"], role="regular", anchor="mm")
         else:
             c.rounded_rect((bxx, y, bxx + PROG_BUBBLE_W, y + PROG_BUBBLE_H), radius=10,
                            fill=p["track_color"], outline=p["border_color"], width=1)
@@ -228,11 +234,11 @@ def _draw_run(c: Canvas, plan: dict, x0: int, y: int, content_w: int, p: dict, r
                    fill=p["cell_bg"], outline=p["cell_line"], width=1)
     ty = y + RUN_PAD
     c.text((x0 + RUN_PAD, ty + RUN_HEADER_H // 2), "本次挑战", size=S.FS_KEY,
-           color=p["accent_color"], role="bold", bold=True, anchor="lm")
+           color=p["title_color"], role="bold", bold=True, anchor="lm")
     rec("run_head", "本次挑战", x0 + RUN_PAD, ty + RUN_HEADER_H // 2, S.FS_KEY, role="bold")
     ty += RUN_HEADER_H
-    tone_color = {"accent": p["accent_color"], "done": p["title_color"],
-                  "foe": p["mp_to"], "dim": p["dim_color"]}
+    tone_color = {"accent": p["title_color"], "done": p["pill_text"],
+                  "foe": p["hp_to"], "dim": p["dim_color"]}
     for i, (txt, tone) in enumerate(plan["run_rows"]):
         c.text((x0 + RUN_PAD + BULLET(), ty + RUN_ROW_H // 2), txt, size=FS_BODY,
                color=tone_color.get(tone, p["text_color"]), role="regular", anchor="lm")
@@ -250,11 +256,11 @@ def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec
     s = sp["stage"]
     status = str(s.get("status") or "locked")
     h = sp["h"]
-    # 气泡底色：已通关用极淡暖底，可挑战用高亮描边，未解锁用中性底。
+    # 气泡底色：已通关=薄荷绿淡底，可挑战=靛紫高亮描边，未解锁=中性底。
     if status == "done":
         fill, outline, ow = p["pill_bg"], p["pill_line"], 1
     elif status == "current":
-        fill, outline, ow = p["chip_bg"], p["mp_to"], 2
+        fill, outline, ow = p["chip_bg"], p["title_color"], 2
     else:
         fill, outline, ow = p["cell_bg"], p["border_color"], 1
     c.rounded_rect((x0, y, x0 + content_w, y + h), radius=12,

@@ -202,8 +202,14 @@ def test_manifest():
     check("模板已注册", '"doupo_craft": _doupo_craft.build' in pic)
     check("卡名已登记", '"doupo_craft": "斗破傀儡炼制卡"' in pic)
     tpl = src("src/plugins/qq_bridge/pic/templates/doupo_craft.py")
-    check("模板走 doupo_battle 骨架", "_battle.build(t, data, width, **kw)" in tpl)
-    check("模板空数据回退 DEMO（不许空图）", "_DEMO" in tpl and "if not data.get(\"groups\")" in tpl)
+    # 2026-11-22 气泡版：不再走 battle legacy 纯文本骨架，改为独立分组气泡 + 序号圆标。
+    # 反证：一旦有人退回 "_battle.build(...)" 或丢掉气泡/序号，这条立刻红。
+    check("模板走独立气泡骨架（非 battle legacy）",
+          "def _plan(" in tpl and "def card_height(" in tpl
+          and "_pal(t)" in tpl and "c.ellipse(" in tpl
+          and "c.rounded_rect(" in tpl and "ORD_D" in tpl)
+    check("模板空数据回退 DEMO（不许空图）",
+          "_DEMO" in tpl and "if not _groups_of(data)" in tpl)
     check("card 侧常量存在", card.CARD_CRAFT_NAME == "斗破傀儡炼制")
     # render_craft_for 必须自己挡住「没成傀数据」——否则 _render_list 会拿模板
     # 里的 _DEMO 占位图糊过去，玩家看到一张写着「铜尸傀 人级」的假成卡。

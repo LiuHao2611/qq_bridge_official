@@ -168,10 +168,12 @@ DOUPO_DATA = {
 
 
 def test_doupo_panel_png_and_layout():
-    """斗破人物卡正常渲染为 PNG，高度固定 712，关键色（朱红标题/暗金武器）落点正确。
+    """斗破人物卡正常渲染为 PNG，高度固定 712，关键色（靛紫标题/品红强调）落点正确。
 
     2026-11-07：名字行改造成「左侧 96 头像 + 右侧信息」，H_HEADER=112
     替代原 H_NAME=44，总高 644 → 712。
+    2026-11-22：配色升级为 2026 前沿色板，色值断言改为读模板常量、不再硬编码 hex
+    ——换配色时测试自动跟随，不会因为「颜色变了」误报失败。
     """
     t = theme.get(LIGHT)
     from src.plugins.qq_bridge.pic.templates import doupo
@@ -180,10 +182,10 @@ def test_doupo_panel_png_and_layout():
     data = c.to_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
     assert c.height == 712, c.height  # 与 _measure 同步的版式高度
-    # 朱红（标题 + 境界 chip + 进度条末端）必须出现
-    assert _color_count(data, "#8A1C1C", tol=60) > 200
-    # 暗金武器图标必须出现
-    assert _color_count(data, "#B8860B", tol=60) > 30
+    # 标题色（标题 + 境界 chip + 进度条末端）必须出现
+    assert _color_count(data, doupo.C_TITLE, tol=60) > 200
+    # 强调色（武器图标等）必须出现
+    assert _color_count(data, doupo.C_ACCENT, tol=60) > 30
 
 
 def test_doupo_panel_avatar_is_drawn_inside_card():
@@ -214,14 +216,14 @@ def test_doupo_panel_avatar_is_drawn_inside_card():
 
 
 def test_doupo_panel_break_uses_warm_gold():
-    """可突破状态：进度条转暖金（#D98A2B），与"仍在修炼"的金红渐变明确区分。"""
+    """可突破状态：进度条转暖色（C_BAR_READY_TO），与"仍在修炼"的冷紫渐变明确区分。"""
     t = theme.get(LIGHT)
     from src.plugins.qq_bridge.pic.templates import doupo
 
     d = dict(DOUPO_DATA)
     d["exp"], d["need"], d["can_break"] = 3000, 3000, True
     data = doupo.build(t, data=d).to_bytes()
-    assert _color_count(data, "#D98A2B", tol=60) > 100, "可突破状态应出现暖金进度条"
+    assert _color_count(data, doupo.C_BAR_READY_TO, tol=60) > 100, "可突破状态应出现暖色进度条"
 
 
 def test_doupo_menu_png_and_groups():
@@ -237,14 +239,15 @@ def test_doupo_menu_png_and_groups():
          "rows": [["dp突破", "修为满时晋升一星；28 级冲斗帝看机缘"],
                   ["dp修炼", "结算离线修为每分钟自动 +6"]]},
     ]
+    from src.plugins.qq_bridge.pic.templates import doupo
     c = doupo_menu.build(t, data={"title": "斗破菜单", "groups": groups})
     data = c.to_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
     assert c.height > 200, c.height
-    # 暗金分组竖条必须出现
-    assert _color_count(data, "#B8860B", tol=60) > 30
-    # 朱红标题「斗破菜单」必须出现
-    assert _color_count(data, "#8A1C1C", tol=60) > 50
+    # 强调色分组竖条必须出现（读模板常量，换配色自动跟随）
+    assert _color_count(data, doupo.C_ACCENT, tol=60) > 30
+    # 标题色「斗破菜单」必须出现
+    assert _color_count(data, doupo.C_TITLE, tol=60) > 50
 
 
 def test_doupo_list_png_and_layout():
@@ -258,17 +261,18 @@ def test_doupo_list_png_and_layout():
         {"title": "青莲地心火", "right": "4/4 级", "sub": "异火说明一段"},
         {"title": "回灵丹 ×3", "sub": "回血回蓝", "accent": True},
     ]
+    from src.plugins.qq_bridge.pic.templates import doupo
     c = doupo_list.build(t, data={"icon": "bolt", "title": "斗技", "subtitle": "快捷键 1/3/7/9",
                                   "rows": rows, "tip": "用法：dp升级 龙吟碎"})
     data = c.to_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
     assert c.height > 200, c.height
-    # 朱红标题「斗技」必须出现
-    assert _color_count(data, "#8A1C1C", tol=60) > 50
-    # 暗金左侧竖条（accent 行与分组）必须出现
-    assert _color_count(data, "#B8860B", tol=60) > 20
-    # 等级渐变条（暗金→朱红）至少渲染一段暖色
-    assert _color_count(data, "#8A1C1C", tol=120) > 30
+    # 标题色「斗技」必须出现（读模板常量，换配色自动跟随）
+    assert _color_count(data, doupo.C_TITLE, tol=60) > 50
+    # 强调色左侧竖条（accent 行与分组）必须出现
+    assert _color_count(data, doupo.C_ACCENT, tol=60) > 20
+    # 等级渐变条末端（title 色）至少渲染一段
+    assert _color_count(data, doupo.C_TITLE, tol=120) > 30
 
 
 # ---------------------------------------------------------------- 主题

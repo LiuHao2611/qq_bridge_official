@@ -56,41 +56,45 @@ from ..canvas import Canvas, rounded_mask
 from ..theme import Theme
 from . import doupo_style as S
 
-# ---- 固定配色（斗破：羊皮纸米 / 朱红 / 暗金 / 药青）——未配置专属覆盖时的默认值 ----
-C_PAGE = "#F2ECE2"      # 页面外背景（羊皮纸米白）
+# ---- 固定配色（2026 前沿「电光暮色 / 数字薰衣草」× 玄幻，2026-11-22 升级）----
+# 依据 2026 色彩趋势（多来源交叉）：Digital Lavender（年度薰衣草紫）/
+# Electric Twilight（深靛 + 青 + 品红点缀，AI-native 默认）/ Neo Mint（薄荷完成态）。
+# 原则：浅底深字保可读；强调色只用在条/chip/徽章等小面积；语义色全卡一致。
+# 只改色值、不改键结构 → 所有 _pal() 调用方与 bg_overrides 覆盖逻辑零改动。
+C_PAGE = "#F6F3FB"      # 页面外背景（极浅薰衣草白，替代旧羊皮纸米）
 C_CARD = "#FFFFFF"      # 卡片底
-C_BORDER = "#E6DCCB"    # 卡片描边
-C_TEXT = "#2B2320"      # 主文字（墨褐）
-C_DIM = "#8A7C6B"       # 次文字
-C_TITLE = "#8A1C1C"     # 标题朱红
-C_ACCENT = "#B8860B"    # 主强调（暗金）
-C_LINE = "#E6DCCB"      # 分割线
-C_TRACK = "#EBE2D2"     # 进度条轨道
-C_BAR_FROM = "#E0A93B"  # 进度条渐变起（金）
-C_BAR_TO = "#8A1C1C"    # 进度条渐变止（朱红）
-# 修为已满（可突破）：暖金——与"还在修炼"的金红明确区分，一眼看出该突破了
-C_BAR_READY_FROM = "#F5C978"
-C_BAR_READY_TO = "#D98A2B"
+C_BORDER = "#E4DCF2"    # 卡片描边（淡紫灰）
+C_TEXT = "#26213A"      # 主文字（深墨紫，对比 ≈14:1）
+C_DIM = "#7A7391"       # 次文字（灰紫，明显弱于正文）
+C_TITLE = "#5B3FA8"     # 标题：靛紫（年度紫色系，替代旧朱红）
+C_ACCENT = "#C13584"    # 主强调：品红紫（Electric Twilight 点缀色）
+C_LINE = "#E9E3F3"      # 分割线
+C_TRACK = "#ECE7F5"     # 进度条轨道（淡紫灰）
+C_BAR_FROM = "#6D5AE0"  # 进度条渐变起（靛紫）
+C_BAR_TO = "#B84FA8"    # 进度条渐变止（品红紫，lumen 渐变感）
+# 修为已满（可突破）：珊瑚橙→暖金——暖色系一眼从冷色进度中跳出
+C_BAR_READY_FROM = "#FF8A5B"
+C_BAR_READY_TO = "#F5A524"
 
-# 炼药师 pill（药青，表示炼药天赋）
-C_PILL_BG = "#E6EFE8"
-C_PILL_LINE = "#C7D8CC"
-C_PILL_TEXT = "#2F6B4F"
+# 炼药师 pill（薄荷绿，Neo Mint 完成态）
+C_PILL_BG = "#E4F7EF"
+C_PILL_LINE = "#B8E6D2"
+C_PILL_TEXT = "#0F8A67"
 
-# 境界 chip（可突破时暖红）
-C_CHIP_BG = "#FBEEDD"
-C_CHIP_LINE = "#EBC79A"
-C_CHIP_TEXT = "#9E1B32"
+# 境界 chip（淡紫底 + 靛紫字，可突破时仍由调用方叠暖色）
+C_CHIP_BG = "#F0EAFB"
+C_CHIP_LINE = "#D0BEF0"
+C_CHIP_TEXT = "#6B3FA8"
 
-# 六维 / 武器网格底
-C_CELL_BG = "#F7F1E9"
-C_CELL_LINE = "#E6DCCB"
+# 六维 / 武器网格底（极浅薰衣草）
+C_CELL_BG = "#F7F4FC"
+C_CELL_LINE = "#E4DCF2"
 
-# 气血 / 斗气条
-C_HP_FROM = "#F0A9A0"
-C_HP_TO = "#C0392B"
-C_MP_FROM = "#9FC6E8"
-C_MP_TO = "#1F6FB2"
+# 气血 / 斗气条（珊瑚红 / 电光青，Electric Twilight 成对语义色）
+C_HP_FROM = "#FF8A96"
+C_HP_TO = "#DD3E5C"
+C_MP_FROM = "#5EE0D2"
+C_MP_TO = "#0C9FB0"
 
 # ---- 排版 ----
 PAD = 28
