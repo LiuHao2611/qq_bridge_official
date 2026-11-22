@@ -248,6 +248,36 @@ def weapon_pool_for(n: int, owned: set[str]) -> list[str]:
 REWARD_GOLD_PER_FLOOR = 120
 REWARD_EXP_PER_FLOOR = 90
 
+# 2026-11-22 经验平衡 v0.2：塔修为改锚等级曲线（不再固定 90/层，高等级无感）。
+# 本模块刻意零依赖 config（裸跑门禁），故在此内联两个常量/公式的镜像：
+#   PEAK_LV == config.PEAK_LV == config.MAX_LV-1 == 102
+#   exp_need(lv) == config.exp_need(lv) == 400·lv²//9, 且 lv>=MAX_LV(103) 时为 0
+# 一致性由 tests/test_doupo_exp_balance.py 的守门测试逐等级比对，禁止手抄漂移。
+TOWER_PEAK_LV = 102
+TOWER_MAX_LV = 103
+TOWER_EXP_REF_RATIO = 0.05   # == config.TOWER_EXP_REF_RATIO，守门测试钉住
+
+
+def _ref_exp_need(lv: int) -> int:
+    """config.exp_need 的零依赖镜像（仅本模块奖励锚点用）。"""
+    lv = int(lv)
+    if lv >= TOWER_MAX_LV:
+        return 0
+    return 400 * lv * lv // 9
+
+
+def _tower_exp_cum(floors: int) -> int:
+    """0→floors 层「每层 exp_need(min(floor_ref_lv,PEAK))×5%」的累计修为。
+
+    显式 min() 封顶 PEAK_LV：52 层起 floor_ref_lv=103，若不封顶 exp_need(103)=0，
+    新增层奖励归零（假机制，见 docs/经验产出平衡评审 v0.2 §0.1 A04）。
+    """
+    total = 0
+    for i in range(1, max(0, int(floors)) + 1):
+        ref = min(floor_ref_lv(i), TOWER_PEAK_LV)
+        total += int(_ref_exp_need(ref) * TOWER_EXP_REF_RATIO)
+    return total
+
 
 def clear_reward(floors: int) -> dict:
     """从 0 连续爬到 floors 层的**累计**金币/经验奖励（非线性）。
@@ -255,11 +285,13 @@ def clear_reward(floors: int) -> dict:
     ⚠ 电梯分层重打时必须用 ``incremental_reward(to_floor, paid_floor)`` 取差值，
     不能把每轮的 clear_reward 相加——那会重复发低层奖励（2026-11-17 用户硬要求
     「不会重复获得之前挑战过层数的奖励」）。
+
+    2026-11-22 v0.2：金币曲线保持原样不动；修为改按标尺等级锚点（见 _tower_exp_cum）。
     """
     f = max(0, int(floors))
     return {
         "gold": int(REWARD_GOLD_PER_FLOOR * f * (1 + 0.05 * f)),
-        "exp": int(REWARD_EXP_PER_FLOOR * f * (1 + 0.05 * f)),
+        "exp": _tower_exp_cum(f),
     }
 
 

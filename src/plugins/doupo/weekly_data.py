@@ -111,17 +111,41 @@ ROOKIE_PROFILE = {
 # ---------------------------------------------------------------------------
 WEEKLY_REWARD_MULT = 1.5       # 周本单位层奖励倍率（高于无限塔，因一命通关风险大）
 
+# 2026-11-22 经验平衡 v0.2：周本修为改锚快照等级（不再吃塔的递增固定 90/层）。
+# 镜像是 tower_data._ref_exp_need（同公式），一致性由 test_doupo_exp_balance 守门。
+WEEKLY_PEAK_LV = 102           # == config.PEAK_LV，显式封顶避免 exp_need(103)=0 归零
+WEEKLY_EXP_SNAPSHOT_RATIO = 0.05   # == config.WEEKLY_EXP_SNAPSHOT_RATIO
 
-def floor_reward(n: int) -> dict:
-    """第 n 层的金币/修为（增量，不含之前层）。"""
+
+def _ref_exp_need(lv: int) -> int:
+    """config.exp_need 的零依赖镜像（仅本模块奖励锚点用）。"""
+    lv = int(lv)
+    if lv >= 103:
+        return 0
+    return 400 * lv * lv // 9
+
+
+def floor_reward(n: int, snapshot_lv: int | None = None) -> dict:
+    """第 n 层的金币/修为（增量，不含之前层）。
+
+    2026-11-22 v0.2：金币仍走塔的 incremental_reward 递增曲线；修为改按**快照等级**
+    每层定额 = exp_need(min(snapshot_lv, PEAK_LV))×5%×WEEKLY_REWARD_MULT（层数无关，
+    因为一周难度锁定同一快照）。``snapshot_lv`` 由 core.weekly_floor 从快照带入；
+    显式 min() 封顶 PEAK_LV，杜绝快照 lv103 时 exp_need(103)=0 奖励归零。
+    缺省 None 仅用于裸跑 self_test 的金币断言（修为给 0，不冒充真实快照）。
+    """
     try:                                   # 包内导入（core/commands 调用路径）
         from .tower_data import incremental_reward
     except ImportError:                    # 裸跑根目录脚本路径
         from tower_data import incremental_reward
 
     r = incremental_reward(max(1, int(n)), max(0, int(n) - 1))
-    return {"gold": int(r["gold"] * WEEKLY_REWARD_MULT),
-            "exp": int(r["exp"] * WEEKLY_REWARD_MULT)}
+    gold = int(r["gold"] * WEEKLY_REWARD_MULT)
+    if snapshot_lv is None:
+        return {"gold": gold, "exp": 0}
+    lv = min(max(1, int(snapshot_lv)), WEEKLY_PEAK_LV)
+    exp = int(_ref_exp_need(lv) * WEEKLY_EXP_SNAPSHOT_RATIO * WEEKLY_REWARD_MULT)
+    return {"gold": gold, "exp": exp}
 
 
 # ---------------------------------------------------------------------------

@@ -3465,3 +3465,36 @@ tower 17 / tower_fixed 7 / root_factor 11 / save_sqlite 12 / persistence 8 全�
   禁直接读真实 p；连打/服药/战败即停旧门全留。
 * 变异反证：把 `commands.py` 换回 `monster_scaled(p, ...)` ⇒ E2E 红（9740 vs 23977），
   恢复后 206/206 绿。
+
+## 评审记录 · 2026-11-22　经验产出平衡（未改代码，等拍板）
+
+用户反馈「战斗 1~5 怪太容易攒到可突破、导致不去体验其他副本」。只读评审结论：
+当前 `EXP_FIGHTS_PER_LV=2` + 多敌经验累加 + `陨落心炎` ×1.5 叠乘 ⇒ 主号均场
+**1.766 级**；塔 19 层首通仅 3334 修为、周本通关 1275，高等级下几乎无感；遗迹
+7 段反而给 1,312,142（约 3.8 级）。主号存量经验 3,834,734，可连续突破 10 次到 lv98。
+
+交付：`docs/经验产出平衡评审_2026-11-22.md`（16 维、证据机检 10/10、设计校验
+`check_design_doc.py --strict` PASS）。探针：`tmp/probe_exp_balance.py` /
+`tmp/probe_exp_balance.out.json`。推荐口径（**未执行，等用户拍板**）：
+`EXP_FIGHTS_PER_LV=2→8`、遗迹同步缩为 1/4、塔按 `floor_ref_lv` 的 5% `exp_need`、
+周本按快照 lv 每层 5%×1.5、异火倍率是否接入塔周本单独拍板、存量经验不追溯。
+
+### v0.2 修订（用户："你考虑的不够全面，你再想想"）
+v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经验产出平衡评审_2026-11-22.md`，
+新增 `tmp/probe_exp_balance_v2.py` / `.out.json`。`--strict` PASS(0/0)、引文机检 v1 10/10 + v2 6/6。
+- 撤回 v0.1"只把 `EXP_FIGHTS_PER_LV` 改成 8"作首选：仍留 5 敌 2.5 倍线性膨胀（lv50 1敌0.75级/5敌3.75级）。改推**整场经验池 K=4**：
+  `exp_need(lv)/K × flame_exp_mult × (1+hard_step×(敌数-1))`，hard_step=0.10/敌封顶+40%；
+  改后均 0.375 级/场、2.67 场/级≈53.3 秒/级（原 1.77 级/场、11.3 秒/级）。
+- **封顶红线**：`exp_need(103)=0`、`PEAK_LV=102`；塔锚 `min(floor_ref_lv,PEAK_LV)`（60层 v1=392983→v2=601063，
+  52层起 ref=103 否则增量归零）、周本锚 `min(snapshot.lv,PEAK_LV)`（lv103 v1=0→v2=242760）。必须显式 `min()`，禁 `or` 兜底 0。
+- 补 20 秒 CD 时间成本、8 类经验写入点（静修/心火/战斗/塔/周本/丹药/任务/机缘）、
+  `store.py:348` 存量迁移只随曲线版号缩放（改除数不自动缩放积压、推荐不追溯）、生产口令频次（战斗6/突破7/遗迹4/周本1/爬塔0）。
+- 拍板 Q1~Q7；实现阶段须补 6 组变异反证（整场池退回线性、K改回2、hard_step=0、塔去封顶、周本103未封顶、存量被扣减）。
+
+### v0.2.1 实现落地（2026-11-22 18:38，用户"开始改吧"=按推荐改核心 Q1~Q4）
+- 已改本地代码（**未上线**）：`config.py` 加 `ENCOUNTER_EXP_BUDGET_DIVISOR=4`/`ENCOUNTER_EXP_HARD_STEP=0.10`/`HARD_CAP=0.40`/`TOWER_EXP_REF_RATIO=0.05`/`WEEKLY_EXP_SNAPSHOT_RATIO=0.05`；`EXP_FIGHTS_PER_LV=2` 降级为只服务单敌 fight。
+- 真源：`core.encounter_exp_budget()`/`encounter_exp_share()` 唯一定义整场池；`fight(exp_override=None)` 默认走旧单敌口径逐字节不变；`encounter()` 开场算预算逐敌传份额（余量给首敌、Σ=预算）。
+- 塔 `tower_data.clear_reward` 修为改锚 `exp_need(min(floor_ref_lv,102))×5%` 累计差（金币曲线不动）；周本 `weekly_data.floor_reward(n,snapshot_lv)` 改 `exp_need(min(snapshot,102))×5%×1.5`，`core.weekly_floor` 传快照 lv。两数据层零依赖→各内联 `_ref_exp_need` 镜像，`tests/test_doupo_exp_balance.py` 逐等级守镜像==config。
+- 🔑 `PEAK_LV=102`/`MAX_LV=103`/`exp_need(103)=0`：塔/周本锚点必须显式 `min(...,PEAK_LV)`，否则 52 层后/满级快照奖励归零（假机制）。
+- 验收：新测试 295 断言+6 变异反证全绿/全红；全套 `test_doupo_*.py` 487 passed/3 failed（3 个既有 stub 问题，基线保持）；文档 `--strict` PASS。主号 luck80 0.57→2.35 场/级。**Q5 异火加成塔周本、Q7 显示可突破N次未改（待拍板）**。
+- 🔑 守门真 python = `C:/Users/L/AppData/Local/Programs/Python/Python313/python.exe`（pytest 9.1.1）；WorkBuddy 自带 python 无 pip/pytest，别再用它跑。上线需用户明确授权走 `tools/phone_deploy.py push`。
