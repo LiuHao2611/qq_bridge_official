@@ -2514,6 +2514,10 @@ def tower_settle(p, st: dict) -> dict:
     rew = td.incremental_reward(floors, paid)
     p["gold"] = int(p.get("gold", 0)) + rew["gold"]
     p["exp"] = int(p.get("exp", 0)) + rew["exp"]
+    # 2026-11-23 逐层分档掉落（材料+丹药）：跟随同一水位线，旧层不重复。
+    loot = td.incremental_loot(floors, paid)
+    for _nm, _qty in loot.items():
+        add_item(p, _nm, _qty)
     new_paid = max(paid, floors)
     p["tower_paid_floor"] = new_paid
     p["tower_checkpoint"] = max(int(p.get("tower_checkpoint", 0)), floors)
@@ -2522,7 +2526,7 @@ def tower_settle(p, st: dict) -> dict:
     p["tower_best"] = new_best
     st["settled"] = True
     return {"ok": True, "floors": floors, "gold": rew["gold"], "exp": rew["exp"],
-            "best": new_best, "new_record": new_best > best,
+            "loot": loot, "best": new_best, "new_record": new_best > best,
             "paid": new_paid}
 
 

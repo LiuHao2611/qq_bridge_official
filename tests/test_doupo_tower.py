@@ -90,9 +90,16 @@ def test_floor_kind_and_hard():
     assert td.floor_kind(20) == "boss" and td.floor_kind(7) == "normal"
     hards = [td.floor_hard(n) for n in range(1, 201)]
     assert all(td.HARD_MIN <= h <= td.HARD_MAX for h in hards)
-    # 难度随层数持续叠加（无限层有终点）
-    d5, d20, d50 = (td.floor_difficulty(n)["hp_mult"] for n in (5, 20, 50))
-    assert 1.0 < d5 < d20 < d50 and d50 > 3.0, (d5, d20, d50)
+    # 难度随层数持续叠加（无限层有终点）。2026-11-23 重标定：
+    # 400-500 层是「正常范围」，故低层极平缓；500 层后才二次变陡成软墙。
+    # 旧口径 d50>3.0 是旧 QUAD=0.15 的产物（500 层 374× 假目标，顶配不可达）。
+    d5, d20, d50, d500, d1000 = (
+        td.floor_difficulty(n)["hp_mult"] for n in (5, 20, 50, 500, 1000))
+    assert 1.0 < d5 < d20 < d50 < d500 < d1000, (d5, d20, d50, d500, d1000)
+    # 中上战力可达区间：500 层倍率必须温和（<2×），否则 400-500 层又是假目标
+    assert d500 < 2.0, d500
+    # 500 层后确有明显变陡（软墙有效）：1000 层至少是 500 层的 2 倍增量
+    assert (d1000 - 1.0) > 2.0 * (d500 - 1.0), (d500, d1000)
 
 
 def test_tower_is_sustainable_but_finite():
