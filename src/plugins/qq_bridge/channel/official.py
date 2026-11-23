@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -153,10 +154,15 @@ async def _build_merged_card_segment(bot, image_datas: list[bytes],
                 img_alt = alt
     except Exception:  # noqa: BLE001 — 识别标记是增强项，失败保持默认 alt
         pass
-    parts: list[str] = []
-    for i, data in enumerate(image_datas):
-        mat = await ensure_material(bot, data, file_name="card_%d.png" % i)
-        parts.append(markdown_image(mat["url"], mat["width"], mat["height"], alt=img_alt))
+    # 2026-11-23 P1：多图上传并行。ensure_material 正常路径只在配额清理时持
+    # _quota_lock，上传本身无锁；gather 返回的 list 顺序严格等于输入顺序，
+    # 故 markdown 里的图片顺序不变。任一失败仍抛 MaterialUploadError，上层照常降级。
+    mats = await asyncio.gather(*[
+        ensure_material(bot, data, file_name="card_%d.png" % i)
+        for i, data in enumerate(image_datas)
+    ])
+    parts = [markdown_image(m["url"], m["width"], m["height"], alt=img_alt)
+             for m in mats]
     seg = _QQMessage()
     seg += _QQSegment.markdown("\n".join(parts))  # 合法 markdown content（图片）
     if kb_model is not None and btns:              # 有按钮才挂，零按钮绝不发空 keyboard
