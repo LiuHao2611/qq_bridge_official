@@ -271,6 +271,40 @@ def flame_exp_mult(p) -> float:
     return 1.0 + 0.5 * int((p.get("flames") or {}).get("陨落心炎", 0))
 
 
+def encounter_exp_budget(p: dict, enemy_count: int) -> int:
+    """整场遭遇战的修为总预算（2026-11-22 经验平衡 v0.2，唯一真源）。
+
+    一场战斗的回报由「这场打几只怪」改成「这场战斗本身」：
+        budget = exp_need(玩家lv) / K × 异火倍率 × (1 + min(CAP, STEP×(敌数-1)))
+    多敌只给有限补偿（每多 1 敌 +10%，封顶 +40%），不再逐敌线性累加。
+    ``enemy_count`` 是**整场抽取的敌数**（encounter 开场已知），故预算在战斗中固定；
+    实际发放按「已击败份额 = budget / enemy_count × 已胜敌数」，中途战败不补发。
+
+    K / STEP / CAP 全部来自 config，本函数不重复定义（单一真源）。
+    """
+    lv = int(p.get("lv", 1))
+    need = cfg.exp_need(lv)
+    n = max(1, int(enemy_count))
+    hard = min(float(cfg.ENCOUNTER_EXP_HARD_CAP),
+               float(cfg.ENCOUNTER_EXP_HARD_STEP) * (n - 1))
+    budget = int(need / float(cfg.ENCOUNTER_EXP_BUDGET_DIVISOR)
+                 * flame_exp_mult(p) * (1.0 + hard))
+    return max(0, budget)
+
+
+def encounter_exp_share(budget: int, enemy_count: int, wins: int) -> int:
+    """整场预算里「已击败 wins 敌」应得的修为（整除到敌，余量给首敌）。
+
+    Σ各敌份额恰好等于 budget：整场全胜 = budget；中途战败 wins<n = 已胜份额。
+    """
+    n = max(1, int(enemy_count))
+    w = max(0, min(n, int(wins)))
+    if w <= 0:
+        return 0
+    base, rem = divmod(int(budget), n)
+    return int(base * w + (rem if w >= 1 else 0))
+
+
 def settle(p, now_ts=None) -> dict:
     now_ts = time.time() if now_ts is None else now_ts
     elapsed = max(0.0, now_ts - float(p.get("last_settle", now_ts)))
@@ -1285,7 +1319,7 @@ def auto_pill_candidates(p, effect: str, locked: set[str] | None = None) -> list
 
 def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
           puppet=None, formation_n=0, locked=None, auto_pill=True,
-          pill_budget=None, puppet_flame_mult=1.0) -> dict:
+          pill_budget=None, puppet_flame_mult=1.0, exp_override=None) -> dict:
     """回合制模拟，返回战报。不直接发消息，只改 p。
 
     ``puppet`` / ``formation_n``（2026-11-18 傀儡）：出战傀儡真实列 dict 与同场
@@ -1869,7 +1903,13 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1
-        exp = int(mon["exp"] * flame_exp_mult(p))
+        # 2026-11-22 经验平衡 v0.2：遭遇战传 exp_override=整场预算的单敌份额，
+        # 由 encounter_exp_share 算出（已含异火，不再二次乘）。None 时走原单敌口径
+        # （遗迹连段 / PVP / 直接单敌调用），逐字节不变。
+        if exp_override is None:
+            exp = int(mon["exp"] * flame_exp_mult(p))
+        else:
+            exp = max(0, int(exp_override))
         p["exp"] = int(p.get("exp", 0)) + exp
         gold = int(mon["gold"] * (cfg.DROP_GOLD_MULT[0] + rng()))
         p["gold"] = int(p.get("gold", 0)) + gold
@@ -1969,6 +2009,13 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     fade = max(0.0, float(cfg.ENCOUNTER_FADE))
     heal = max(0.0, float(cfg.ENCOUNTER_REST_HEAL))
 
+    # 2026-11-22 经验平衡 v0.2：整场修为预算开场一次算定（敌数已知），
+    # 按「已击败份额」逐敌发放；中途战败只发已胜份额，不补发。
+    # 公式唯一真源 = encounter_exp_budget / encounter_exp_share。
+    _n_enemies = len(specs)
+    _exp_budget = encounter_exp_budget(p, _n_enemies)
+    _exp_base, _exp_rem = divmod(_exp_budget, _n_enemies)  # 余量给首敌，Σ恰等于预算
+
     # 傀儡每回合期望输出：整场算一次（p / puppet / 异火倍率都不变），
     # 每敌反解与实战注入共用这一个数 —— 两处同源是红线。
     _pu_bonus = 0.0
@@ -2006,10 +2053,12 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
             p["hp"] = min(int(st["体力"]),
                           int(p.get("hp") or 0) + int(st["体力"] * heal))
         # 整场机缘已预掷：传 aid + roll_aid=False，禁止每敌重复掷骰。
+        # 整场经验池单敌份额：余量给首敌，Σ各敌份额恰等于整场预算。
+        _share = _exp_base + (_exp_rem if i == 0 else 0)
         r = fight(p, mon, rng=rng, aid=whole_aid, roll_aid=False,
                   pill_budget=pill_budget, locked=locked, auto_pill=auto_pill,
                   puppet=puppet, formation_n=formation_n,
-                  puppet_flame_mult=puppet_flame_mult)
+                  puppet_flame_mult=puppet_flame_mult, exp_override=_share)
         total_rounds += int(r["rounds"])
         total_taken += int(r["taken"])
         total_exp += int(r.get("exp") or 0)
@@ -2570,7 +2619,9 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random,
         "affixes": affixes, "rounds": int(r["rounds"]), "taken": int(r["taken"]),
         "hp": hp_after, "mp": int(fp.get("mp", 0)), "rest_heal": rest,
         "log": r["log"], "mon": mon, "hero_aid": r.get("hero_aid"),
-        "reward": wd_weekly.floor_reward(floor),
+        # 2026-11-22 v0.2：修为改锚快照等级（封顶 PEAK_LV），层数不再放大修为。
+        "reward": wd_weekly.floor_reward(
+            floor, snapshot_lv=int(snapshot.get("lv", p.get("lv", 1)))),
         # P1-1：透传护主战果，供命令层写回战损。
         "puppet_guard": r.get("puppet_guard"),
     }

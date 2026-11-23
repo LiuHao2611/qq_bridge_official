@@ -37,7 +37,22 @@ _CANDIDATES: dict[str, tuple[str, ...]] = {
     "light": ("msyhl.ttc", "msyh.ttc", "simsun.ttc"),
 }
 # 兜底：系统里任意能用的字体（由 Pillow 自己找），一般是无中文能力的默认字体
-_ROLES = ("regular", "bold", "light")
+_ROLES = ("regular", "bold", "light", "kai")
+
+#: 已告警过的角色，避免每渲染一张卡就刷一条日志
+_WARNED: set[str] = set()
+
+
+def _warn_once(tag: str, msg: str) -> None:
+    if tag in _WARNED:
+        return
+    _WARNED.add(tag)
+    try:
+        from nonebot import logger
+        logger.warning("[pic.fonts] " + msg)
+    except Exception:  # noqa: BLE001  非 bot 环境（脚本/测试）不炸
+        import logging
+        logging.getLogger("pic.fonts").warning(msg)
 
 _WARNED: set[str] = set()
 _CACHE: dict[tuple[str, int], FreeTypeFont] = {}
@@ -82,6 +97,14 @@ def _bold_face_index(path: str) -> int:
 _BUNDLED_BOLD = (_ROOT_DIR / "src" / "plugins" / "qq_bridge" / "pic" /
                  "templates" / "assets" / "doupo_fonts" / "doupo_bold.ttf")
 
+#: 项目内置楷体子集（2026-11-22）：系统 simkai.ttf 子集化（GB2312 全集 + 全仓库
+#: 斗破文案字符，7445 字 / 2.4MB），随源码进 git 与镜像。
+#: 用途：斗破卡「游戏牌匾字」——中国风玄幻的游戏标题普遍是粗楷/隶书，
+#: 黑体做标题没有游戏感。手机 pmOS 无系统字体，必须随代码走同一字形。
+#: 汉字零缺字（缺的只有 emoji，本来就该由 emoji_safe 过滤）。
+_BUNDLED_KAI = (_ROOT_DIR / "src" / "plugins" / "qq_bridge" / "pic" /
+                "templates" / "assets" / "doupo_fonts" / "doupo_kai.ttf")
+
 
 def font_path(role: str = "regular") -> str | None:
     """返回该字重第一个存在的字体文件路径；全部缺失返回 None。
@@ -90,6 +113,14 @@ def font_path(role: str = "regular") -> str | None:
     """
     if role == "bold" and _BUNDLED_BOLD.is_file():
         return str(_BUNDLED_BOLD)
+    if role == "kai":
+        if _BUNDLED_KAI.is_file():
+            return str(_BUNDLED_KAI)
+        # 缺文件时不静默：牌匾字会退回等线 Bold（卡片不崩，但没有楷体味）。
+        # 生成方式见 tools/make_doupo_kai.py（2.44MB，不进 git，本机/生产机各放一份）。
+        _warn_once("kai", "缺少 doupo_kai.ttf，斗破牌匾标题将回退等线 Bold；"
+                          "运行 tools/make_doupo_kai.py 生成后拷到 "
+                          "src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/")
     for name in _CANDIDATES.get(role, _CANDIDATES["regular"]):
         for d in (_CUSTOM_DIR, _VENDOR_DIR, _SYSTEM_DIR):
             p = d / name

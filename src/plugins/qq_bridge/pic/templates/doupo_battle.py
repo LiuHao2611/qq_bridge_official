@@ -33,14 +33,18 @@ card-design 合规：
 """
 from __future__ import annotations
 
+from PIL import Image, ImageDraw
+
 from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
-from .doupo import _card_alpha, _fit, _pal, _w
+from . import doupo_ui as UI
+from .doupo import _fit, _pal, _w
 from . import doupo_style as S
 
-PAD = 28
+PAD = UI.PAD_X        # 内容左右内边距 36（外框画在 10、内线 17 → 距框线 19px）
+PAD_B = UI.PAD_B      # 底部 54（底部两角只有短 L 线，36 收尾会贴框）
 FS_TITLE = 30
 FS_GROUP = S.FS_BODY      # 20 区块标题
 FS_BODY = S.FS_SUB        # 17 正文
@@ -50,6 +54,8 @@ ITEM_GAP = 6
 GROUP_GAP = 16
 BULLET_INDENT = 6
 ICON_STYLE = "line"
+TIP_GAP = 18              # 最后一块到回纹横带
+TIP_LEAD = 14             # 横带到 tip 文字
 
 # ---- 结算界面版式的尺寸（改这里必须同时改 _draw_*，两边共用同一批常量）----
 H_VERDICT = 58            # 胜负徽标高度
@@ -205,20 +211,24 @@ def _wrap_no_orphan(s: str, max_w: int, min_last: int = 6) -> list[str]:
 
 # ---------------------------------------------------------------- 配色
 def _tone_color(p: dict, tone: str) -> str:
-    """阵营配色：我方暖（朱红）/ 敌方冷（斗气蓝）/ 丹药药青 / 无伤害事件灰。"""
+    """阵营配色：我方金 / 敌方青 / 丹药药青 / 无伤害事件灰。
+
+    2026-11-22 换深色底后重定：旧的 ``p["title_color"]`` 仍是金，但敌方的
+    ``mp_to``（#0C9FB0）在深蓝紫底上几乎看不出，改用亮青 ``cyan``。
+    """
     if tone == "mine":
-        return p["title_color"]
-    if tone in ("foe", "mp"):   # 斗气条与敌方同属冷色系（蓝），语义一致
-        return p["mp_to"]
+        return p["gold"]
+    if tone in ("foe", "mp"):   # 斗气条与敌方同属冷色系（青），语义一致
+        return p["cyan"]
     if tone == "pill":
-        return p["pill_text"]
+        return p["green"]
     if tone == "dim":
-        return p["dim_color"]
-    return p["accent_color"]
+        return p["dim"]
+    return p["gold_hi"]
 
 
 def _resource_grad(p: dict, tone: str) -> tuple[str, str]:
-    """资源条渐变：气血红、斗气蓝。敌我气血同色，靠左侧标签区分（不靠颜色猜）。"""
+    """资源条渐变：气血红、斗气青。敌我气血同色，靠左侧标签区分（不靠颜色猜）。"""
     if tone == "mp":
         return p["mp_from"], p["mp_to"]
     return p["hp_from"], p["hp_to"]
@@ -311,8 +321,10 @@ PAGE_MAX_H = 2600
 #: 发送；超出上限时把剩余回合并入末页 —— 宁可末页高，绝不丢回合。
 MAX_PAGES = 5
 
-#: 卡片上下固定开销（标题行 + 分隔线 + 底部提示行 + 内边距），与 build() 同式。
-CHROME_H = PAD + FS_TITLE + 8 + 1 + 18 + 12 + FS_BODY + PAD
+#: 卡片上下固定开销（牌匾标题区 + 底部回纹横带 + 提示行 + 内边距），与 build() 同式。
+#: 2026-11-22 游戏风化：标题区由「30px 小标题 + 分隔线」升级为 doupo_ui 牌匾
+#: （UI.TITLE_H=112），底部改成「回纹横带 + 提示」，故整式重算。
+CHROME_H = UI.TITLE_H + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B
 #: 页副标题行高（多页时才有）。
 SUB_H = FS_BODY + 8
 #: 续页固定内容只有「胜负徽标 + 逐招明细标题」——玩家翻页仍知道打的是谁、什么结果。
@@ -517,49 +529,59 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
 # ---------------------------------------------------------------- 各区块绘制
 def _draw_intro(c: Canvas, payload: dict, x0: int, y: int, content_w: int,
                 p: dict, rec) -> None:
-    """原著 BOSS 登场引言：左侧强调色竖条 + 「登场」头 + 引文（2026-11-20）。"""
+    """原著 BOSS 登场引言：面板 + 玫红竖条 + 金色「登场」头 + 引文（2026-11-20）。"""
     head = str(payload.get("head") or "")
     lines = list(payload.get("lines") or [])
-    c.text((x0, y + FS_BODY // 2), head, size=FS_BODY, color=p["accent_color"],
-           role="regular", anchor="lm")
-    rec("intro_head", head, x0, y, FS_BODY)
+    total_h = FS_BODY + len(lines) * INTRO_ROW
+    UI.panel(c, p, (x0, y, x0 + content_w, y + total_h), state="locked",
+             radius=12, watermark=False, outline=p["fret_dk"])
+    d = UI.img_of(c)
+    ImageDraw.Draw(d).line((x0 + 14, y + 8, x0 + 14, y + total_h - 8),
+                           fill=UI.rgb(p["fret"]) + (255,), width=3)
+    UI.kai_text(c, (x0 + 26, y + FS_BODY // 2), head, FS_BODY, p["fret_hi"], anchor="lm")
+    rec("intro_head", head, x0 + 26, y + FS_BODY // 2, FS_BODY)
     yy = y + FS_BODY
-    # 竖条强调引文，长度随实际行数
-    bar_h = len(lines) * INTRO_ROW
-    if bar_h > 0:
-        c.rounded_rect((x0 + 1, yy + 3, x0 + 4, yy + bar_h - 3), radius=2,
-                       fill=p["accent_color"])
     for i, line in enumerate(lines):
         ly = yy + i * INTRO_ROW + INTRO_ROW // 2
-        c.text((x0 + 12, ly), line, size=FS_BODY, color=p["text_color"],
+        c.text((x0 + 26, ly), line, size=FS_BODY, color=p["text"],
                role="regular", anchor="lm")
-        rec("intro_%d" % i, line, x0 + 12, ly - INTRO_ROW // 2, FS_BODY)
+        rec("intro_%d" % i, line, x0 + 26, ly - INTRO_ROW // 2, FS_BODY)
 
 
 def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
                   p: dict, rec) -> None:
+    """胜负徽标：胜=金红渐变匾 / 败=青灰渐变匾，右侧写战斗类型、对手与收场原因。"""
     win = bool(v.get("win"))
     cw, ch = 104, H_VERDICT
-    c1, c2 = _tone_grad(p, "mine" if win else "foe")
+    c1, c2 = ((p["bar_from"], p["gold_dk"]) if win
+              else ("#4A5588", "#232A4C"))
     c.gradient_rect((x0, y, x0 + cw, y + ch), c1, c2, radius=14)
+    c.rounded_rect((x0, y, x0 + cw, y + ch), radius=14,
+                   outline=p["fret"] if win else p["panel_ln"], width=2)
+    c.rounded_rect((x0 + 5, y + 5, x0 + cw - 5, y + ch - 5), radius=10,
+                   outline=p["gold_hi"] if win else "#6C7CB8", width=1)
     label = "胜" if win else "败"
-    c.text((x0 + cw // 2, y + ch // 2), label, size=FS_TITLE, color=_WHITE,
-           role="bold", bold=True, anchor="mm")
-    rec("verdict", label, x0 + cw // 2 - FS_TITLE // 2, y + ch // 2, FS_TITLE, role="bold")
+    if win:
+        UI.grad_text(c, (x0 + cw / 2, y + ch / 2), label, 34, "#FFFFFF", "#FFE08A",
+                     sw=3, stroke="#7A2A10", fake_bold=1)
+    else:
+        UI.kai_text(c, (x0 + cw / 2, y + ch / 2), label, 34, "#D6E0FF",
+                    anchor="mm", fake_bold=1, sw=3, stroke="#151A33")
+    rec("verdict", label, x0 + cw // 2 - 17, y + ch // 2, 34, role="bold")
 
-    tx = x0 + cw + 18
+    tx = x0 + cw + 20
     max_w = x0 + content_w - tx
     head = "%s · %d 回合" % (_gs(v.get("kind"), "战斗"), _gi(v.get("rounds")))
     head = _fit(head, max_w, S.FS_KEY, "bold")
-    c.text((tx, y + 18), head, size=S.FS_KEY, color=p["text_color"],
+    c.text((tx, y + 16), head, size=S.FS_KEY, color=p["text"],
            role="bold", bold=True, anchor="lm")
-    rec("vhead", head, tx, y + 18, S.FS_KEY, role="bold")
+    rec("vhead", head, tx, y + 16, S.FS_KEY, role="bold")
 
     sub = "对手 " + _gs(v.get("opponent"), "未知对手")
     sub = _fit(sub, max_w, FS_BODY, "regular")
-    c.text((tx, y + 44), sub, size=FS_BODY, color=p["dim_color"],
+    c.text((tx, y + 43), sub, size=FS_BODY, color=p["dim"],
            role="regular", anchor="lm")
-    rec("vsub", sub, tx, y + 44, FS_BODY)
+    rec("vsub", sub, tx, y + 43, FS_BODY)
     if v.get("exhausted") or v.get("end_text"):
         # 收场原因必须写在徽标旁：「气血耗尽」「力竭判负」「击杀对手」。
         # 力竭熔断（300 回合脏数据）不许冒充正常取胜，也走这一行。
@@ -567,11 +589,11 @@ def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
         ex_w = _w(ex, FS_BODY, "regular")
         sx = x0 + content_w - ex_w
         if sx > tx + _w(sub, FS_BODY, "regular") + 10:
-            # 败因用冷色（同敌方），胜因用暗金：颜色本身也在讲结果
-            c.text((sx, y + 44), ex, size=FS_BODY,
-                   color=(p["mp_to"] if not win else p["accent_color"]),
+            # 败因用青色（同敌方），胜因用金色：颜色本身也在讲结果
+            c.text((sx, y + 43), ex, size=FS_BODY,
+                   color=(p["cyan"] if not win else p["gold"]),
                    role="regular", anchor="lm")
-            rec("vex", ex, sx, y + 44, FS_BODY)
+            rec("vex", ex, sx, y + 43, FS_BODY)
 
 
 def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
@@ -586,8 +608,7 @@ def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
         ry = y + i * END_ROW
         tone = _gs(r.get("tone"), "mine")
         lab = _fit(_gs(r.get("label"), "—"), END_LABEL_W - 10, FS_BODY, "regular")
-        c.text((x0, ry + 12), lab, size=FS_BODY, color=p["dim_color"],
-               role="regular", anchor="lm")
+        UI.kai_text(c, (x0, ry + 12), lab, FS_BODY, p["dim"], anchor="lm")
         rec("n%d_l" % i, lab, x0, ry + 12, FS_BODY)
 
         val = _gi(r.get("value"))
@@ -600,21 +621,16 @@ def _draw_end(c: Canvas, rows: list, x0: int, y: int, content_w: int,
         bar_x1 = x0 + content_w - max(END_VAL_W, txt_w + 8)
         track_w = max(60, bar_x1 - bar_x0)
         if mx > 0:
-            c.rounded_rect((bar_x0, ry + 6, bar_x0 + track_w, ry + 18), radius=6,
-                           fill=p["track_color"])
             ratio = max(0.0, min(1.0, val / float(mx)))
-            fw = int(track_w * ratio)
-            if val > 0:
-                fw = max(6, fw)   # 还有血就得看得见，别缩成一根头发
-            if fw > 0:
-                g1, g2 = _resource_grad(p, tone)
-                c.gradient_rect((bar_x0, ry + 6, bar_x0 + fw, ry + 18),
-                                g1, g2, radius=6)
+            kind = "mp" if tone == "mp" else "hp"
+            # 有血/有气就必须看得见，别缩成一根头发（UI.bar 内部已按 fw>1 才画）。
+            UI.bar(c, p, (bar_x0, ry + 6, bar_x0 + track_w, ry + 18), ratio, kind=kind)
+            fw = int((track_w - 2) * ratio)
             # 条宽写进盒名（n{i}_bar{px}）：几何自检只认矩形，认不出「0 血却画满条」，
             # 门禁靠这个名字断言「归零的空条真的是空条」。
             rec("n%d_bar%d" % (i, fw), "", bar_x0, ry + 6, 12, anchor="la")
         c.text((x0 + content_w, ry + 12), txt, size=FS_BODY,
-               color=p["text_color"], role="regular", anchor="rm")
+               color=p["text"], role="regular", anchor="rm")
         rec("n%d_v" % i, txt, x0 + content_w - txt_w, ry + 12, FS_BODY)
 
 
@@ -625,17 +641,17 @@ def _draw_kpi(c: Canvas, kpis: list, x0: int, y: int, content_w: int,
     cell_w = (content_w - gap * (n - 1)) // max(1, n)
     for i, k in enumerate(kpis):
         cx = x0 + i * (cell_w + gap)
-        c.rounded_rect((cx, y, cx + cell_w, y + KPI_H - 4), radius=12,
-                       fill=p["cell_bg"], outline=p["cell_line"], width=1)
-        lab = _fit(_gs(k.get("label"), "—"), cell_w - 24, S.FS_LABEL, "regular")
-        c.text((cx + 14, y + 22), lab, size=S.FS_LABEL, color=p["dim_color"],
+        UI.panel(c, p, (cx, y, cx + cell_w, y + KPI_H - 4), state="done",
+                 radius=12, watermark=False)
+        lab = _fit(_gs(k.get("label"), "—"), cell_w - 28, S.FS_LABEL, "regular")
+        c.text((cx + 16, y + 22), lab, size=S.FS_LABEL, color=p["dim"],
                role="regular", anchor="lm")
-        rec("k%d_l" % i, lab, cx + 14, y + 22, S.FS_LABEL)
-        val = _fit(_gs(k.get("value"), "0"), cell_w - 24, FS_TITLE, "bold")
-        c.text((cx + 14, y + 48), val, size=FS_TITLE,
+        rec("k%d_l" % i, lab, cx + 16, y + 22, S.FS_LABEL)
+        val = _fit(_gs(k.get("value"), "0"), cell_w - 28, FS_TITLE, "bold")
+        c.text((cx + 16, y + 48), val, size=FS_TITLE,
                color=_tone_color(p, _gs(k.get("tone"), "plain")),
                role="bold", bold=True, anchor="lm")
-        rec("k%d_v" % i, val, cx + 14, y + 48, FS_TITLE, role="bold")
+        rec("k%d_v" % i, val, cx + 16, y + 48, FS_TITLE, role="bold")
 
 
 def _draw_bars(c: Canvas, bars: list, x0: int, y: int, content_w: int,
@@ -649,22 +665,17 @@ def _draw_bars(c: Canvas, bars: list, x0: int, y: int, content_w: int,
         ry = y + i * BAR_ROW
         tone = _gs(b.get("tone"), "mine")
         lab = _fit(_gs(b.get("label"), "—"), lab_w - 8, FS_BODY, "regular")
-        c.text((x0, ry + 16), lab, size=FS_BODY, color=p["dim_color"],
+        c.text((x0, ry + 16), lab, size=FS_BODY, color=p["dim"],
                role="regular", anchor="lm")
         rec("b%d_l" % i, lab, x0, ry + 16, FS_BODY)
 
         ratio = float(b.get("ratio") or 0.0)
         ratio = 0.0 if ratio < 0 else (1.0 if ratio > 1 else ratio)
-        c.rounded_rect((bar_x0, ry + 8, bar_x0 + track_w, ry + 8 + 14), radius=7,
-                       fill=p["track_color"])
-        fw = int(track_w * ratio)
-        if _gi(b.get("value")) > 0:
-            fw = max(6, fw)   # 有输出就至少留 6px，别看起来像 0
-        if fw > 0:
-            c1, c2 = _tone_grad(p, tone)
-            c.gradient_rect((bar_x0, ry + 8, bar_x0 + fw, ry + 8 + 14),
-                            c1, c2, radius=7)
-        rec("b%d_bar" % i, "", bar_x0, ry + 8, 14, anchor="la")
+        # 敌方条用青色（mp 渐变）：UI.bar 没有 "foe" 这一档，写 foe 会静默落回
+        # xp（玫红→金），敌方输出条就和我方同色了 —— 2026-11-22 实拍抓到。
+        UI.bar(c, p, (bar_x0, ry + 9, bar_x0 + track_w, ry + 23), ratio,
+               kind="mp" if tone == "foe" else "xp")
+        rec("b%d_bar" % i, "", bar_x0, ry + 9, 14, anchor="la")
 
         val = "%s · %d%%" % (_gs(b.get("text"), _gs(b.get("value"), "0")),
                              _gi(b.get("share")))
@@ -681,25 +692,25 @@ def _draw_beats(c: Canvas, beats: list, x0: int, y: int, content_w: int,
         ry = y + i * BEAT_H
         if i < last:
             c.line((rail_x, ry + 15, rail_x, ry + BEAT_H + 15),
-                   fill=p["line_color"], width=1)
+                   fill=p["panel_ln"], width=1)
         tone = _gs(b.get("tone"), "mine")
-        c.ellipse((rail_x - 3, ry + 12, rail_x + 3, ry + 18),
-                  fill=_tone_color(p, tone))
+        col = _tone_color(p, tone)
+        c.ellipse((rail_x - 3, ry + 12, rail_x + 3, ry + 18), fill=col)
         chip = "回%d %s" % (_gi(b.get("round")), _gs(b.get("tag"), "—"))
-        chip_w = _w(chip, CHIP_MAX_FS, "regular") + 16
+        chip_w = _w(chip, CHIP_MAX_FS, "regular") + 18
         cx = x0 + 18
-        c.rounded_rect((cx, ry + 6, cx + chip_w, ry + 26), radius=8,
-                       fill=p["chip_bg"], outline=p["chip_line"], width=1)
-        c.text((cx + 8, ry + 16), chip, size=CHIP_MAX_FS, color=p["chip_text"],
+        c.rounded_rect((cx, ry + 5, cx + chip_w, ry + 27), radius=9,
+                       fill="#1C1830", outline=col, width=1)
+        c.text((cx + 9, ry + 16), chip, size=CHIP_MAX_FS, color=col,
                role="regular", anchor="lm")
-        rec("e%d_c" % i, chip, cx + 8, ry + 16, CHIP_MAX_FS)
+        rec("e%d_c" % i, chip, cx + 9, ry + 16, CHIP_MAX_FS)
 
         tx = cx + chip_w + 12
         room = x0 + content_w - tx
         if room < 30:
             continue
         txt = _fit(_gs(b.get("text"), ""), room, FS_BODY, "regular")
-        c.text((tx, ry + 16), txt, size=FS_BODY, color=p["text_color"],
+        c.text((tx, ry + 16), txt, size=FS_BODY, color=p["text"],
                role="regular", anchor="lm")
         rec("e%d_t" % i, txt, tx, ry + 16, FS_BODY)
 
@@ -713,7 +724,7 @@ def _draw_fact(c: Canvas, rows: list, x0: int, y: int, content_w: int,
         for li, line in enumerate(lines):
             cy = yy + li * LINE_H + LINE_H // 2
             c.text((x0 + BULLET_INDENT, cy), line, size=FS_BODY,
-                   color=p["dim_color"], role="regular", anchor="lm")
+                   color=p["dim"], role="regular", anchor="lm")
             rec("f%d_%d" % (ri, li), line, x0 + BULLET_INDENT, cy, FS_BODY)
         yy += LINE_H * len(lines) + ITEM_GAP
 
@@ -725,12 +736,12 @@ def _draw_acts(c: Canvas, acts: list, x0: int, y: int, content_w: int,
         if i % 2 == 1:
             # 隔行浅底：长列表靠底色横扫，比加分割线干净（DNF/WoW 战报同款）
             c.rounded_rect((x0, ry, x0 + content_w, ry + ACT_H - 4), radius=8,
-                           fill=p["cell_bg"])
+                           fill=p["panel"])
         left = "%02d｜回合%d %s %s" % (_gi(a.get("idx")), _gi(a.get("round")),
                                      _gs(a.get("side"), "我方"),
                                      _gs(a.get("move"), "出手"))
         left = _fit(left, int(content_w * 0.54), FS_BODY, "regular")
-        c.text((x0 + 8, ry + 12), left, size=FS_BODY, color=p["text_color"],
+        c.text((x0 + 8, ry + 12), left, size=FS_BODY, color=p["text"],
                role="regular", anchor="lm")
         rec("a%d_l" % i, left, x0 + 8, ry + 12, FS_BODY)
 
@@ -750,49 +761,51 @@ def _draw_acts(c: Canvas, acts: list, x0: int, y: int, content_w: int,
         if room < 40:
             continue
         tags = _fit(tags, room, S.FS_LABEL, "regular")
-        c.text((tx, ry + 13), tags, size=S.FS_LABEL, color=p["dim_color"],
+        c.text((tx, ry + 13), tags, size=S.FS_LABEL, color=p["dim"],
                role="regular", anchor="lm")
         rec("a%d_t" % i, tags, tx, ry + 13, S.FS_LABEL)
 
 
 def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                  content_w: int, p: dict, rec) -> None:
-    """一回合一个气泡：顶部回合号，内部左右两列分别是「我方 / 敌方」的行为。"""
+    """一回合一个气泡：顶部回合号，内部左右两列分别是「我方 / 敌方」的行为。
+
+    2026-11-22 游戏风：气泡换成 :func:`doupo_ui.panel`（面板内带祥云水印），
+    回合号改楷体金色，抬头分隔线改暗紫细线。
+    """
     for ri, b in enumerate(plan):
         by = y + sum(x["h"] for x in plan[:ri]) + BUBBLE_GAP * ri
         bh = b["h"]
-        c.rounded_rect((x0, by, x0 + content_w, by + bh), radius=12,
-                       fill=p["cell_bg"], outline=p["cell_line"], width=1)
+        UI.panel(c, p, (x0, by, x0 + content_w, by + bh), state="done", radius=13)
 
         head_txt = "回合 %d" % b["round"]
-        hx = x0 + BUBBLE_PAD
+        hx = x0 + BUBBLE_PAD + 2
         hy = by + BUBBLE_PAD + FS_GROUP // 2
-        c.text((hx, hy), head_txt, size=FS_GROUP, color=p["accent_color"],
-               role="regular", anchor="lm")
+        UI.kai_text(c, (hx, hy), head_txt, FS_GROUP, p["gold"], anchor="lm")
         rec("r%d_h" % ri, head_txt, hx, hy, FS_GROUP)
-        line_x = hx + _w(head_txt, FS_GROUP, "regular") + 10
+        line_x = hx + _w(head_txt, FS_GROUP, "regular") + 12
         line_r = x0 + content_w - BUBBLE_PAD
         # 回合战损摘要放抬头右侧：本回合挨了多少、打掉对方多少（零额外高度）
         if b["sum_text"]:
             s = _fit(b["sum_text"], line_r - line_x - 12, S.FS_LABEL, "regular")
-            c.text((line_r, hy), s, size=S.FS_LABEL, color=p["dim_color"],
+            c.text((line_r, hy), s, size=S.FS_LABEL, color=p["dim"],
                    role="regular", anchor="rm")
             rec("r%d_sum" % ri, s, line_r - _w(s, S.FS_LABEL), hy, S.FS_LABEL)
             line_r -= _w(s, S.FS_LABEL) + 12
         if line_x < line_r - 8:
-            c.line((line_x, hy, line_r, hy), fill=p["line_color"], width=1)
+            c.line((line_x, hy, line_r, hy), fill=p["panel_ln"], width=1)
 
         col_w = b["col_w"]
         col_x = {
-            "mine": x0 + BUBBLE_PAD,
-            "foe": x0 + BUBBLE_PAD + col_w + BUBBLE_COL_GAP,
+            "mine": x0 + BUBBLE_PAD + 2,
+            "foe": x0 + BUBBLE_PAD + 2 + col_w + BUBBLE_COL_GAP,
         }
         side_y = by + BUBBLE_PAD + BUBBLE_HEADER_H + S.FS_LABEL // 2
         for key, label, tone in (("mine", "我方", "mine"), ("foe", "敌方", "foe")):
             cx = col_x[key]
             c.text((cx, side_y), label, size=S.FS_LABEL,
-                   color=_tone_color(p, tone), role="regular", anchor="lm")
-            rec("r%d_%s_s" % (ri, key), label, cx, side_y, S.FS_LABEL)
+                   color=_tone_color(p, tone), role="bold", bold=True, anchor="lm")
+            rec("r%d_%s_s" % (ri, key), label, cx, side_y, S.FS_LABEL, role="bold")
 
         body_y = by + BUBBLE_PAD + BUBBLE_HEADER_H + BUBBLE_SIDE_H
         for key in ("mine", "foe"):
@@ -804,11 +817,11 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                 if e.get("placeholder"):
                     # 空列占位只画淡色提示，不画数值盒（否则污染右锚定自检）
                     c.text((cx, cy), e["move"], size=S.FS_LABEL,
-                           color=p["dim_color"], role="regular", anchor="lm")
+                           color=p["weak"], role="regular", anchor="lm")
                     rec("r%d_%s%d_ph" % (ri, key, ei), e["move"], cx, cy, S.FS_LABEL)
                     ey += e["h"]
                     continue
-                c.text((cx, cy), e["move"], size=FS_BODY, color=p["text_color"],
+                c.text((cx, cy), e["move"], size=FS_BODY, color=p["text"],
                        role="regular", anchor="lm")
                 rec("r%d_%s%d_m" % (ri, key, ei), e["move"], cx, cy, FS_BODY)
                 vw = _w(e["value"], FS_NUM, "bold")
@@ -822,14 +835,14 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
                 ny = ey + LINE_H
                 for li, ln in enumerate(e.get("comp") or []):
                     c.text((cx, ny + BUBBLE_COMP_H // 2), ln, size=S.FS_LABEL,
-                           color=p["dim_color"], role="regular", anchor="lm")
+                           color=p["dim"], role="regular", anchor="lm")
                     rec("r%d_%s%d_c%d" % (ri, key, ei, li), ln, cx,
                         ny + BUBBLE_COMP_H // 2, S.FS_LABEL)
                     ny += BUBBLE_COMP_H
                 for ti, tag in enumerate(e["tags"] or []):
                     ty = ny + BUBBLE_TAG_H * ti + BUBBLE_TAG_H // 2
                     c.text((cx, ty), tag, size=S.FS_LABEL,
-                           color=p["dim_color"], role="regular", anchor="lm")
+                           color=p["dim"], role="regular", anchor="lm")
                     rec("r%d_%s%d_t%d" % (ri, key, ei, ti), tag, cx, ty, S.FS_LABEL)
                 ey += e["h"]
 
@@ -837,9 +850,9 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
         if b["foot_l"] or b["foot_r"]:
             fy = by + bh - BUBBLE_PAD - BUBBLE_FOOT_H // 2
             if b["foot_l"]:
-                c.text((x0 + BUBBLE_PAD, fy), b["foot_l"], size=S.FS_LABEL,
-                       color=p["dim_color"], role="regular", anchor="lm")
-                rec("r%d_fl" % ri, b["foot_l"], x0 + BUBBLE_PAD, fy, S.FS_LABEL)
+                c.text((x0 + BUBBLE_PAD + 2, fy), b["foot_l"], size=S.FS_LABEL,
+                       color=p["dim"], role="regular", anchor="lm")
+                rec("r%d_fl" % ri, b["foot_l"], x0 + BUBBLE_PAD + 2, fy, S.FS_LABEL)
             if b["foot_r"]:
                 c.text((x0 + content_w - BUBBLE_PAD, fy), b["foot_r"],
                        size=S.FS_LABEL, color=_tone_color(p, "foe"),
@@ -851,6 +864,36 @@ def _draw_rounds(c: Canvas, plan: list[dict], x0: int, y: int,
 
 def _sword_glyph(c: Canvas, cx: int, cy: int, color: str) -> None:
     icons.draw(c, "sword", cx, cy, 16, color, style=ICON_STYLE)
+
+
+def _draw_cap(c: Canvas, p: dict, label: str, x0: int, cy: float,
+              content_w: int, rec, box_label: str = "cap") -> None:
+    """区块标题（游戏风）：金菱钉 + 楷体金字 + 右侧向外淡出的金色饰线。
+
+    比旧版「竖条 + 强调色字」更像游戏面板分组头；高度不变，分页公式不受影响。
+    """
+    d = ImageDraw.Draw(UI.img_of(c))
+    dx = x0 + 6
+    d.polygon([(dx, cy - 7), (dx + 7, cy), (dx, cy + 7), (dx - 7, cy)],
+              fill=UI.rgb(p["fret"]) + (255,))
+    d.polygon([(dx, cy - 3), (dx + 3, cy), (dx, cy + 3), (dx - 3, cy)],
+              fill=UI.rgb(p["gold_hi"]) + (255,))
+    tx = x0 + 20
+    UI.kai_text(c, (tx, cy), label, FS_GROUP, p["gold_hi"], anchor="lm")
+    rec(box_label, label, tx, cy, FS_GROUP)
+    # 向右淡出的金饰线
+    lx = tx + _w(label, FS_GROUP, "regular") + 14
+    rx = x0 + content_w
+    if rx - lx > 40:
+        n = int(rx - lx)
+        amb = Image.new("RGBA", (n, 3), (0, 0, 0, 0))
+        ad = ImageDraw.Draw(amb)
+        gold = UI.rgb(p["gold_dk"])
+        for i in range(n):
+            a = int(150 * (1 - i / float(n)) ** 1.4)
+            if a:
+                ad.point((i, 1), fill=gold + (a,))
+        UI.img_of(c).alpha_composite(amb, (int(lx), int(cy) - 1))
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -865,16 +908,11 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     blocks, blocks_h = _layout(data, content_w)
     boxes = kw.pop("boxes", None)
 
-    # 副标题是可选增量（doupo_ruin 复用本骨架时显示「今日进度」）；
-    # 不传 subtitle 时 sub_h=0。
+    # 副标题是可选增量（分页续页显示「第 2/3 页 · 回合 9-16」）；不传时 sub_h=0。
     sub_h = FS_BODY + 8 if str(data.get("subtitle") or "") else 0
-    h = PAD + FS_TITLE + 8 + 1 + 18 + sub_h + blocks_h + 12 + FS_BODY + PAD
-    h = max(360, h)
+    h = max(400, CHROME_H + sub_h + blocks_h)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label, txt, x, y, size, anchor="lm", role="regular"):
         if boxes is None:
@@ -891,25 +929,13 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         boxes.append((label,) + bb)
 
     x0 = PAD
-    y = PAD
+    # ---- 牌匾标题区（整卡外壳：底色 + 云纹 + 回纹外框 + 牌匾）----
+    y = UI.card_shell(c, p, str(data.get("title") or "战斗回看"), width=width)
 
-    # ---- 标题 ----
-    title = str(data.get("title") or "战斗回看")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = 16 + 12
-    tx = x0 + (content_w - tw - ico_w) // 2
-    _sword_glyph(c, tx + 8, y + FS_TITLE // 2, p["title_color"])
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE)
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
-
-    # ---- 可选副标题 ----
+    # ---- 可选副标题（分页续页用，居中细字 + 两侧金饰线）----
     if sub_h:
         s = _fit(str(data.get("subtitle") or ""), content_w, FS_BODY, "regular")
-        c.text((x0, y + FS_BODY // 2), s, size=FS_BODY, color=p["dim_color"],
+        c.text((x0, y + FS_BODY // 2), s, size=FS_BODY, color=p["dim"],
                role="regular", anchor="lm")
         rec("subtitle", s, x0, y + FS_BODY // 2, FS_BODY)
         y += sub_h
@@ -936,38 +962,29 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             _draw_rounds(c, payload, x0, y, content_w, p, rec)
         elif kind == "cap":
             cy = y + CAP_BEFORE + FS_GROUP // 2
-            c.rounded_rect((x0 + 1, cy - FS_GROUP // 2 + 3, x0 + 5,
-                            cy - FS_GROUP // 2 + FS_GROUP - 3), radius=2,
-                           fill=p["accent_color"])
-            c.text((x0 + 14, cy), payload, size=FS_GROUP,
-                   color=p["accent_color"], role="regular", anchor="lm")
-            rec("g%d" % bi, payload, x0 + 14, cy, FS_GROUP)
+            _draw_cap(c, p, payload, x0, cy, content_w, rec, "g%d" % bi)
         elif kind == "group":       # 旧骨架：分组标题（无底部间距差异）
-            c.rounded_rect((x0 + 1, y + 3, x0 + 5, y + FS_GROUP - 3), radius=2,
-                           fill=p["accent_color"])
-            c.text((x0 + 14, y + FS_GROUP // 2), payload, size=FS_GROUP,
-                   color=p["accent_color"], role="regular", anchor="lm")
-            rec("g%d" % bi, payload, x0 + 14, y + FS_GROUP // 2, FS_GROUP)
+            cy = y + FS_GROUP // 2
+            _draw_cap(c, p, payload, x0, cy, content_w, rec, "g%d" % bi)
         elif kind == "item":
             for li, line in enumerate(payload):
                 cy = y + li * LINE_H + LINE_H // 2
-                color = p["text_color"] if li == 0 else p["dim_color"]
+                color = p["text"] if li == 0 else p["dim"]
                 c.text((x0 + BULLET_INDENT, cy), line, size=FS_BODY,
                        color=color, role="regular", anchor="lm")
                 rec("i%d_%d" % (bi, li), line, x0 + BULLET_INDENT, cy, FS_BODY)
         y += bh
 
-    # ---- 底部提示 ----
-    c.line((x0, y + 4, x0 + content_w, y + 4), fill=p["line_color"], width=1)
-    y += 12
+    # ---- 底部：回纹横带 + 提示 ----
+    y += TIP_GAP
+    UI.divider(c, p, y, x0 + 6, x0 + content_w - 6, style="band")
+    y += TIP_LEAD
     tip = str(data.get("tip") or "发「战斗评价」听一句毒舌 · 只保留最后一场战斗")
-    s = _fit(tip, content_w, FS_BODY, "regular")
-    icons.draw(c, "bolt", x0 + 8, y + FS_BODY // 2, 14, p["accent_color"], style=ICON_STYLE)
-    c.text((x0 + 26, y + FS_BODY // 2), s, size=FS_BODY, color=p["dim_color"],
+    s = _fit(tip, content_w - 24, FS_BODY, "regular")
+    c.text((x0 + 10, y + FS_BODY // 2), s, size=FS_BODY, color=p["dim"],
            role="regular", anchor="lm")
-    rec("tip", s, x0 + 26, y + FS_BODY // 2, FS_BODY)
+    rec("tip", s, x0 + 10, y + FS_BODY // 2, FS_BODY)
 
     if source:
-        c.text((width - PAD, h - PAD + 6), source, size=14,
-               color=p["dim_color"], anchor="rb")
+        c.text((width - PAD, h - 34), source, size=14, color=p["weak"], anchor="rb")
     return c

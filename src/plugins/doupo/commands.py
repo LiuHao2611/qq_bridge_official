@@ -17,6 +17,7 @@ from datetime import date
 
 from . import battle_comments as bc
 from . import battle_review as br
+from . import card_theme
 from . import config as cfg
 from . import core
 from . import duel_challenge as dc
@@ -411,11 +412,62 @@ def menu_text() -> str:
             out.append(f"{cmd} —— {desc}")
     out.append("")
     out.append("⚠️ 与「修仙」重名的 商店/突破/任务/排行榜/炼丹 现在靠「当前游戏模式」分流，无需前缀。")
+    out.append("🎨 卡片主题：发「主题」查看、「主题 游戏 / 主题 浅色」切换（个人偏好即时生效）。")
     return "\n".join(out)
 
 
 def cmd_menu() -> str:
     return menu_text()
+
+
+# ---------------------------------------------------------------------------
+# 卡片主题切换（2026-11-23：游戏本体风 / 浅色现代风 双主题）
+# ---------------------------------------------------------------------------
+def cmd_theme(qq: str, arg: str = "") -> str:
+    """卡片主题：个人偏好（口令即时切）> 全局默认（配置/运维口令）。
+
+    用法：
+        主题                 查看当前主题与可选值
+        主题 游戏 / 主题 浅色   切自己的卡片主题（个人偏好，立即生效）
+        主题 跟随全局         清除个人偏好，回到全局默认
+        主题默认 游戏/浅色      (运维) 设全局默认；已有个人偏好不受影响
+    """
+    arg = (arg or "").strip()
+    if not arg:
+        st = card_theme.status(qq)
+        personal = card_theme.label(st["user"]) if st["user"] else "（未设置，跟随全局）"
+        return (
+            f"卡片主题 · 当前生效：{card_theme.label(st['effective'])}\n"
+            f"　个人偏好：{personal}\n"
+            f"　全局默认：{card_theme.label(st['default'])}\n"
+            f"切换：主题 游戏 / 主题 浅色 / 主题 跟随全局"
+        )
+    if arg == "跟随全局" or arg in ("取消", "重置", "默认"):
+        eff = card_theme.clear_user(qq)
+        return f"已清除个人主题偏好，跟随全局默认：{card_theme.label(eff)}"
+    style = card_theme.normalize(arg)
+    if style is None:
+        return ("没听懂的主题：%s。可选：主题 游戏 / 主题 浅色 / 主题 跟随全局"
+                % arg)
+    card_theme.set_user(qq, style)
+    st = card_theme.status(qq)
+    extra = ""
+    if st["user"] == "":
+        extra = "（与全局默认一致，未单独记录）"
+    return f"已切换卡片主题：{card_theme.label(style)}　下次出图立即生效。{extra}"
+
+
+def cmd_theme_default(arg: str = "") -> str:
+    """(运维) 查看/设置全局默认主题：主题默认 / 主题默认 浅色。"""
+    arg = (arg or "").strip()
+    if not arg:
+        return f"全局默认卡片主题：{card_theme.label(card_theme.resolve_default())}"
+    style = card_theme.normalize(arg)
+    if style is None:
+        return "没听懂的主题：%s。可选：主题默认 游戏 / 主题默认 浅色" % arg
+    card_theme.set_default(style)
+    return (f"全局默认卡片主题已设为：{card_theme.label(style)}　"
+            f"已设个人偏好的玩家不受影响。")
 
 
 #: 玩法细则的**唯一源**：(分组名, [该组各行])。纯文本兜底 cmd_help 与图片卡

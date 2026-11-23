@@ -27,15 +27,20 @@
 """
 from __future__ import annotations
 
+from PIL import ImageDraw
+
 from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
 # ---- 排版 token（4 的倍数，全卡统一；两列 720 宽，字号主动收小换列数）----
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 COL_GAP = 12
 FS_TITLE = 34
 FS_SUB = S.FS_SUB + 1          # 18
@@ -53,8 +58,9 @@ SUB_GAP = 14                   # 副标题到第一组
 GRADE_GAP = 16                 # 组间距
 GRADE_H = FS_GRADE + 12        # 分组标题行高
 BLOCK_GAP = 10                 # 组内丹药块间距（行间）
-BLOCK_PAD_X = 12               # 块左右内边距
-BLOCK_PAD_Y = 10               # 块上下内边距
+BLOCK_PAD_X = 16               # 块左右内边距（2026-11-22 12→16：单元格内
+                               # 文字离边框太近，用户点名「字和边框黏在一起」）
+BLOCK_PAD_Y = 12               # 块上下内边距
 BLOCK_RADIUS = 10
 NAME_MAT_GAP = 6               # 丹名行与材料行
 MAT_DESC_GAP = 5               # 材料行与功效行
@@ -150,7 +156,7 @@ def _plan(data: dict, width: int) -> dict:
     width = max(560, min(int(width), 900))
     content_w, col_w, inner_w, bx0, bx1 = _cols(width)
 
-    y = PAD + FS_TITLE + 8 + 1 + HEAD_GAP
+    y = UI.TITLE_H
     if data.get("subtitle"):
         y += FS_SUB + SUB_GAP
 
@@ -195,9 +201,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label, txt, x, y, size, role, anchor):
         if boxes is None:
@@ -217,22 +220,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
-    icon = str(data.get("icon") or "wand")
-    if not icons.exists(icon):
-        icon = "wand"
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "炼药")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = FS_TITLE + 10
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, icon, tx + FS_TITLE // 2, y + FS_TITLE // 2, FS_TITLE,
-               p["title_color"], style=ICON_STYLE)
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE, "light", "lm")
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += HEAD_GAP
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE, "kai", "mm")
 
     # ---- 副标题 ----
     sub = data.get("subtitle")
@@ -247,13 +238,15 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     for ent in L["entries"]:
         if ent["kind"] == "section":
             gy, grade = ent["y"], ent["grade"]
-            c.rounded_rect((x0 + 1, gy + 3, x0 + 5, gy + GRADE_H - 3), radius=2,
-                           fill=p["accent_color"])
-            c.text((x0 + 14, gy + GRADE_H // 2), grade, size=FS_GRADE,
-                   color=p["accent_color"], role="regular", anchor="lm")
-            rec("grade_%s" % grade, grade, x0 + 14, gy + GRADE_H // 2,
-                FS_GRADE, "regular", "lm")
-            lx = x0 + 14 + _w(grade, FS_GRADE, "regular") + 12
+            dd = ImageDraw.Draw(UI.img_of(c))
+            gy_c = gy + GRADE_H // 2
+            dd.polygon([(x0 + 6, gy_c - 7), (x0 + 13, gy_c), (x0 + 6, gy_c + 7),
+                        (x0 - 1, gy_c)], fill=UI.rgb(p["fret"]) + (255,))
+            dd.polygon([(x0 + 6, gy_c - 3), (x0 + 9, gy_c), (x0 + 6, gy_c + 3),
+                        (x0 + 3, gy_c)], fill=UI.rgb(p["gold_hi"]) + (255,))
+            UI.kai_text(c, (x0 + 20, gy_c), grade, FS_GRADE, p["gold_hi"], anchor="lm")
+            rec("grade_%s" % grade, grade, x0 + 20, gy_c, FS_GRADE, "kai", "lm")
+            lx = x0 + 20 + _w(grade, FS_GRADE, "kai") + 12
             if lx < x0 + content_w:
                 c.line((lx, gy + GRADE_H // 2, x0 + content_w, gy + GRADE_H // 2),
                        fill=p["line_color"], width=1)
@@ -262,8 +255,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         for ci, cell in enumerate(ent["cells"]):
             row, bx, bw = cell["row"], cell["x"], cell["w"]
             by, rh = ent["y"], ent["h"]
-            c.rounded_rect((bx, by, bx + bw, by + rh), radius=BLOCK_RADIUS,
-                           fill=p["cell_bg"], outline=p["cell_line"], width=1)
+            UI.panel(c, p, (bx, by, bx + bw, by + rh), state="done",
+                     radius=BLOCK_RADIUS, watermark=False)
             ix = bx + BLOCK_PAD_X
             right = bx + bw - BLOCK_PAD_X
             cy = by + BLOCK_PAD_Y

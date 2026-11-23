@@ -75,11 +75,14 @@ from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
 # ---- 排版（4 的倍数间距 token；两列 720 宽，字号主动收小换列数）----
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 COL_GAP = 12
 FS_TITLE = 38
 FS_SUB = 17
@@ -382,7 +385,7 @@ def _plan(data: dict, width: int) -> dict:
     width = max(560, min(int(width), 900))
     content_w, col_w, inner_w, bx0, bx1 = _cols(width)
 
-    y = PAD + FS_TITLE + 8 + 1 + 18          # 标题 + 分割线
+    y = UI.TITLE_H                           # 标题（牌匾）区高度
     if data.get("subtitle"):
         y += FS_SUB + 10
 
@@ -407,7 +410,8 @@ def _plan(data: dict, width: int) -> dict:
 
     y += H_TIP
     return {"width": width, "content_w": content_w, "col_w": col_w,
-            "inner_w": inner_w, "entries": entries, "h": max(420, y + PAD)}
+            # 底部用 UI.PAD_B(54)：底部两角只有短 L 线，36 收尾会贴框（2026-11-22）
+            "inner_w": inner_w, "entries": entries, "h": max(430, y + UI.PAD_B)}
 
 
 def _measure(data: dict, width: int) -> int:
@@ -425,9 +429,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label: str, txt: str, x: int, y: int, size: int, role: str,
             anchor: str) -> None:
@@ -464,22 +465,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
-    icon = str(data.get("icon") or "bolt")
-    if not icons.exists(icon):
-        icon = "sword"
-    title = str(data.get("title") or "本宗斗技")
-    tw = _w(title, FS_TITLE, "light")
-    ico_w = FS_TITLE + 10
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, icon, tx + FS_TITLE // 2, y + FS_TITLE // 2, FS_TITLE,
-               p["title_color"], style=ICON_STYLE)
-    c.text((tx + ico_w, y + FS_TITLE // 2), title, size=FS_TITLE,
-           color=p["title_color"], role="light", anchor="lm")
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE, "light", "lm")
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 18
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
+    title = str(data.get("title") or "斗技")
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE, "kai", "mm")
 
     sub = data.get("subtitle")
     if sub:
@@ -646,7 +635,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
     # ---- 底部提示 ----
     ty = L["h"] - PAD - FS_TIP - 8
-    c.line((x0, ty, x0 + content_w, ty), fill=p["line_color"], width=1)
+    UI.divider(c, p, ty, x0 + 6, x0 + content_w - 6, style="band")
     tip = data.get("tip")
     if tip:
         stext("tip", x0, ty + 12 + FS_TIP // 2, str(tip), FS_TIP, p["dim_color"],

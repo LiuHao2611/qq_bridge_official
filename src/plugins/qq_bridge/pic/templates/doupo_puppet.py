@@ -34,10 +34,13 @@ from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
 
-from .doupo import _card_alpha, _fit, _pal, _w
+from .doupo import _fit, _pal, _w
+from . import doupo_ui as UI
 from . import doupo_style as S
 
-PAD = 28
+PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
+                      # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
+                      # 用户明确反馈「字和边框黏在一起」，故统一到 36 → 距框线 26px）
 FS_TITLE = 30
 FS_NAME = S.FS_KEY        # 24
 FS_ATK = S.FS_HERO        # 30
@@ -118,8 +121,9 @@ def _plan(data: dict, content_w: int) -> tuple[list[tuple], int]:
 def _measure(data: dict, width: int) -> int:
     content_w = int(width) - PAD * 2
     blocks_h = _plan(data, content_w)[1]
-    return max(340, PAD + FS_TITLE + 8 + 1 + 14 + 10
-               + blocks_h + 14 + FS_BODY + PAD)
+    # 底部用 UI.PAD_B(54)：底部两角只有短 L 线，36 收尾会贴框（2026-11-22）
+    return max(390, UI.TITLE_H + 10
+               + blocks_h + 14 + FS_BODY + UI.PAD_B)
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -137,9 +141,6 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     boxes = kw.pop("boxes", None)
 
     c = Canvas(width, h, p["page_color"], theme=t)
-    c.rounded_rect((12, 12, width - 12, h - 12), radius=24,
-                   fill=p["card_color"], outline=p["border_color"], width=1,
-                   fill_alpha=_card_alpha(t) * 255 // 100)
 
     def rec(label, txt, x, y, size, anchor="lm"):
         if boxes is None:
@@ -157,19 +158,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     x0 = PAD
     y = PAD
 
-    # ---- 标题 ----
+    # ---- 标题（青蓝云纹牌匾，内核统一）----
     title = str(data.get("title") or "傀儡")
-    tw = _w(title, FS_TITLE, "bold")
-    ico_w = 16 + 12
-    tx = x0 + (content_w - tw - ico_w) // 2
-    icons.draw(c, "wand", tx + 8, y + FS_TITLE // 2, 16,
-               p["title_color"], style=ICON_STYLE)
-    S.key(c, (tx + ico_w, y + FS_TITLE // 2), title,
-          size=FS_TITLE, color=p["title_color"])
-    rec("title", title, tx + ico_w, y + FS_TITLE // 2, FS_TITLE)
-    y += FS_TITLE + 8
-    c.line((x0, y, x0 + content_w, y), fill=p["line_color"], width=1)
-    y += 14
+    y = UI.card_shell(c, p, title, width=width)
+    rec("title", title, width // 2, y - 40, FS_TITLE)
 
     # ---- 副标题 ----
     sub = _fit(str(data.get("subtitle") or ""), content_w, FS_BODY, "regular")
@@ -230,7 +222,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         y += bh
 
     # ---- 底部提示 ----
-    c.line((x0, y + 4, x0 + content_w, y + 4), fill=p["line_color"], width=1)
+    UI.divider(c, p, y + 6, x0 + 6, x0 + content_w - 6, style="band")
     y += 12
     tip = _fit(str(data.get("tip") or ""), content_w - 26, FS_SUB, "regular")
     if tip:

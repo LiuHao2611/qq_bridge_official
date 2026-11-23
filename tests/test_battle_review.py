@@ -1020,6 +1020,74 @@ def test_finish_card_wiring_accepts_pages():
           "list[bytes]" in str(inspect.signature(finish_card)), "签名未提多页")
 
 
+def test_ruin_card_bubble_layout_and_progress_fix():
+    """傀儡遗迹气泡版（2026-11-22 用户反馈）守门：
+    * 「连过 1/7」修复为「今日累计 6/7」；
+    * stage_cards 结构化状态（done/current/locked）+ 序号阿拉伯数字；
+    * 气泡版真出图 + boxes 溢出/重叠/间距自检 0 问题；
+    * 无 stage_cards 的旧 data 仍走 legacy 分组骨架（像素兼容）。
+    """
+    report = {
+        "total": 7,
+        "runs": [
+            {"stage_idx": 5, "stage_name": "圣地残殿", "win": True, "rounds": 2,
+             "drops": {"北龙王之躯": 1, "北龙王残魂": 1, "高阶魔核": 1}},
+            {"stage_idx": 6, "stage_name": "斗圣主殿", "win": False, "rounds": 4,
+             "mon_hp_left": 9498, "drops": {}},
+        ],
+        "cleared": False,
+    }
+    data = card.build_ruin_data({"stage": 6}, "2026-11-22", report)
+    head = (data["groups"][0]["rows"] or [""])[0]
+    check("遗迹卡显示今日累计6/7（不是连过1/7）",
+          "今日累计 6/7" in head and "连过 1/7" not in head, head)
+    check("本次连胜段数另起说明", "本次再连胜 1 段" in head, head)
+    sc = data.get("stage_cards") or []
+    check("stage_cards 有7段", len(sc) == 7, str(len(sc)))
+    check("前6段已通关 / 第7段可挑战",
+          all(s["status"] == "done" for s in sc[:6]) and sc[6]["status"] == "current",
+          str([s["status"] for s in sc]))
+    check("序号圆标用阿拉伯数字",
+          all(s.get("no") == i + 1 for i, s in enumerate(sc)), str([s.get("no") for s in sc]))
+    check("进度字段 done/total 正确",
+          data["progress"]["done"] == 6 and data["progress"]["total"] == 7,
+          str(data.get("progress")))
+
+    pic = card._load_pic()
+    check("pic 可加载（气泡版）", pic is not None)
+    if pic is None:
+        return
+    # 真出图
+    png = pic.render_sync("doupo_ruin", "light", card.CARD_RUIN_NAME, width=720, data=data)
+    from PIL import Image
+    img = Image.open(io.BytesIO(png))
+    check("气泡版真出 PNG 且宽度720",
+          png.startswith(b"\x89PNG") and img.width == 720, str(img.size))
+    # boxes 自检：溢出/重叠/间距
+    t = pic.resolve_theme("light", "doupo_ruin")
+    boxes = []
+    cv = pic._doupo_ruin.build(t, data, 720, boxes=boxes)
+    W, H = cv.img.size
+    items = [b for b in boxes if b[1] >= 0]
+    over = [b for b in items if b[1] < 11 or b[2] < 11 or b[3] > W - 11 or b[4] > H - 11]
+    check("气泡版 boxes 无溢出", not over, str(over[:3]))
+    ov = []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            a, b = items[i][1:], items[j][1:]
+            if not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]):
+                ov.append((items[i][0], items[j][0]))
+    check("气泡版 boxes 无重叠", not ov, str(ov[:3]))
+    # 兼容：旧裸 data 仍走 legacy
+    legacy = {"title": "傀儡遗迹", "subtitle": "今日进度 1/3 · 每日重置",
+              "groups": [{"name": "第一段 · 魔炎谷库房",
+                          "rows": ["守库尸卫 ｜ 掉 强者躯体×1 ｜ 已通关"]}],
+              "tip": "发「傀儡遗迹」逐段挑战"}
+    check("旧裸 data 无 stage_cards 走 legacy",
+          pic._doupo_ruin._rich(legacy) is False and pic._doupo_ruin._rich(data) is True,
+          "气泡版判据不对")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

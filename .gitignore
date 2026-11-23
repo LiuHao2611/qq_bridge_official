@@ -101,3 +101,7 @@ tests/_*.png
 tests/*.png
 docs/preview/
 **/.wm_cache/
+
+# 斗破牌匾楷体子集：2.44MB，超 200KB 单文件上传红线（2026-11-22）
+# 生成：python tools/make_doupo_kai.py；说明见 assets/doupo_fonts/README.md
+src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/doupo_kai.ttf
