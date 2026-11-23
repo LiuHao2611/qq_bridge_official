@@ -593,10 +593,10 @@ HERB_BY_NAME = {h["name"]: h for h in HERBS}
 # ---------------------------------------------------------------------------
 RECIPES = [
     {"name": "回灵丹", "grade": "四品", "need": {"血灵草": 2, "紫叶兰": 1},
-     "price": 90, "effect": "hp", "value": 1200,
+     "price": 90, "effect": "hp", "value": 1200, "pct": 0.03,
      "desc": "快速恢复 1200 生命"},
     {"name": "破障丹", "grade": "四品", "need": {"赤焰果": 2, "黑岩根": 2},
-     "price": 150, "effect": "exp", "value": 3000,
+     "price": 600, "effect": "exp", "value": 3000, "min_lv": 15,
      "desc": "服之冲关，另得 3000 修为"},
     {"name": "醒神丹", "grade": "四品", "need": {"白参": 1, "七叶花": 2},
      "price": 160, "effect": "crit", "value": 3,
@@ -607,7 +607,7 @@ RECIPES = [
      "price": 300, "effect": "hit", "value": 5,
      "desc": "气机凝而不散，永久命中 +5%"},
     {"name": "复伤丹", "grade": "五品", "need": {"白参": 2, "地心芝": 1},
-     "price": 280, "effect": "hp", "value": 5000,
+     "price": 280, "effect": "hp", "value": 5000, "pct": 0.05,
      "desc": "大回气血 5000"},
     {"name": "风行丹", "grade": "五品", "need": {"紫叶兰": 3, "冰晶石": 1},
      "price": 300, "effect": "dodge", "value": 5,
@@ -619,8 +619,8 @@ RECIPES = [
      "price": 900, "effect": "stat", "value": 60,
      "desc": "帝品丹药，威能无限，取日月之精华，夺天地之造化！永久全属性 +60"},
     {"name": "九幽散", "grade": "帝品", "need": {"黑岩根": 5, "血灵草": 5},
-     "price": 800, "effect": "luck", "value": 200,
-     "desc": "九幽所凝，服之机缘 +200"},
+     "price": 800, "effect": "luck", "value": 1200,
+     "desc": "九幽所凝，服之机缘 +1200"},
 ]
 # 2026-11-16 原著考据扩充：55 枚原著丹药并入（有药方者走炼制，无药方者纯金币购买）
 # 原有 8 枚游戏自设丹方（回灵丹/破障丹…）保留不动，避免破坏既有存档与平衡。
@@ -640,6 +640,13 @@ _MERGED.update({r["name"]: r for r in NOVEL_RECIPES})
 RECIPES = list(_MERGED.values())
 RECIPE_NAMES = [r["name"] for r in RECIPES]
 RECIPE_BY_NAME = {r["name"]: r for r in RECIPES}
+#: 别名 → 正名（2026-11-23 去重）。原著「复灵紫丹（复紫灵丹）」是同一枚丹的两种
+#: 写法（百度百科·药尘条并列），旧版当两条配方收，炼药名录与图鉴各出现一次。
+#: 别名只进索引、不进 RECIPES：老存档包裹里的「复紫灵丹」照样能服、有说明，
+#: 但不再单独占一格名录。新增别名只改这张表，别去 RECIPES 里再抄一条。
+RECIPE_ALIAS = {"复紫灵丹": "复灵紫丹"}
+RECIPE_BY_NAME.update({a: RECIPE_BY_NAME[n] for a, n in RECIPE_ALIAS.items()
+                       if n in RECIPE_BY_NAME})
 from .recipes_data import GRADE_ORDER  # noqa: E402  高→低全品阶
 
 # 缺字段补齐：游戏自设的 8 枚原本没有 min_lv/buy/src，给默认值让下游统一 .get。
@@ -736,6 +743,10 @@ def alch_grade_idx(grade: str) -> int:
 EFFECT_TAG = {
     "hp": "回血", "mp": "回斗气", "exp": "增修为", "stat": "增属性",
     "luck": "增机缘", "crit": "增暴击", "dodge": "增闪避", "hit": "增命中",
+    # 2026-11-23：暴击率 80% 硬顶之后的「增幅战力」词条（炎魔清玄丹）。
+    "critdmg": "增暴伤",
+    # 2026-11-23：帝品雏丹 = 原著「可助人成为斗帝」，不是五维丹。
+    "ascend": "成帝",
     "skill": "升级技",
     # 2026-11-21 P3：养魂涎不再按「机缘」糊弄（N08 原著唯一给出的养魂手段，
     # 而旧文案自己写着「无独立灵魂值」—— 玩家看着名字买了个加机缘的丹）。
@@ -744,6 +755,19 @@ EFFECT_TAG = {
     # effect="exp" value=1000，desc 却照抄原著承诺破境 —— 玩家吃八枚只涨修为、
     # 永远破不了大斗师（实机报障）。现在有独立 effect，标签不能再显示「增修为」。
     "breakthrough": "破境",
+}
+
+#: 永久百分比加成丹 → (``p["bonus"]`` 键名, 卡面量纲)。
+#:
+#: 2026-11-23 合并：闪避/暴击/命中曾各写一段一模一样的 use_item 分支，新增「暴伤」
+#: 时又要抄第四段。改成表驱动后，加一种永久百分比只改这张表。
+#: 读取方各自唯一：``dodge_rate`` / ``crit_rate`` / ``hit_rate`` / ``crit_mul`` ——
+#: 卡面、战斗、人物卡都走它们，不许再各算一套（2026-11-20 命中那条的原话）。
+PCT_BONUS = {
+    "dodge": ("闪避", "永久闪避"),
+    "crit": ("暴击", "永久暴击"),
+    "hit": ("命中", "永久命中"),
+    "critdmg": ("暴伤", "永久暴击伤害"),
 }
 
 
@@ -759,8 +783,11 @@ IMPL_BY_EFFECT = {
     "mp": "斗气 +%d",
     "exp": "修为 +%d",
     "luck": "机缘 +%d",
-    "dodge": "永久闪避 +%d%%",
+    "dodge": "永久闪避 +%d%%（自然闪避封顶 80%%，丹药可越顶）",
     "crit": "永久暴击 +%d%%",
+    "critdmg": "永久暴击伤害 +%d%%",
+    # 无 %d（一次性剧情道具，不是数值丹）—— recipe_impl 对无 % 模板原样返回。
+    "ascend": "斗帝突破必成（102→103 不再掷机缘，用掉即止）",
     "hit": "永久命中 +%d%%",
     "stat": "全属性 +%d",
     # 默认模板只给量纲；上限写不进单据（模板只吃一个 %d），所以养魂涎在
@@ -768,6 +795,55 @@ IMPL_BY_EFFECT = {
     "puppet_soul": "傀儡灵魂 +%d",
     "skill": "用于升级斗技",
 }
+
+
+#: 2026-11-23 P1-5：五维丹的定位尾注（唯一源，16 枚 stat 丹全部带上）。
+#:
+#: 实测（探针对比：裸面板 vs 全属性 +30000）：
+#:   * 野外遭遇战 ``monster_scaled(p)``、九星突破 BOSS ``make_breakthrough_boss``
+#:     都按**真人面板**反解 —— 吃丹后怪血/怪攻同步变厚（突破 BOSS 血 28002→30954），
+#:     相对难度不变，等于白吃；
+#:   * 爬塔 ``tower_ref_player(层)``、傀儡遗迹 ``ruin_ref_lv(power_rec)`` 锚标尺，
+#:     周本锚周一切片 —— 三处怪数值与当前面板无关，加的全属性是**真赚**。
+#:
+#: 不写这一行，玩家吃灭神丹去打突破 BOSS 就是隐性假药（2026-11-18 契约）。
+_STAT_SCOPE = "爬塔·傀儡遗迹·周本真生效；野外与破境BOSS随你面板变强"
+
+
+def dodge_final(base: int, p: dict) -> float:
+    """闪避收口（%）。``base`` = 自然闪避（等级/异火）+ 丹药闪避。
+
+    2026-11-23 修风行丹死区：旧实现把 ``bonus["闪避"]`` 先加进 base 再 ``min(80,…)``，
+    而敏捷自然闪避 **lv82 就顶到 80**（实测 lv78 服丹 80/80、lv82 起恒 80）—— 五品
+    风行丹从此完全白吃。现在自然那部分仍封 80，丹药那部分在封顶**之后**另计，
+    最多 +8（风行丹只有 +5）。
+
+    🚨 只放开到这里：自然闪避的 80 硬顶是战斗平衡锚（``MON_HIT_RESIDUAL`` 用
+    ``level_dodge`` 抵消等级送的身法），不再是「丹药也别想越」。
+    """
+    pill = int((p.get("bonus") or {}).get("闪避", 0))
+    return float(min(80, base - pill) + min(8, pill))
+
+
+def recipe_min_lv(name: str) -> int:
+    """丹方品阶门槛（无丹方 / 药材 → 1）。
+
+    2026-11-23：商店此前只认金币不认门槛，lv1 能买 66 枚破障丹跳过 23 级；
+    「炼药名录」早就按它过滤，两处口径必须同源。
+    """
+    return int((RECIPE_BY_NAME.get(name) or {}).get("min_lv", 1) or 1)
+
+
+def _with_stat_scope(text: str) -> str:
+    """把「全属性 +N」与定位尾注拼成一句。
+
+    多数 stat 丹的 impl 自带括号（「全属性 +5（永久生效）」），直接再挂一对就成了
+    「（永久生效）（爬塔…）」；这里并入同一对括号，读起来是一句话。
+    """
+    t = str(text).rstrip()
+    if t.endswith("）"):
+        return t[:-1] + "；" + _STAT_SCOPE + "）"
+    return t + "（" + _STAT_SCOPE + "）"
 
 
 def recipe_impl(rec: dict) -> str:
@@ -786,9 +862,9 @@ def recipe_impl(rec: dict) -> str:
     effect 的量纲一致（增修为的不能说气血）。
     """
     hand = str(rec.get("impl") or "").strip()
-    if hand:
-        return hand
     eff = str(rec.get("effect") or "")
+    if hand:
+        return _with_stat_scope(hand) if eff == "stat" else hand
     val = int(rec.get("value") or 0)
     if eff == "breakthrough":
         to = int(rec.get("to_realm") or 1)
@@ -817,7 +893,8 @@ def recipe_impl(rec: dict) -> str:
     tpl = IMPL_BY_EFFECT.get(eff)
     if tpl:
         # skill 等模板没有 %d（「用于升级斗技」），不能盲目套 %
-        return (tpl % val) if "%" in tpl else tpl
+        out = (tpl % val) if "%" in tpl else tpl
+        return _with_stat_scope(out) if eff == "stat" else out
     return ""
 
 
@@ -2022,6 +2099,26 @@ def root_factor(p: dict) -> float:
     # 从 (tolerance, 1.0) 线性压到 (1.0, ROOT_MIN_FACTOR)
     t = min(1.0, (ratio - ROOT_TOLERANCE) / (1.0 - ROOT_TOLERANCE))
     return round(1.0 - t * (1.0 - ROOT_MIN_FACTOR), 4)
+
+
+#: 暴击基础倍率（无「暴伤」词条时的倍率）。原写死在 core._hit 的 1.5。
+CRIT_BASE_MUL = 1.5
+
+
+def crit_mul(p: dict) -> float:
+    """暴击伤害倍率 = ``CRIT_BASE_MUL`` + ``bonus["暴伤"]``（百分点）。
+
+    2026-11-23 审计：暴击**率**在 lv55 就被敏捷顶到 80% 硬顶，于是「八品·炎魔
+    清玄丹 +30% 暴击」从可服用等级（73）起恒为 0 收益。原著第1449章侯老怪那枚
+    丹的真实功效是「促使斗气变异、**增幅战斗力**」—— 落成暴击**伤害**才对得上，
+    且它是唯一不会被上限吃掉的战力词条。
+
+    帝炎 ×1.2 与 ``stats()`` 同口径（那句「全属性 ×1.2」不能只在面板生效）。
+    """
+    v = int((p or {}).get("bonus", {}).get("暴伤", 0) or 0)
+    if p and p.get("diyan"):
+        v = int(v * 1.2)
+    return CRIT_BASE_MUL + v / 100.0
 
 
 #: 被动修炼：每分钟获得的修为（离线也算，不强制打卡）

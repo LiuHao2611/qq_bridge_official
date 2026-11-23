@@ -744,7 +744,7 @@ async def cmd_break(store, qq, rng=None) -> str:
         return (
             "🌩️ 九霄雷动，天地齐鸣——\n"
             "🔥 你踏碎最后一层壁障，成就【斗帝】！\n"
-            "帝炎自燃于体，全属性 ×1.2，机缘值全满。"
+            "帝炎自燃于体，五维（力/敏/气/防/体）×1.2，机缘值全满。"
         )
     if res.get("reason") == "tiandi_fail":
         return txt.tiandi_fail_plain(int(res["rate"] * 100))
@@ -1529,6 +1529,12 @@ async def cmd_buy(store, qq, args) -> str:
     if not res.get("ok"):
         if res.get("reason") == "poor":
             return f"💰 金币不足：需要 {res['need']}，你有 {res['have']}。"
+        # 2026-11-23 修速通：丹药品阶即修为门槛，等级不够时**如实报门槛**，
+        # 别落到底下「没有这样货」——那会让玩家以为商店没上货。
+        if res.get("reason") == "lv":
+            return (f"🚫 【{name}】是 {cfg.full_realm(int(res['need_lv']))} 的丹药，"
+                    f"你如今 {cfg.full_realm(int(p.get('lv', 1)))} —— 药力太猛，"
+                    f"强服只会爆体（到 {res['need_lv']} 级再来）。")
         return f"没有【{name}】这样货。发「宝库」看全部。"
     out = [f"✅ 购入【{res['name']}】×{res['n']}，花费 {res['total']} 金，余 {p['gold']}。"]
     out.extend(_chance_lines(chance, qq))
@@ -1699,7 +1705,9 @@ async def cmd_bag(store, qq) -> str:
     locked = await store.item_locks(str(qq))
     out = [f"🎒 包裹（{len(items)} 种物品，展示前 24 格）　💰 {p['gold']}"]
     # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
-    known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
+    # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
+    known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
+             for n, r in cfg.RECIPE_BY_NAME.items()}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
@@ -1900,7 +1908,8 @@ async def cmd_use(store, qq, name) -> str:
         return "用法：服丹 回灵丹"
     # 2026-11-18：丹药 + 天材地宝统一走「服丹/炼化」入口，材料也有实际作用。
     # 先精确匹配（防「复灵紫丹」被「复紫灵丹」的子串抢先命中），再宽松匹配。
-    pool = list(cfg.RECIPE_NAMES) + list(cfg.MATERIAL_NAMES)
+    # 2026-11-23：别名（复紫灵丹）也要能被点到，否则老存档里的丹成了无主物品。
+    pool = list(cfg.RECIPE_NAMES) + list(cfg.RECIPE_ALIAS) + list(cfg.MATERIAL_NAMES)
     hit = name if name in pool else next(
         (n for n in pool if name in n or n in name), None)
     if not hit:
@@ -1920,6 +1929,11 @@ async def cmd_use(store, qq, name) -> str:
         if res.get("reason") == "resisted":
             # 丹药已被扣掉（原著就是「白白浪费」），必须让玩家看见这件事。
             return f"💊 服下【{hit}】，{res.get('msg')}"
+        if res.get("reason") == "full":
+            # 2026-11-23：满血/满气时**不扣物**（core 拦在扣物之前），要让玩家看见
+            # 「丹还在」，而不是收到一句「无法服用」以为丢了一枚。
+            return (f"💚 气血斗气都是满的 —— 【{hit}】还在包里，"
+                    f"受了伤再服才不浪费。")
         if res.get("reason") == "need_puppet":
             # P3 养魂：养魂涎不是口服丹。**一枚都没扣**（拦在扣物之前），
             # 这里必须把「丹还在」和「该去哪用」都说清楚。
@@ -1927,6 +1941,11 @@ async def cmd_use(store, qq, name) -> str:
                     "　发「傀儡 养魂」把它渡给出战傀儡：每枚 +%d 灵魂强度，"
                     "上限 %d。" % (hit, int(cfg.PUPPET_SOUL_FEED_GAIN),
                                    int(cfg.PUPPET_SOUL_FEED_MAX)))
+        if res.get("reason") == "notuse":
+            # 2026-11-23 修 P0 吞丹：焚血散是升斗技的材料，**一枚都没扣**（拦在
+            # 扣物之前）。旧版落到下面那句只回 msg，玩家不知道丹还在，还会以为被骗。
+            return ("🧪 【%s】不是口服之物 —— 丹还在你包里。\n"
+                    "　发「升级 技能名」把它用在斗技上（每级 1 份，最高 5 级）。" % hit)
         return res.get("msg") or "无法服用。"
     if hit in cfg.MATERIAL_BY_NAME:
         return f"✨ {res['msg']}"

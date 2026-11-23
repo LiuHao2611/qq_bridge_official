@@ -738,7 +738,9 @@ def build_bag_data(p: dict, locked=None) -> dict:
     """
     locked = set(locked or ())
     items = core.bag_slots(p)
-    known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
+    # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
+    known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
+             for n, r in cfg.RECIPE_BY_NAME.items()}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items[:24]:

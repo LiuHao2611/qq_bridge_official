@@ -163,6 +163,10 @@ def test_every_material_has_effective_use():
     # 关键回路：每件都能在 use_item 里取到（先扣背包再结算）
     for m in cfg.NOVEL_MATERIALS:
         p = _p(1)
+        # 2026-11-23：满血/满气服丹**不再扣物**（core.use_item 前置判定），所以先把
+        # 气血斗气打到一半 —— 否则这里测的不是「材料有没有用」，而是「满血给不给吃」。
+        p["hp"] = max(1, int(core.stats(p)["体力"]) // 2)
+        p["mp"] = 0
         core.add_item(p, m["name"], 1)
         res = core.use_item(p, m["name"])
         assert res.get("ok"), "%s 服下失败：%s" % (m["name"], res)

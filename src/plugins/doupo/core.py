@@ -215,7 +215,7 @@ def dodge_rate(p) -> float:
     base = cfg.HERO_DODGE + (st["敏捷"] + 20) // 200
     base += 10 * int((p.get("flames") or {}).get("净莲妖火", 0))
     base += int((p.get("bonus") or {}).get("闪避", 0))
-    return float(min(80, base))
+    return cfg.dodge_final(base, p)
 
 
 def crit_rate(p) -> float:
@@ -596,7 +596,12 @@ def level_up(p, rng=random.random) -> dict:
 
     if lv >= cfg.PEAK_LV:
         # 进阶斗帝：机缘决定成功率（m.java：机缘值影响进阶斗帝几率）
-        rate = cfg.tiandi_rate(p.get("luck", 0), p.get("diyan", False))
+        # 帝品雏丹（effect=ascend）优先：本源帝气直接把这次判定钉成必成。
+        if int(p.get("ascend", 0)) > 0:
+            p["ascend"] = int(p["ascend"]) - 1
+            rate = 1.0
+        else:
+            rate = cfg.tiandi_rate(p.get("luck", 0), p.get("diyan", False))
         if rng() < rate:
             p["exp"] = int(p["exp"]) - need
             p["lv"] = cfg.MAX_LV
@@ -837,7 +842,7 @@ def damage_schedule(p, rounds: int = 15, puppet_bonus: float = 0.0) -> list:
             pool -= avg_cost
         else:
             out.append(normal_raw)
-    mult = 1.0 + crit_rate(p) / 100.0 * 0.5
+    mult = 1.0 + crit_rate(p) / 100.0 * (cfg.crit_mul(p) - 1.0)
     # 傀儡肉身输出不吃暴击加成（原著「稳」的打手），故在 mult 之外单独加。
     return [d * mult + puppet_bonus for d in out]
 
@@ -1079,7 +1084,7 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     # def_mult 是本次实际生效的防御减伤系数（破防会改写它）；回看卡据它算
     # 「面板 → 防御削减 → 实收」，纯展示，不参与任何数值计算。
     def_mult = mitigation(target_def)
-    base = max(1, int(raw * def_mult * (1.5 if crit else 1.0)))
+    base = max(1, int(raw * def_mult * (cfg.crit_mul(p) if crit else 1.0)))
     notes: list[str] = []
     heal_ratio = 0.0
     dmg = base
@@ -3286,10 +3291,19 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     #    玩家看到的就是「丹没了，什么都没发生」—— 这正是要堵的洞。
     if str(rec.get("effect") or "") == "puppet_soul":
         return {"ok": False, "reason": "need_puppet", "pill": name}
+    # 2026-11-23 修 P0 吞丹：焚血散是升斗技的材料，旧版末尾才 notuse 而 take_item
+    # 在最前 —— 玩家白丢一枚。与养魂涎同理，必须拦在扣物前。
+    if str(rec.get("effect") or "") == "skill":
+        return {"ok": False, "reason": "notuse", "pill": name}
+    st = stats(p)
+    # 2026-11-23：气血/斗气已满时不扣物（旧版先扣再算，白丢一枚只回「+0」）。
+    eff = str(rec.get("effect") or "")
+    if (eff == "hp" and int(p.get("hp", 0)) >= int(st["体力"])) or \
+            (eff == "mp" and int(p.get("mp", 0)) >= mp_max(p)):
+        return {"ok": False, "reason": "full", "pill": name}
     if not take_item(p, name, 1):
         return {"ok": False, "reason": "none"}
 
-    st = stats(p)
     eff, val = rec["effect"], int(rec["value"])
     lead = "炼化【%s】，" % name if is_material else ""
     if eff == "hp":
@@ -3314,17 +3328,10 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
         p["pill_exp"] = int(p.get("pill_exp", 0)) + val
         return {"ok": True, "msg": lead + f"修为 +{val}"}
     if eff == "breakthrough":
-        # 原著第 315 / 321 章两枚破境丹，共用同一套结算（口径唯一，不写两份）：
-        #   三纹青灵丹：break_boundary=True、star_chance=0.30、max_per_realm=1
-        #     「助斗师强者突破晋入大斗师的界限；大斗师服下有少许几率提升一星，
-        #      并无药效反噬」「在一阶之中唯有一次服用机会，再服则因药体抗性白费」
-        #   紫心破障丹：break_boundary=False、star_chance=1.0、max_per_realm=2
-        #     「只能作用于大斗师级别……能够提升一星的实力……同一级别能够接连的
-        #      服用两枚而不至于产生太大的抗性……稳步的提升两星实力」
-        # 三档分支，任何一档都不空手：
-        #   ① 卡在界限前一级（斗师九星）且该丹有破界之能 → 丹力顶开壁障，晋入；
-        #   ② 已在目标阶 → 按 max_per_realm 限次，掷 star_chance 升一星；
-        #   ③ 其他境界     → 药不对症，按 value 转修为（不白白浪费）。
+        # 原著第 315/321 章两枚破境丹共用这一套结算（三纹青灵丹 break_boundary=True
+        # +star 0.30+限 1；紫心破障丹 break_boundary=False+star 1.0+限 2）。三档都
+        # 不空手：①界限前一级且可破界 → 顶开壁障；②目标阶内 → 限次掷升星；
+        # ③其余境界 → 药不对症转修为。
         to_realm = int(rec.get("to_realm") or 1)
         max_per = max(1, int(rec.get("max_per_realm") or 1))
         lv = int(p.get("lv", 1))
@@ -3343,6 +3350,13 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
                 return {"ok": False, "reason": "resisted",
                         "msg": lead + txt.pill_resist(realm_name, max_per)}
             if rng() < float(rec.get("star_chance", 0.0)):
+                # 2026-11-23 修 P1-4：九星位**不得跨大境界**。旧版 _advance_one 只
+                # 做 lv+1，于是斗灵丹 lv54→55 直接晋斗皇、紫心破障丹 lv36→37 晋
+                # 斗灵 —— 把 commands 的九星突破 BOSS 战整个绕过去了（那是境界关口）。
+                if cfg.realm_index(lv + 1) != ri:
+                    p["exp"] = int(p.get("exp", 0)) + val
+                    p["pill_exp"] = int(p.get("pill_exp", 0)) + val
+                    return {"ok": True, "mark_used": ri, "msg": lead + txt.pill_gate(val)}
                 _advance_one(p)
                 return {"ok": True, "star_up": True, "mark_used": ri,
                         "msg": lead + txt.pill_star(cfg.full_realm(int(p["lv"])))}
@@ -3356,29 +3370,22 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     if eff == "luck":
         p["luck"] = min(9999, int(p.get("luck", 0)) + val)
         return {"ok": True, "msg": lead + f"机缘 +{val}（现 {p['luck']}）"}
-    if eff == "dodge":
+    if eff in cfg.PCT_BONUS:
+        # 永久百分比（闪避/暴击/命中/暴伤）共用一处；键名与量纲见 cfg.PCT_BONUS。
+        k, label = cfg.PCT_BONUS[eff]
         b = p.setdefault("bonus", {})
-        b["闪避"] = int(b.get("闪避", 0)) + val
-        return {"ok": True, "msg": lead + f"永久闪避 +{val}%"}
-    if eff == "crit":
-        b = p.setdefault("bonus", {})
-        b["暴击"] = int(b.get("暴击", 0)) + val
-        return {"ok": True, "msg": lead + f"永久暴击 +{val}%"}
-    if eff == "hit":
-        # 2026-11-20 命中（与风行丹的永久闪避成对）：落到 bonus["命中"]，
-        # 由 hit_rate() 唯一读取 —— 卡面/战斗/人物卡不会再各算一套。
-        b = p.setdefault("bonus", {})
-        b["命中"] = int(b.get("命中", 0)) + val
-        return {"ok": True, "msg": lead + f"永久命中 +{val}%"}
+        b[k] = int(b.get(k, 0)) + val
+        return {"ok": True, "msg": lead + f"{label} +{val}%"}
     if eff == "stat":
         b = p.setdefault("bonus", {})
         for k in ("力量", "敏捷", "斗气", "防御", "体力"):
             b[k] = int(b.get(k, 0)) + val
         _refill(p)
         return {"ok": True, "msg": lead + f"全属性 +{val}"}
-    if eff == "skill":
-        return {"ok": False, "reason": "notuse",
-                "msg": "焚血散不是口服之物，请在「升级 技能名」时使用"}
+    if eff == "ascend":
+        # 帝品雏丹：一缕本源帝气，下一次 102→103 必成（见 level_up）。
+        p["ascend"] = int(p.get("ascend", 0)) + 1
+        return {"ok": True, "msg": lead + "本源帝气入体——斗帝壁障已可叩开"}
     return {"ok": False, "reason": "unknown"}
 
 
@@ -3654,6 +3661,11 @@ def shop_buy(p, name, n=1) -> dict:
     if not item:
         return {"ok": False, "reason": "noitem"}
     total = int(item["price"]) * n
+    # 2026-11-23 修速通：min_lv 旧版只过滤「炼药名录」，商店不认 —— lv1 拿 1 万
+    # 起始金币买 66 枚破障丹直接跳 23 级。丹药品阶本就是门槛（低阶修士受不住）。
+    _need_lv = cfg.recipe_min_lv(name)
+    if _need_lv > int(p.get("lv", 1)):
+        return {"ok": False, "reason": "lv", "need_lv": _need_lv}
     if int(p.get("gold", 0)) < total:
         return {"ok": False, "reason": "poor", "need": total, "have": int(p.get("gold", 0))}
     p["gold"] = int(p["gold"]) - total
