@@ -2,20 +2,46 @@
 
 依据：`docs/qq_integration_design.md` v0.2（NapCat/LLOneBot 个人号协议端 + NoneBot2 框架）。
 
-> **最后更新：2026-11-05 17:40**
+> **最后更新：2026-11-21 21:00 —— 生产环境已整体迁到手机，不再是 Windows + Docker**
 >
-> 本次变更（P0 运维，详见 `AGENTS.md` 变更记录 §17:24）：
+> 本次变更（详见 **`docs/生产环境说明_手机服务器_2026-11-21.md`**）：
 >
-> 1. **bridge 部署形态收口为容器一条路线**。Windows 的 `SO_REUSEADDR` 允许两个进程
->    **同时 bind `0.0.0.0:8080` 且都成功**，此前开机时宿主 python 与容器各占一份，
->    输的那侧永久 `ws_down` 却一直占着端口（实测连续 3h47m）。`start_bridge.ps1`
->    现降级为**回退通道**，检测到容器在跑会 `exit 1`。
-> 2. **aria2 凭据单一来源**：`DL_ARIA2_SECRET` 只放 `.env`（宿主与容器共用），
->    compose 只留端点。此前硬编码在 compose 里，宿主实例读不到 → 每 7 秒刷一条
->    `download_tick_failed`，且 Unauthorized 被显示成「端口报错」。
-> 3. **测试不再污染生产日志**：pytest 曾用真实群号伪造群事件写进 `logs/qq_bridge.log`，
->    与真群消息无法区分。`config.LOG_DIR` 改读 `QQ_LOG_DIR`，`tests/conftest.py` 统一改道。
-> 4. 新增门禁 `tools/check_bridge_sanity.py`（端口单一所有者 / aria2 凭据 / 测试日志隔离）。
+> 1. **生产 = 一台小米 6 跑裸机 Linux**（postmarketOS v26.06 / Alpine / OpenRC / 内核 6.0.0），
+>    手机是唯一生产环境，`docker ps` 为空也不影响任何功能。
+> 2. **启动/部署/维护/调试全部改写**：服务用 OpenRC 管，日志有实时面板，存档在手机本地 SQLite。
+>    下面「本机部署步骤（Windows）」章节**已降级为历史/回退方案**，日常不再使用。
+> 3. **新增实时日志面板** `http://192.168.0.50:8091`（自研，按「服务/业务」分流，SSE 实时）。
+
+---
+
+## ★ 当前生产环境（先看这一节）
+
+| 项 | 值 |
+|---|---|
+| **机器** | 小米 6（sagit / MSM8998 / 8 核 / 5.6G RAM），裸机 Linux，无 Android、无 Docker |
+| **系统** | postmarketOS v26.06 = Alpine + OpenRC + mainline 6.0.0，rootfs 在 loop 镜像（4.6G） |
+| **SSH** | `ssh pmos@192.168.0.50`（密码 `123456`，电脑已配免密）；WiFi 挂了走 USB：`ssh pmos@172.16.42.1` |
+| **日志面板** | `http://192.168.0.50:8091`（无密码，局域网直开） |
+| **代码** | `/home/pmos/qq_bridge`（242MB），venv `/home/pmos/venv`（Python 3.14.10） |
+| **存档** | `data/doupo/doupo.sqlite`、`data/doupo/puppet_data.sqlite`、`data/xiuxian/xiuxian.sqlite` |
+| **端口** | 22 SSH ｜ 8081 bot（QQ 官方通道）｜ 8091 日志面板 ｜ 8765 源码问答（仅本机） |
+| **服务** | `qq-bridge`（bot）｜ `qq-doupo-agent`（源码问答）｜ `logview`（面板）｜ `wifi-watchdogd`（网络自愈） |
+| **管服务** | `sudo rc-service <名字> {start\|stop\|restart\|status}`；全部已加 `default` runlevel，断电自动恢复 |
+
+**三条最容易踩的坑**（细节都写在运维手册里）：
+
+1. **`.env` 的 `DOUPO_DATA_PATH` / `XIUXIAN_DATA_PATH` 不能删** —— 删了插件会回落到仓库自带的示例库，老玩家会被要求「重新入道」。
+2. **大文件传输走 USB**（`172.16.42.1`），WiFi 上持续传输约 20 秒必被芯片缺陷打断（`Connection reset by peer`）。
+3. **绝不要 `unbind/bind ath10k_snoc`** —— 会让 WiFi 永久起不来，只能重启（历史上出过事）。
+
+> 完整操作步骤（怎么登录、怎么开机自检、怎么部署、怎么排查六类故障、危险操作黑名单）：
+> **`docs/生产环境说明_手机服务器_2026-11-21.md`**
+>
+> 迁移前的 Windows + Docker 路线（`start_bridge.ps1`、告警端口争抢、aria2 凭据单一来源、
+> 测试日志隔离、`tools/check_bridge_sanity.py` 门禁等）保留在 `AGENTS.md` 变更记录 §17:24，
+> 需要回退到旧部署时看那一段。
+
+---
 
 ## 隔离约定（最高优先级，不可违背）
 
@@ -53,7 +79,11 @@ qq_bridge/
 tests/                          正式测试（pytest），e2e 用独立端口 18080
 ```
 
-## 本机部署步骤（Windows，你只需要做第 1~3 步）
+## 本机部署步骤（⚠️ 历史方案：Windows + Docker，2026-11-21 起生产已不用）
+
+> **日常部署请看 `docs/生产环境说明_手机服务器_2026-11-21.md` §5。**
+> 这一章只在两种情况下有用：① 手机坏了、临时要在 Windows 上跑起来顶一下；
+> ② 需要把服务从手机迁回电脑。照做时注意端口已改为 **8081**（不再是 8080）。
 
 ### 1. 启动 NapCat（Docker 容器）
 
