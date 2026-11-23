@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""斗破卡片「双主题」偏好存储（个人口令 > 全局默认 > 游戏本体风）。
+"""斗破卡片「双主题」偏好存储（个人口令 > 全局默认 > 浅色简约风）。
 
 背景（2026-11-23 用户「两个主题可以自由切换」）
 ------------------------------------------------
@@ -16,7 +16,10 @@
   容器 DOUPO_DATA_PATH=/app/data/doupo/doupo.json → /app/data/doupo/doupo_theme.json；
   单测改了 DATA_PATH 就自动跟着改，绝不会读/写生产文件。
 
-优先级：``users[qq]``（口令即时切）> ``default``（全局配置）> ``game``（安全默认）。
+优先级：``users[qq]``（口令即时切）> ``default``（全局配置）> ``light``（安全默认）。
+
+2026-11-23 用户「默认为简约主题」：全局兜底由 game 改为 light（浅色现代风），
+不写任何偏好文件时一律简约。个人口令与显式全局设置仍优先，行为不变。
 """
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ ALIASES = {
     "深色": GAME, "暗色": GAME, "原版": GAME,
     "light": LIGHT, "浅色": LIGHT, "浅色风": LIGHT, "现代": LIGHT,
     "现代风": LIGHT, "亮色": LIGHT, "白": LIGHT,
+    "简约": LIGHT, "简约风": LIGHT, "简单": LIGHT,
 }
 
 _LABEL = {
@@ -74,7 +78,7 @@ def _read() -> dict:
     try:
         st = p.stat()
     except OSError:
-        return {"default": GAME, "users": {}}
+        return {"default": LIGHT, "users": {}}
     with _LOCK:
         if _CACHE is not None and st.st_mtime_ns == _CACHE_MTIME:
             return _CACHE
@@ -92,7 +96,7 @@ def _read() -> dict:
             s = normalize(style)
             if s:
                 clean_users[str(qq)] = s
-        _CACHE = {"default": default or GAME, "users": clean_users}
+        _CACHE = {"default": default or LIGHT, "users": clean_users}
         _CACHE_MTIME = st.st_mtime_ns
         return _CACHE
 
@@ -127,7 +131,7 @@ def resolve(qq: str | None) -> str:
         if s in STYLES:
             return s
     d = data.get("default")
-    return d if d in STYLES else GAME
+    return d if d in STYLES else LIGHT
 
 
 def get_user(qq: str) -> str:
@@ -163,7 +167,7 @@ def clear_user(qq: str) -> str:
 
 def resolve_default() -> str:
     d = _read().get("default")
-    return d if d in STYLES else GAME
+    return d if d in STYLES else LIGHT
 
 
 def set_default(style: str) -> str:

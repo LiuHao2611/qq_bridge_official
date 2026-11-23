@@ -145,7 +145,8 @@ def test_build_and_render_list_cards():
         "异火卡缺本宗传承行"
     # 宝库卡片直接消费 core.shop_list()（与纯文本兜底同源），以它为准而非 cfg.HERBS 字面量
     assert d_sh["title"] == "随身商店" and len(d_sh["rows"]) == len(core.shop_list())
-    assert d_bg["title"] == "包裹" and "24 格" in d_bg["subtitle"]
+    assert d_bg["title"] == "包裹" and "24 格" in d_bg["subtitle"] \
+        and "/" not in d_bg["subtitle"], "背包副标题不应出现 N/24 这种像超容量的写法"
 
     # 渲染层：正常环境应产出合法 PNG（机器验收）
     pngs = {
@@ -392,8 +393,16 @@ def test_card_theme_resolve_priority():
     try:
         card_theme._CACHE = None
         card_theme._CACHE_MTIME = -1.0
-        assert card_theme.resolve_default() == card_theme.GAME
-        assert card_theme.resolve("10001") == card_theme.GAME
+        # 2026-11-23「默认简约」：无偏好文件时兜底必须是浅色现代风
+        assert card_theme.resolve_default() == card_theme.LIGHT
+        assert card_theme.resolve("10001") == card_theme.LIGHT
+        card_theme.set_default("游戏")          # 先把全局设成游戏，验证个人/全局优先级
+        assert card_theme.resolve("10001") == card_theme.GAME   # 跟全局
+        card_theme.set_user("10001", "浅色")
+        assert card_theme.resolve("10001") == card_theme.LIGHT  # 个人优先
+        assert card_theme.resolve("10002") == card_theme.GAME   # 无个人偏好跟全局
+        card_theme.clear_user("10001")
+        assert card_theme.resolve("10001") == card_theme.GAME   # 清除回全局
         card_theme.set_default("浅色")
         assert card_theme.resolve(None) == card_theme.LIGHT
         assert card_theme.resolve("10001") == card_theme.LIGHT   # 跟全局
@@ -405,6 +414,8 @@ def test_card_theme_resolve_priority():
         card_theme.clear_user("10001")
         assert card_theme.resolve("10001") == card_theme.LIGHT   # 清除回全局
         assert card_theme.normalize("现代风") == card_theme.LIGHT
+        assert card_theme.normalize("简约") == card_theme.LIGHT   # 用户口语别名
+        assert card_theme.normalize("游戏本体") == card_theme.GAME
         assert card_theme.normalize("乱写") is None
         assert tmp.is_file() and '"default"' in tmp.read_text(encoding="utf-8")
     finally:

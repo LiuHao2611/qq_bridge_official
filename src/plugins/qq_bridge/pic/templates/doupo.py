@@ -60,15 +60,16 @@ from . import doupo_ui as UI
 
 # ---- 双主题：当前渲染风格（contextvar，并发安全）----
 # 由 doupo/card.py 在每次渲染前 set（个人偏好 > 全局默认）；模板的 _pal() 读取。
-# 默认 STYLE_GAME=游戏本体风，未设置时一律游戏风（向后兼容全部既有测试）。
+# 2026-11-23 用户「默认为简约主题」：未设置时一律浅色现代风（STYLE_LIGHT）。
+# 实际出图由 card.py 每次渲染前按个人偏好/全局默认 set；这里只是无人调用时的兜底。
 _doupo_style: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "doupo_card_style", default=UI.STYLE_GAME)
+    "doupo_card_style", default=UI.STYLE_LIGHT)
 
 
 def set_style(style: str | None) -> contextvars.Token:
     """设置本协程后续斗破卡渲染风格；返回 token 供 reset。"""
     s = (style or "").strip().lower()
-    return _doupo_style.set(s if s in UI.STYLES else UI.STYLE_GAME)
+    return _doupo_style.set(s if s in UI.STYLES else UI.STYLE_LIGHT)
 
 
 def reset_style(token: contextvars.Token) -> None:
@@ -124,7 +125,7 @@ C_MP_TO = "#0C9FB0"
 # ---- 浅色现代风专用 C_*（2026-11-23，取自 11-22 commit 0312077 的 2026 前沿配色）----
 # 只换颜色不换键结构；名字前缀 L_ 与游戏风一一对应，_pal() 按当前 style 选一套。
 L_PAGE = "#F6F3FB";        L_CARD = "#FFFFFF";    L_BORDER = "#E4DCF2"
-L_TEXT = "#26213A";        L_DIM = "#7A7391";     L_TITLE = "#5B3FA8"
+L_TEXT = "#26213A";        L_DIM = "#56506E";     L_TITLE = "#5B3FA8"
 L_ACCENT = "#C13584";      L_LINE = "#E9E3F3";    L_TRACK = "#ECE7F5"
 L_BAR_FROM = "#6D5AE0";    L_BAR_TO = "#B84FA8"
 L_BAR_READY_FROM = "#FF8A5B"; L_BAR_READY_TO = "#F5A524"

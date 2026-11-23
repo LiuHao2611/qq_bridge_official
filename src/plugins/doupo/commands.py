@@ -1713,7 +1713,7 @@ async def cmd_bag(store, qq) -> str:
         return NOT_ENTERED
     items = core.bag_slots(p)
     locked = await store.item_locks(str(qq))
-    out = [f"🎒 包裹（{len(items)}/24 格）　💰 {p['gold']}"]
+    out = [f"🎒 包裹（{len(items)} 种物品，展示前 24 格）　💰 {p['gold']}"]
     # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
     known = {r["name"]: (cfg.recipe_impl(r) or r["desc"]) for r in cfg.RECIPES}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
