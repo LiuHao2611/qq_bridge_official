@@ -109,13 +109,13 @@ def _style_for(data: dict | None) -> tuple[str, object, object]:
         token = tpl.set_style(style)
         return style, token, tpl
     except Exception as e:  # noqa: BLE001 — 主题注入绝不能让卡片渲染失败
-        log.debug("斗破主题注入失败，回退游戏本体风：%s: %s", type(e).__name__, e)
+        log.debug("斗破主题注入失败，回退简约风：%s: %s", type(e).__name__, e)
         if token is not None and tpl is not None:
             try:
                 tpl.reset_style(token)
             except Exception:  # noqa: BLE001
                 pass
-        return card_theme.GAME, None, None
+        return card_theme.LIGHT, None, None
 
 
 def _reset_style(token, tpl) -> None:
@@ -749,7 +749,10 @@ def build_bag_data(p: dict, locked=None) -> dict:
         rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
     return {
         "icon": "diamond", "title": "包裹",
-        "subtitle": f"{len(items)}/24 格 · 金币 {int(p.get('gold', 0))}",
+        # 2026-11-23 修「57/24 格」误导：len(items)=物品**种数**（可 >24），
+        # 卡片只展示前 24 格（见上方 items[:24]）。用斜杠连接会被读成「超容量」。
+        # 改为显式说明：共 N 种、本卡展示前 24 格。
+        "subtitle": f"{len(items)} 种物品 · 本卡展示前 24 格 · 金币 {int(p.get('gold', 0))}",
         # 2026-11-23 用户「背包别太长，学游戏展示方式」：游戏实机包裹是 4×6 网格，
         # 故 4 列紧凑格子（每格只画名称+数量），24 格 6 行看完，不再是一长列带说明。
         "columns": 4,
