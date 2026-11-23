@@ -653,14 +653,46 @@ for _r in RECIPES:
     _r.setdefault("src", "游戏自设丹方")
     _r.setdefault("need", {})
 
-#: 炼药师品阶（实机：开局「四品炼药师 0/2080」）
+#: 炼药师品阶。下标 0..8 = 一品..九品（**老存档语义不变，绝不整体挪位**）。
+#: 2026-11-23 起新号从「未入品」起步（原著：萧炎开局连一品炼药师都不是）：
+#: 未入品用独立索引 ALCH_NONE=-1，绝不塞进 ALCHEMIST 表 —— 一塞就得把所有老存档
+#: alch 值整体 +1，牵连数据库/测试/傀儡门槛，风险不可控。
 ALCHEMIST = [
     ("一品", 400), ("二品", 800), ("三品", 1400), ("四品", 2080),
     ("五品", 3600), ("六品", 6000), ("七品", 9000), ("八品", 13000),
     ("九品", 0),
 ]
-ALCH_START = 3          # 四品
+#: 未入品专用索引。⚠️ -1 直接拿去 ALCHEMIST[-1] 会静默取到九品（门槛 0），
+#: 导致新号首炉白跳一品、面板显示「九品炼药师」——所有下标访问必须走 alch_tier()。
+ALCH_NONE = -1
+ALCH_NONE_NAME = "未入品"
+#: 新号起步品阶。老存档已有 alch=0..8，不受此常量影响。
+ALCH_START = ALCH_NONE
 ALCH_MAX = len(ALCHEMIST) - 1
+
+
+def alch_tier(idx: int) -> tuple[str, int]:
+    """炼药师索引 → (品阶名, 升下一阶所需炼药经验)。**所有 alch 下标访问的唯一入口**。
+
+    - ``ALCH_NONE(-1)`` → ``("未入品", 400)``：门槛直接取一品的 ALCHEMIST[0][1]，
+      不新造魔数（未入品攒够一品的经验即晋一品）。
+    - ``0..ALCH_MAX`` → ALCHEMIST[idx] 原样返回。
+    - 其它越界 → 显式 ValueError（最高纪律：不降级、不静默兜底成九品）。
+    """
+    i = int(idx)
+    if i == ALCH_NONE:
+        return (ALCH_NONE_NAME, int(ALCHEMIST[0][1]))
+    if 0 <= i <= ALCH_MAX:
+        name, need = ALCHEMIST[i]
+        return (str(name), int(need))
+    raise ValueError("非法炼药师品阶索引 %r（合法范围 %d..%d 或 %d=未入品）"
+                     % (idx, 0, ALCH_MAX, ALCH_NONE))
+
+
+def alch_label(idx: int) -> str:
+    """品阶展示串。未入品不加「炼药师」后缀（原著里此时尚未入品）。"""
+    name, _ = alch_tier(idx)
+    return name if int(idx) == ALCH_NONE else ("%s炼药师" % name)
 
 # 炼药成功率：品阶越高越稳（m.java：炼药师等级会影响炼制丹药时的成功几率）
 def craft_rate(alch_idx: int) -> float:

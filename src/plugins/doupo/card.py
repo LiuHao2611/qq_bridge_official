@@ -147,9 +147,9 @@ def build_data(p: dict) -> dict:
     exp = int(p.get("exp", 0))
     realm_max = lv >= cfg.MAX_LV
 
-    alch = cfg.ALCHEMIST[int(p.get("alch", 0))]
-    alch_name = "%s炼药师" % alch[0]   # alch[0] 为品阶名（如「二品」）
-    alch_need = int(alch[1])
+    _alch_idx = int(p.get("alch", 0))
+    alch_name = cfg.alch_label(_alch_idx)   # 未入品→「未入品」，其余→「二品炼药师」
+    alch_need = cfg.alch_tier(_alch_idx)[1]
     alch_exp = int(p.get("alch_exp", 0))
 
     wv = core.weapon_panel(p)
@@ -828,7 +828,7 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     ``page`` / ``total_pages`` / ``total_avail`` 透出（供卡面与翻页按钮共用）。
     """
     alch_idx = int(p.get("alch", 0))
-    alch = cfg.ALCHEMIST[alch_idx]
+    alch_label = cfg.alch_label(alch_idx)
     chunk, page, total_pages = core.recipes_page(p, page)
     total_avail = len(core.available_recipes(p))
 
@@ -877,8 +877,8 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     return {
         "icon": "wand",
         "title": "炼药",
-        "subtitle": ("%s炼药师 · 低阶更稳/越阶骤降 · 药渣 ×%d" %
-                     (alch[0], core.count_item(p, "药渣"))),
+        "subtitle": ("%s · 低阶更稳/越阶骤降 · 药渣 ×%d" %
+                     (alch_label, core.count_item(p, "药渣"))),
         "page": page,
         "total_pages": total_pages,
         "total_avail": total_avail,

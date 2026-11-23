@@ -598,15 +598,16 @@ async def cmd_panel(store, qq) -> str:
     lv = int(p["lv"])
     need = cfg.exp_need(lv)
     exp_line = f"{_fmt(p['exp'])}/{_fmt(need)}" if need else f"{_fmt(p['exp'])}（已至巅峰）"
-    alch = cfg.ALCHEMIST[int(p.get("alch", 0))]
-    alch_need = alch[1]
+    _alch_idx = int(p.get("alch", 0))
+    alch_label = cfg.alch_label(_alch_idx)
+    alch_need = cfg.alch_tier(_alch_idx)[1]
     wv = core.weapon_panel(p)
 
     rows = [
         f"👤 【{p['name']}】",
         f"境界　{cfg.full_realm(lv)}",
         f"　　　{exp_line}　{_bar(int(p['exp']), need)}",
-        f"炼药　{alch[0]}炼药师",
+        f"炼药　{alch_label}",
         f"　　　{_fmt(p.get('alch_exp', 0))}/{_fmt(alch_need) if alch_need else '—'}"
         f"　{_bar(int(p.get('alch_exp', 0)), alch_need)}",
         "",
@@ -1553,12 +1554,12 @@ async def cmd_recipes(store, qq, page=1) -> str:
     if not p:
         return NOT_ENTERED
     alch_idx = int(p.get("alch", 0))
-    alch = cfg.ALCHEMIST[alch_idx]
+    alch_label = cfg.alch_label(alch_idx)
     chunk, page, total_pages = core.recipes_page(p, page)
     avail = core.available_recipes(p)
     # 2026-11-18：成功率按「炼药师品阶 vs 丹药品阶」变化，成数表述不用百分号。
     # 每枚丹药行给该玩家真实把握，杜绝「四品炼一品和炼四品一个概率」。
-    out = [f"⚗️ 炼药　{alch[0]}炼药师",
+    out = [f"⚗️ 炼药　{alch_label}",
            f"　高品阶炼低阶更稳（每低1档加成）· 越阶骤降（越1档剩二成、越2档几无）",
            f"　境界 {cfg.full_realm(int(p.get('lv', 1)))} · 可用丹方 {len(avail)} 枚 · 第 {page}/{total_pages} 页"]
     for grade in cfg.GRADE_ORDER:
