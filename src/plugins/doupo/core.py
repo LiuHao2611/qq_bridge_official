@@ -271,23 +271,43 @@ def flame_exp_mult(p) -> float:
     return 1.0 + 0.5 * int((p.get("flames") or {}).get("陨落心炎", 0))
 
 
+def encounter_exp_divisor(lv: int) -> float:
+    """整场经验池除数 K(lv)——**前快后慢曲线的唯一计算函数**（2026-11-23）。
+
+    K(lv) = K_BASE × (1 + K_RAMP × (lv-1)/(MAX_LV-1))
+      * lv=1        → K_BASE（≈4，前期 2.67 场/级，不卡新手）
+      * lv=MAX_LV-1 → K_BASE×(1+K_RAMP)（≈27.8，后期显著变慢）
+      * K_RAMP=0    → 退回恒定 K_BASE（旧行为，变异反证用）
+
+    🚨 单一真源：反解、实战、守门测试都必须调本函数，禁止在别处手抄公式。
+    系数乘在**除数**上（分母越大发得越少），实现「单场经验增长率 < 需求增长率」
+    ⇒ 每级所需场数随等级单调增加 ⇒ 前快后慢。
+    """
+    base = float(cfg.ENCOUNTER_EXP_BUDGET_DIVISOR)
+    ramp = float(getattr(cfg, "ENCOUNTER_EXP_K_RAMP", 0))
+    span = max(1, int(cfg.MAX_LV) - 1)
+    clamped = max(1, min(int(cfg.MAX_LV), int(lv)))
+    return base * (1.0 + ramp * (clamped - 1) / float(span))
+
+
 def encounter_exp_budget(p: dict, enemy_count: int) -> int:
-    """整场遭遇战的修为总预算（2026-11-22 经验平衡 v0.2，唯一真源）。
+    """整场遭遇战的修为总预算（2026-11-22 v0.2 + 2026-11-23 前快后慢，唯一真源）。
 
     一场战斗的回报由「这场打几只怪」改成「这场战斗本身」：
-        budget = exp_need(玩家lv) / K × 异火倍率 × (1 + min(CAP, STEP×(敌数-1)))
+        budget = exp_need(玩家lv) / K(lv) × 异火倍率 × (1 + min(CAP, STEP×(敌数-1)))
     多敌只给有限补偿（每多 1 敌 +10%，封顶 +40%），不再逐敌线性累加。
     ``enemy_count`` 是**整场抽取的敌数**（encounter 开场已知），故预算在战斗中固定；
     实际发放按「已击败份额 = budget / enemy_count × 已胜敌数」，中途战败不补发。
 
-    K / STEP / CAP 全部来自 config，本函数不重复定义（单一真源）。
+    K(lv) / STEP / CAP 全部来自 config（K(lv) 经 encounter_exp_divisor），
+    本函数不重复定义（单一真源）。
     """
     lv = int(p.get("lv", 1))
     need = cfg.exp_need(lv)
     n = max(1, int(enemy_count))
     hard = min(float(cfg.ENCOUNTER_EXP_HARD_CAP),
                float(cfg.ENCOUNTER_EXP_HARD_STEP) * (n - 1))
-    budget = int(need / float(cfg.ENCOUNTER_EXP_BUDGET_DIVISOR)
+    budget = int(need / encounter_exp_divisor(lv)
                  * flame_exp_mult(p) * (1.0 + hard))
     return max(0, budget)
 

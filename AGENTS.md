@@ -3501,3 +3501,10 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
 - 🔑 `PEAK_LV=102`/`MAX_LV=103`/`exp_need(103)=0`：塔/周本锚点必须显式 `min(...,PEAK_LV)`，否则 52 层后/满级快照奖励归零（假机制）。
 - 验收：新测试 295 断言+6 变异反证全绿/全红；全套 `test_doupo_*.py` 487 passed/3 failed（3 个既有 stub 问题，基线保持）；文档 `--strict` PASS。主号 luck80 0.57→2.35 场/级。**Q5 异火加成塔周本、Q7 显示可突破N次未改（待拍板）**。
 - 🔑 守门真 python = `C:/Users/L/AppData/Local/Programs/Python/Python313/python.exe`（pytest 9.1.1）；WorkBuddy 自带 python 无 pip/pytest，别再用它跑。上线需用户明确授权走 `tools/phone_deploy.py push`。
+
+### v0.3 前快后慢曲线（2026-11-23，用户二轮反馈「10天斗帝太快」+ 拍板「前快后慢40-60天」）
+- 🚨 **K 不再是常数**：`config.ENCOUNTER_EXP_BUDGET_DIVISOR=4` 语义变为 **K_BASE**（低等级除数）；新增 `config.ENCOUNTER_EXP_K_RAMP=11`；唯一计算函数 `core.encounter_exp_divisor(lv)=K_BASE×(1+K_RAMP×(lv-1)/(MAX_LV-1))`。`encounter_exp_budget` 改调它。**禁止在别处手抄公式**（反解/实战/测试同源）。
+- 为什么 RAMP=11：全功能模拟真跑 `K_RAMP` 6→29天/9→37天/11→41天/12→42天；副本经验（塔/遗迹锚 exp_need，不受 RAMP 影响）构成下限，RAMP>11 递减 ⇒ 取 11。真实代码 `sim_full_playthrough.py 45` → 36 天满级（errors=0），报告原「10天」→36 天。前快后慢：day1 Lv13/day10 Lv44/day15 Lv58。
+- 🔑 K_RAMP=0 = 退回旧的匀速升级（变异反证 M7 钉住，测试必红）；只改 K_BASE 不改 RAMP 仍是匀速——两者缺一不可。
+- 守门 `tests/test_doupo_exp_balance.py`：新增 `test_exp_divisor_front_fast_back_slow`（K 单调/lv1=K_BASE/末级倍数=1+RAMP×(MAX-2)/(MAX-1)/体感≥4倍）、M7 变异；原 0.375 期望改为经 `encounter_exp_divisor(50)` 计算（杜绝手抄）。300 断言 + 7 变异全绿全红，相关套件 112 passed。
+- 设计文档 `docs/斗破_升级节奏与爬塔500层_重设计方案_2026-11-23.md`（v0.2）：**只落地了升级部分**；爬塔 400-500 层（P-B/C/D）未拍板未动，别误当已做。

@@ -11,7 +11,7 @@
   6. 两个零依赖镜像（tower_data / weekly_data）与 config 曲线逐等级一致；
   7. 存量玩家修为不因本次改动被扣减（encounter 只增不减，战败只发已胜份额）。
 
-prove-it（6 组变异反证，见文件尾 mutation_checks）：把关键规则故意改坏，
+prove-it（7 组变异反证，见文件尾 mutation_checks）：把关键规则故意改坏，
 下列断言必须变红；改回来必须变绿。从来没红过的断言等于没加。
 
 运行：python tests/test_doupo_exp_balance.py
@@ -88,15 +88,41 @@ def test_encounter_variance_converges():
     for n in (1, 2, 3, 4, 5):
         b = core.encounter_exp_budget(p, n)
         ratios.append(b / float(need))
-    # 1 敌档 ≈ need/K × 异火 = 0.375；5 敌档封顶 ×1.4 = 0.525。
-    eq(round(ratios[0], 4), 0.375, "1敌单场=0.375级")
-    eq(round(ratios[-1], 4), 0.525, "5敌单场=0.525级(封顶1.4)")
+    # 前快后慢（2026-11-23）：K(50)=K_BASE×(1+RAMP×49/102)，1敌 ratio=异火1.5/K(50)，5敌封顶×1.4。
+    # K(lv) 唯一由 core.encounter_exp_divisor 算，这里用同函数推期望值，杜绝手抄（RAMP 改了自动跟随）。
+    k50 = core.encounter_exp_divisor(50)
+    eq(round(ratios[0], 4), round(1.5 / k50, 4), "1敌单场=异火/K(50)")
+    eq(round(ratios[-1], 4), round(1.5 / k50 * 1.4, 4), "5敌单场封顶×1.4")
     # 核心：最大/最小 < 1.5（旧口径是 5.0），方差收敛。
     check(max(ratios) / min(ratios) < 1.5,
           f"多敌方差必须收敛到<1.5倍 (got {max(ratios)/min(ratios):.3f})")
     # 单调：敌数越多预算不减（硬仗不倒扣）。
     check(all(ratios[i] <= ratios[i + 1] for i in range(4)),
           "整场预算随敌数单调不减")
+
+
+def test_exp_divisor_front_fast_back_slow():
+    """前快后慢：每级所需场数随等级单调增加；高等级明显慢于低等级（用户 40-60 天目标）。
+
+    守的是玩家体感：低级升一级快、高级升一级慢。用 K(lv) 唯一函数验证
+    单调性 + 前后档倍数；RAMP=0（变异）会让全场级 K 恒定 ⇒ 本测试必红。
+    """
+    lvs = (1, 10, 30, 50, 80, cfg.MAX_LV - 1)
+    ks = [core.encounter_exp_divisor(lv) for lv in lvs]
+    # 单调不降
+    check(all(ks[i] <= ks[i + 1] for i in range(len(ks) - 1)),
+          f"K(lv) 必须随等级单调不降 (got {[round(k,2) for k in ks]})")
+    # 低等级 K=K_BASE（前期不被拖慢）
+    eq(round(ks[0], 4), float(cfg.ENCOUNTER_EXP_BUDGET_DIVISOR), "lv1 的 K=基础值")
+    # 后/前倍数 = 1+RAMP×(MAX_LV-2)/(MAX_LV-1)（末级是 MAX_LV-1，分母 MAX_LV-1）
+    ramp = float(cfg.ENCOUNTER_EXP_K_RAMP)
+    check(ramp > 0, "K_RAMP 必须>0（=0 退回恒定K=旧的匀速升级）")
+    ratio = ks[-1] / ks[0]
+    expected_ratio = 1.0 + ramp * (cfg.MAX_LV - 2) / float(cfg.MAX_LV - 1)
+    check(abs(ratio - expected_ratio) < 0.01,
+          f"末级/初级 K 倍数应≈{expected_ratio:.2f} (got {ratio:.2f})")
+    # 体感：高级每级场数是低级的数倍（真慢下来，不是虚标）
+    check(ratio >= 4.0, f"后期每级场数至少是前期 4 倍才算真前快后慢 (got {ratio:.2f})")
 
 
 def test_hard_comp_is_capped():
@@ -251,15 +277,28 @@ def mutation_checks():
         core.encounter_exp_budget = orig_budget
     results.append(("M1 退回按敌数线性累加", m1_red))
 
-    # --- M2: K 改回 2 => 1敌 ratio 从 0.375 变 0.75 ---
+    # --- M2: K_BASE 翻倍 => 同样 lv50 的单场 ratio 必明显下降 ---
     orig_k = cfg.ENCOUNTER_EXP_BUDGET_DIVISOR
     try:
-        cfg.ENCOUNTER_EXP_BUDGET_DIVISOR = 2
-        b = core.encounter_exp_budget({"lv": 50, "flames": {"陨落心炎": 1}}, 1)
-        m2_red = round(b / float(cfg.exp_need(50)), 4) != 0.375
+        normal = core.encounter_exp_budget({"lv": 50, "flames": {"陨落心炎": 1}}, 1) \
+            / float(cfg.exp_need(50))
+        cfg.ENCOUNTER_EXP_BUDGET_DIVISOR = orig_k * 2
+        changed = core.encounter_exp_budget({"lv": 50, "flames": {"陨落心炎": 1}}, 1) \
+            / float(cfg.exp_need(50))
+        m2_red = changed < normal * 0.6
     finally:
         cfg.ENCOUNTER_EXP_BUDGET_DIVISOR = orig_k
-    results.append(("M2 K改回2", m2_red))
+    results.append(("M2 K_BASE翻倍→ratio腰斩", m2_red))
+
+    # --- M7: K_RAMP=0 退回恒定K（旧匀速升级）=> 前快后慢守门必红 ---
+    orig_ramp = cfg.ENCOUNTER_EXP_K_RAMP
+    try:
+        cfg.ENCOUNTER_EXP_K_RAMP = 0
+        ks = [core.encounter_exp_divisor(lv) for lv in (1, 50, cfg.MAX_LV - 1)]
+        m7_red = abs(ks[-1] / ks[0] - 1.0) < 0.01  # 恒定 ⇒ 末/初=1 ⇒ 前快后慢测必红
+    finally:
+        cfg.ENCOUNTER_EXP_K_RAMP = orig_ramp
+    results.append(("M7 RAMP=0退回匀速升级", m7_red))
 
     # --- M3: hard_step = 0 => 5敌补偿消失，b5==b1 ---
     orig_step = cfg.ENCOUNTER_EXP_HARD_STEP
@@ -324,7 +363,7 @@ def main():
     print("mutation checks (red=caught):")
     for name, red in m:
         print(f"  {'RED ' if red else 'green'}  {name}")
-    # 6 组变异全部应被抓到（红）。
+    # 7 组变异全部应被抓到（红）。
     ok = not FAILS and all(red for name, red in m)
     print("RESULT", "PASS" if ok else "FAIL")
     return 0 if ok else 1
