@@ -46,6 +46,7 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import io
 from functools import lru_cache
 
@@ -56,7 +57,26 @@ from ..canvas import Canvas, rounded_mask
 from ..theme import Theme
 from . import doupo_style as S
 from . import doupo_ui as UI
-from .doupo_ui import G as _UI_G
+
+# ---- 双主题：当前渲染风格（contextvar，并发安全）----
+# 由 doupo/card.py 在每次渲染前 set（个人偏好 > 全局默认）；模板的 _pal() 读取。
+# 默认 STYLE_GAME=游戏本体风，未设置时一律游戏风（向后兼容全部既有测试）。
+_doupo_style: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "doupo_card_style", default=UI.STYLE_GAME)
+
+
+def set_style(style: str | None) -> contextvars.Token:
+    """设置本协程后续斗破卡渲染风格；返回 token 供 reset。"""
+    s = (style or "").strip().lower()
+    return _doupo_style.set(s if s in UI.STYLES else UI.STYLE_GAME)
+
+
+def reset_style(token: contextvars.Token) -> None:
+    _doupo_style.reset(token)
+
+
+def current_style() -> str:
+    return _doupo_style.get()
 
 # ---- 固定配色（深色玄幻「游戏本体 UI」风，2026-11-22 第三次重做）----
 # 依据：用户看了解包素材 D:/AI/doupo 的斗破 HD 实机截图后明确要求「要游戏的效果、
@@ -101,6 +121,47 @@ C_HP_TO = "#DD3E5C"
 C_MP_FROM = "#5EE0D2"
 C_MP_TO = "#0C9FB0"
 
+# ---- 浅色现代风专用 C_*（2026-11-23，取自 11-22 commit 0312077 的 2026 前沿配色）----
+# 只换颜色不换键结构；名字前缀 L_ 与游戏风一一对应，_pal() 按当前 style 选一套。
+L_PAGE = "#F6F3FB";        L_CARD = "#FFFFFF";    L_BORDER = "#E4DCF2"
+L_TEXT = "#26213A";        L_DIM = "#7A7391";     L_TITLE = "#5B3FA8"
+L_ACCENT = "#C13584";      L_LINE = "#E9E3F3";    L_TRACK = "#ECE7F5"
+L_BAR_FROM = "#6D5AE0";    L_BAR_TO = "#B84FA8"
+L_BAR_READY_FROM = "#FF8A5B"; L_BAR_READY_TO = "#F5A524"
+L_PILL_BG = "#E4F7EF";     L_PILL_LINE = "#B8E6D2"; L_PILL_TEXT = "#0F8A67"
+L_CHIP_BG = "#F0EAFB";     L_CHIP_LINE = "#D0BEF0"; L_CHIP_TEXT = "#6B3FA8"
+L_CELL_BG = "#F7F4FC";     L_CELL_LINE = "#E4DCF2"
+L_HP_FROM = "#FF8A96";     L_HP_TO = "#DD3E5C"
+L_MP_FROM = "#5EE0D2";     L_MP_TO = "#0C9FB0"
+
+
+def _legacy_palette(style: str) -> dict[str, str]:
+    """12 张卡共用的「旧键」配色（page_color/card_color/...），按风格取一套。"""
+    if style == UI.STYLE_LIGHT:
+        return {
+            "page_color": L_PAGE, "card_color": L_CARD, "border_color": L_BORDER,
+            "text_color": L_TEXT, "dim_color": L_DIM, "title_color": L_TITLE,
+            "accent_color": L_ACCENT, "line_color": L_LINE, "track_color": L_TRACK,
+            "bar_from": L_BAR_FROM, "bar_to": L_BAR_TO,
+            "bar_ready_from": L_BAR_READY_FROM, "bar_ready_to": L_BAR_READY_TO,
+            "pill_bg": L_PILL_BG, "pill_line": L_PILL_LINE, "pill_text": L_PILL_TEXT,
+            "chip_bg": L_CHIP_BG, "chip_line": L_CHIP_LINE, "chip_text": L_CHIP_TEXT,
+            "cell_bg": L_CELL_BG, "cell_line": L_CELL_LINE,
+            "hp_from": L_HP_FROM, "hp_to": L_HP_TO, "mp_from": L_MP_FROM, "mp_to": L_MP_TO,
+        }
+    return {
+        "page_color": C_PAGE, "card_color": C_CARD, "border_color": C_BORDER,
+        "text_color": C_TEXT, "dim_color": C_DIM, "title_color": C_TITLE,
+        "accent_color": C_ACCENT, "line_color": C_LINE, "track_color": C_TRACK,
+        "bar_from": C_BAR_FROM, "bar_to": C_BAR_TO,
+        "bar_ready_from": C_BAR_READY_FROM, "bar_ready_to": C_BAR_READY_TO,
+        "pill_bg": C_PILL_BG, "pill_line": C_PILL_LINE, "pill_text": C_PILL_TEXT,
+        "chip_bg": C_CHIP_BG, "chip_line": C_CHIP_LINE, "chip_text": C_CHIP_TEXT,
+        "cell_bg": C_CELL_BG, "cell_line": C_CELL_LINE,
+        "hp_from": C_HP_FROM, "hp_to": C_HP_TO, "mp_from": C_MP_FROM, "mp_to": C_MP_TO,
+    }
+
+
 # ---- 排版 ----
 PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
                       # 画在 10、内线 17，PAD=28 时内容距框线只剩 11px，
@@ -141,22 +202,17 @@ def _fit(s: str, max_w: int, size: int, role: str = "regular") -> str:
 
 
 def _pal(t: Theme) -> dict[str, str]:
-    """本卡生效配色：专属覆盖 > 硬编码默认。"""
+    """本卡生效配色：专属覆盖 > 当前主题的默认值。
+
+    双主题（2026-11-23）：按 contextvar 里的 style 选「旧键」配色 + 内核 G 表；
+    主题编辑器的 bg_overrides["doupo"] 仍可逐键覆盖，优先级最高（向后兼容）。
+    """
+    style = current_style()
     ov = getattr(t, "bg_overrides", None) or {}
     v = ov.get("doupo") if isinstance(ov.get("doupo"), dict) else {}
-    defaults = {
-        "page_color": C_PAGE, "card_color": C_CARD, "border_color": C_BORDER,
-        "text_color": C_TEXT, "dim_color": C_DIM, "title_color": C_TITLE,
-        "accent_color": C_ACCENT, "line_color": C_LINE, "track_color": C_TRACK,
-        "bar_from": C_BAR_FROM, "bar_to": C_BAR_TO,
-        "bar_ready_from": C_BAR_READY_FROM, "bar_ready_to": C_BAR_READY_TO,
-        "pill_bg": C_PILL_BG, "pill_line": C_PILL_LINE, "pill_text": C_PILL_TEXT,
-        "chip_bg": C_CHIP_BG, "chip_line": C_CHIP_LINE, "chip_text": C_CHIP_TEXT,
-        "cell_bg": C_CELL_BG, "cell_line": C_CELL_LINE,
-        "hp_from": C_HP_FROM, "hp_to": C_HP_TO, "mp_from": C_MP_FROM, "mp_to": C_MP_TO,
-    }
-    # 游戏风专用键（doupo_ui 消费）：默认值直接取内核配色，避免两处定义漂移。
-    for _k, _v in _UI_G.items():
+    defaults = _legacy_palette(style)
+    # 内核专用键（doupo_ui 消费）：默认值取对应主题的内核配色，避免两处定义漂移。
+    for _k, _v in UI.palette(style).items():
         if _k not in defaults:
             defaults[_k] = _v
     out: dict[str, str] = {}

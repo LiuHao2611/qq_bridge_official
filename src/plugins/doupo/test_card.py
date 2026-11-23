@@ -378,6 +378,78 @@ def test_render_panel_avatar_pixels_are_inside_card():
 
 
 # ---------------------------------------------------------------------------
+# 双主题偏好（2026-11-23）：个人 > 全局 > game
+# ---------------------------------------------------------------------------
+def test_card_theme_resolve_priority():
+    """个人偏好 > 全局默认 > game；中文别名与清除回退。"""
+    import tempfile
+    from pathlib import Path
+    from doupo import card_theme
+
+    real_path, real_cache, real_mtime = card_theme.path, card_theme._CACHE, card_theme._CACHE_MTIME
+    tmp = Path(tempfile.mkdtemp(prefix="doupo_theme_case_")) / "doupo_theme.json"
+    card_theme.path = lambda: tmp
+    try:
+        card_theme._CACHE = None
+        card_theme._CACHE_MTIME = -1.0
+        assert card_theme.resolve_default() == card_theme.GAME
+        assert card_theme.resolve("10001") == card_theme.GAME
+        card_theme.set_default("浅色")
+        assert card_theme.resolve(None) == card_theme.LIGHT
+        assert card_theme.resolve("10001") == card_theme.LIGHT   # 跟全局
+        card_theme.set_user("10001", "游戏")
+        assert card_theme.resolve("10001") == card_theme.GAME    # 个人优先
+        assert card_theme.resolve("10002") == card_theme.LIGHT
+        assert card_theme.status("10001") == {
+            "default": card_theme.LIGHT, "user": card_theme.GAME, "effective": card_theme.GAME}
+        card_theme.clear_user("10001")
+        assert card_theme.resolve("10001") == card_theme.LIGHT   # 清除回全局
+        assert card_theme.normalize("现代风") == card_theme.LIGHT
+        assert card_theme.normalize("乱写") is None
+        assert tmp.is_file() and '"default"' in tmp.read_text(encoding="utf-8")
+    finally:
+        card_theme.path = real_path
+        card_theme._CACHE = real_cache
+        card_theme._CACHE_MTIME = real_mtime
+
+
+def test_two_themes_produce_distinct_png():
+    """个人偏好切到浅色后，人物卡字节与游戏风不同（缓存 key 含 style，不串图）。"""
+    import tempfile
+    from pathlib import Path
+    from doupo import card_theme
+
+    real_path, real_cache, real_mtime = card_theme.path, card_theme._CACHE, card_theme._CACHE_MTIME
+    tmp = Path(tempfile.mkdtemp(prefix="doupo_theme_png_")) / "doupo_theme.json"
+    card_theme.path = lambda: tmp
+    try:
+        card_theme._CACHE = None
+        card_theme._CACHE_MTIME = -1.0
+        pic = card._load_pic()
+        assert pic is not None
+        p = _player(3)
+        card_theme.set_default(card_theme.GAME)
+        try:
+            pic.pic_cache.clear()
+        except Exception:
+            pass
+        png_game = asyncio.run(card.render_panel(p))
+        card_theme.set_default(card_theme.LIGHT)
+        try:
+            pic.pic_cache.clear()
+        except Exception:
+            pass
+        png_light = asyncio.run(card.render_panel(p))
+        assert png_game and png_light
+        assert png_game[:8] == b"\x89PNG\r\n\x1a\n" == png_light[:8]
+        assert png_game != png_light, "两主题人物卡字节相同 → 缓存串图或配色没切换"
+    finally:
+        card_theme.path = real_path
+        card_theme._CACHE = real_cache
+        card_theme._CACHE_MTIME = real_mtime
+
+
+# ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
 def _run_all():

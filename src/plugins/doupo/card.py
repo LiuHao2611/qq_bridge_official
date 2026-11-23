@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from . import battle_review as br
+from . import card_theme
 from . import config as cfg
 from . import core
 from . import commands
@@ -84,6 +85,55 @@ def available() -> bool:
     return _load_pic() is not None
 
 
+# ---------------------------------------------------------------------------
+# 双主题渲染注入（2026-11-23）
+# ---------------------------------------------------------------------------
+# 12 张斗破卡共用 doupo.py::_pal()（读 pic 包内的 contextvar）。这里在每次渲染
+# 前按「个人偏好 > 全局默认」set_style，渲染后 reset —— 不改任何 matcher。
+# 关键：style 必须注入 data，因为 pic.render 的磁盘缓存 key 由 params(data) 组成，
+# 不含 contextvar；不注入会导致切主题后命中旧图（两套装在同一 key 上打架）。
+def _style_for(data: dict | None) -> tuple[str, object, object]:
+    """解析本次渲染主题并 set contextvar；返回 (style, token, doupo_tpl)。
+
+    data 里的 ``__qq`` 由 build_*_data 注入（玩家 QQ）；公共卡（菜单/帮助/排行/
+    战报）没有 qq → 走全局默认。调用方必须 :func:`_reset_style` 释放 token。
+    """
+    tpl = None
+    token = None
+    qq = ""
+    try:
+        if isinstance(data, dict):
+            qq = str(data.get("__qq") or "")
+        style = card_theme.resolve(qq or None)
+        tpl = importlib.import_module(f"{_PKG_NAME}.templates.doupo")
+        token = tpl.set_style(style)
+        return style, token, tpl
+    except Exception as e:  # noqa: BLE001 — 主题注入绝不能让卡片渲染失败
+        log.debug("斗破主题注入失败，回退游戏本体风：%s: %s", type(e).__name__, e)
+        if token is not None and tpl is not None:
+            try:
+                tpl.reset_style(token)
+            except Exception:  # noqa: BLE001
+                pass
+        return card_theme.GAME, None, None
+
+
+def _reset_style(token, tpl) -> None:
+    if token is not None and tpl is not None:
+        try:
+            tpl.reset_style(token)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _styled(data: dict | None, style: str) -> dict:
+    """把 style 与去内部键后的 data 拷一份，供 pic.render 参与缓存 key。"""
+    out = dict(data or {})
+    out.pop("__qq", None)      # 内部键不进模板
+    out["__doupo_style"] = style  # 只用于缓存 key 区分；模板忽略未知键
+    return out
+
+
 def build_data(p: dict) -> dict:
     """player dict → doupo 模板参数。
 
@@ -142,19 +192,25 @@ async def render_panel(p: dict, tip: str | None = None) -> bytes | None:
     data = build_data(p)
     if tip is not None:
         data["tip"] = tip
-    # 首选：走完整主题链路（卡片绑定 > 自定义主题 > PIC_THEME > 内置）+ 磁盘缓存
+    data["__qq"] = str(p.get("qq") or "")
+    style, token, tpl = _style_for(data)
+    render_data = _styled(data, style)
     try:
-        return await pic.render("doupo", card=CARD_NAME, width=CARD_WIDTH, data=data)
-    except Exception as e:  # noqa: BLE001
-        log.debug("斗破卡片主题链路渲染失败，尝试内置 light 兜底：%s", e)
-    # 兜底：显式内置 light 主题，绕开主题解析（防止主题配置损坏导致整卡不可用）
-    try:
-        return await asyncio.to_thread(
-            pic.render_sync, "doupo", "light", CARD_NAME, width=CARD_WIDTH, data=data
-        )
-    except Exception as e:  # noqa: BLE001
-        log.warning("斗破卡片渲染失败（已降级为纯文本）：%s: %s", type(e).__name__, e)
-        return None
+        # 首选：走完整主题链路（卡片绑定 > 自定义主题 > PIC_THEME > 内置）+ 磁盘缓存
+        try:
+            return await pic.render("doupo", card=CARD_NAME, width=CARD_WIDTH, data=render_data)
+        except Exception as e:  # noqa: BLE001
+            log.debug("斗破卡片主题链路渲染失败，尝试内置 light 兜底：%s", e)
+        # 兜底：显式内置 light 主题，绕开主题解析（防止主题配置损坏导致整卡不可用）
+        try:
+            return await asyncio.to_thread(
+                pic.render_sync, "doupo", "light", CARD_NAME, width=CARD_WIDTH, data=render_data
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("斗破卡片渲染失败（已降级为纯文本）：%s: %s", type(e).__name__, e)
+            return None
+    finally:
+        _reset_style(token, tpl)
 
 
 def menu_cmd_label(cmd: str) -> str:
@@ -192,19 +248,24 @@ async def render_menu() -> bytes | None:
     if pic is None:
         return None
     data = build_menu_data()
-    # 首选：走完整主题链路（卡片绑定 > 自定义主题 > PIC_THEME > 内置）+ 磁盘缓存
+    style, token, tpl = _style_for(data)
+    render_data = _styled(data, style)
     try:
-        return await pic.render("doupo_menu", card=CARD_MENU_NAME, width=CARD_WIDTH, data=data)
-    except Exception as e:  # noqa: BLE001
-        log.debug("斗破菜单卡主题链路渲染失败，尝试内置 light 兜底：%s", e)
-    # 兜底：显式内置 light 主题，绕开主题解析（防止主题配置损坏导致整卡不可用）
-    try:
-        return await asyncio.to_thread(
-            pic.render_sync, "doupo_menu", "light", CARD_MENU_NAME, width=CARD_WIDTH, data=data
-        )
-    except Exception as e:  # noqa: BLE001
-        log.warning("斗破菜单卡渲染失败（已降级为纯文本）：%s: %s", type(e).__name__, e)
-        return None
+        # 首选：走完整主题链路（卡片绑定 > 自定义主题 > PIC_THEME > 内置）+ 磁盘缓存
+        try:
+            return await pic.render("doupo_menu", card=CARD_MENU_NAME, width=CARD_WIDTH, data=render_data)
+        except Exception as e:  # noqa: BLE001
+            log.debug("斗破菜单卡主题链路渲染失败，尝试内置 light 兜底：%s", e)
+        # 兜底：显式内置 light 主题，绕开主题解析（防止主题配置损坏导致整卡不可用）
+        try:
+            return await asyncio.to_thread(
+                pic.render_sync, "doupo_menu", "light", CARD_MENU_NAME, width=CARD_WIDTH, data=render_data
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("斗破菜单卡渲染失败（已降级为纯文本）：%s: %s", type(e).__name__, e)
+            return None
+    finally:
+        _reset_style(token, tpl)
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +273,8 @@ async def render_menu() -> bytes | None:
 # 斗技自 2026-11-14 起走 doupo_skills 专用模板（描述/伤害/五段条/重点大字），
 # 不再与上面四张共用 doupo_list。
 # ---------------------------------------------------------------------------
-async def _render_pages(template: str, data: dict, card_name: str) -> list[bytes]:
+async def _render_pages(template: str, data: dict, card_name: str,
+                        qq: str | None = None) -> list[bytes]:
     """渲染可分成多页的卡（战斗回看）：返回每页 PNG；失败返回 ``[]`` 走纯文本。
 
     切页是模板的事（``pic.split_pages`` 调模板自己的测量函数），本层只负责
@@ -222,47 +284,65 @@ async def _render_pages(template: str, data: dict, card_name: str) -> list[bytes
     pic = _load_pic()
     if pic is None:
         return []
+    if qq:
+        data = dict(data)
+        data["__qq"] = str(qq)
     try:
         pages = pic.split_pages(template, data, width=CARD_WIDTH)
     except Exception as e:  # noqa: BLE001
         log.warning("%s 分页失败（整份降级纯文本）：%s: %s", card_name, type(e).__name__, e)
         return []
+    # 主题按整份解析一次（分页共享同一风格），qq 来自 data 内部键（若有）。
+    style, token, tpl = _style_for(data)
+    render_pages = [_styled(pg, style) for pg in pages]
     out: list[bytes] = []
-    for i, page_data in enumerate(pages, 1):
-        try:
-            out.append(await pic.render(template, card=card_name,
-                                        width=CARD_WIDTH, data=page_data))
-            continue
-        except Exception as e:  # noqa: BLE001
-            log.debug("%s 第 %d 页主题链路失败，试内置 light：%s", card_name, i, e)
-        try:
-            out.append(await asyncio.to_thread(
-                pic.render_sync, template, "light", card_name,
-                width=CARD_WIDTH, data=page_data))
-        except Exception as e:  # noqa: BLE001
-            log.warning("%s 第 %d/%d 页渲染失败（整份降级纯文本）：%s: %s",
-                        card_name, i, len(pages), type(e).__name__, e)
-            return []
+    try:
+        for i, page_data in enumerate(render_pages, 1):
+            try:
+                out.append(await pic.render(template, card=card_name,
+                                            width=CARD_WIDTH, data=page_data))
+                continue
+            except Exception as e:  # noqa: BLE001
+                log.debug("%s 第 %d 页主题链路失败，试内置 light：%s", card_name, i, e)
+            try:
+                out.append(await asyncio.to_thread(
+                    pic.render_sync, template, "light", card_name,
+                    width=CARD_WIDTH, data=page_data))
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s 第 %d/%d 页渲染失败（整份降级纯文本）：%s: %s",
+                            card_name, i, len(pages), type(e).__name__, e)
+                return []
+    finally:
+        _reset_style(token, tpl)
     log.info("%s 出图 %d 页", card_name, len(out))
     return out
 
 
-async def _render_list(template: str, data: dict, card_name: str) -> bytes | None:
+async def _render_list(template: str, data: dict, card_name: str,
+                       qq: str | None = None) -> bytes | None:
     """渲染任意斗破列表卡：主题链路 → 内置 light 兜底 → None（调用方回纯文本）。"""
     pic = _load_pic()
     if pic is None:
         return None
+    if qq:
+        data = dict(data)
+        data["__qq"] = str(qq)
+    style, token, tpl = _style_for(data)
+    render_data = _styled(data, style)
     try:
-        return await pic.render(template, card=card_name, width=CARD_WIDTH, data=data)
-    except Exception as e:  # noqa: BLE001
-        log.debug("%s 主题链路渲染失败，尝试内置 light 兜底：%s", card_name, e)
-    try:
-        return await asyncio.to_thread(
-            pic.render_sync, template, "light", card_name, width=CARD_WIDTH, data=data
-        )
-    except Exception as e:  # noqa: BLE001
-        log.warning("%s 渲染失败（已降级为纯文本）：%s: %s", card_name, type(e).__name__, e)
-        return None
+        try:
+            return await pic.render(template, card=card_name, width=CARD_WIDTH, data=render_data)
+        except Exception as e:  # noqa: BLE001
+            log.debug("%s 主题链路渲染失败，尝试内置 light 兜底：%s", card_name, e)
+        try:
+            return await asyncio.to_thread(
+                pic.render_sync, template, "light", card_name, width=CARD_WIDTH, data=render_data
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s 渲染失败（已降级为纯文本）：%s: %s", card_name, type(e).__name__, e)
+            return None
+    finally:
+        _reset_style(token, tpl)
 
 
 def build_skills_data(p: dict) -> dict:
@@ -336,6 +416,7 @@ def build_skills_data(p: dict) -> dict:
         "rows": rows,
         "tip": (f"通用=斗气大陆流通的基础斗技，非本宗传承 ｜ 上阵 <4技名> ｜ "
                 f"现有 {item} ×{have}"),
+        "__qq": str(p.get("qq") or ""),
     }
 
 
@@ -482,7 +563,7 @@ def build_roster_data(p: dict) -> dict:
 
 async def render_roster(p: dict) -> bytes | None:
     """「斗技 全部」出图：本宗全部斗技名录卡（按阶位分组 + 卡片块）。"""
-    return await _render_list("doupo_roster", build_roster_data(p), "斗破本宗斗技")
+    return await _render_list("doupo_roster", build_roster_data(p), "斗破本宗斗技", qq=p.get("qq"))
 
 
 def build_faction_data(p: dict) -> dict:
@@ -537,7 +618,7 @@ def build_faction_data(p: dict) -> dict:
 
 async def render_faction(p: dict) -> bytes | None:
     """「宗门」出图：宗门概览 / 斗技统计 / 代表人物 / 传承异火 / 可转宗门。"""
-    return await _render_list("doupo_faction", build_faction_data(p), "斗破宗门")
+    return await _render_list("doupo_faction", build_faction_data(p), "斗破宗门", qq=p.get("qq"))
 
 def build_flames_data(p: dict) -> dict:
     """异火列表 → doupo_list 模板参数。
@@ -669,13 +750,17 @@ def build_bag_data(p: dict, locked=None) -> dict:
     return {
         "icon": "diamond", "title": "包裹",
         "subtitle": f"{len(items)}/24 格 · 金币 {int(p.get('gold', 0))}",
+        # 2026-11-23 用户「背包别太长，学游戏展示方式」：游戏实机包裹是 4×6 网格，
+        # 故 4 列紧凑格子（每格只画名称+数量），24 格 6 行看完，不再是一长列带说明。
+        "columns": 4,
+        "grid": True,
         "rows": rows,
-        "tip": "用法：服丹 回灵丹 · 锁定 回灵丹（锁定后战斗不自动服用）",
+        "tip": "服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用 · 〔锁〕=已锁定",
     }
 
 
 async def render_bag(p: dict, locked=None) -> bytes | None:
-    return await _render_list("doupo_list", build_bag_data(p, locked), "斗破背包")
+    return await _render_list("doupo_list", build_bag_data(p, locked), "斗破背包", qq=p.get("qq"))
 
 
 def build_rank_data(top: list) -> dict:
@@ -699,15 +784,15 @@ def build_rank_data(top: list) -> dict:
 async def render_skills(p: dict) -> bytes | None:
     # 专用模板：技能描述 + 详细伤害 + 五段斗气条 + 重点大字粗体。
     # 不再复用 doupo_list，避免把异火/宝库/背包/排行一起改坏。
-    return await _render_list("doupo_skills", build_skills_data(p), "斗破斗技")
+    return await _render_list("doupo_skills", build_skills_data(p), "斗破斗技", qq=p.get("qq"))
 
 
 async def render_flames(p: dict) -> bytes | None:
-    return await _render_list("doupo_list", build_flames_data(p), "斗破异火")
+    return await _render_list("doupo_list", build_flames_data(p), "斗破异火", qq=p.get("qq"))
 
 
 async def render_shop(p: dict) -> bytes | None:
-    return await _render_list("doupo_list", build_shop_data(p), "斗破宝库")
+    return await _render_list("doupo_list", build_shop_data(p), "斗破宝库", qq=p.get("qq"))
 
 
 
@@ -804,7 +889,7 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
 
 async def render_recipes(p: dict, page: int = 1) -> bytes | None:
     """「炼药/丹方」出图：等级过滤 + 分页 + 两列丹方卡。失败降级纯文本由调用方保证。"""
-    return await _render_list("doupo_recipes", build_recipes_data(p, page), CARD_RECIPES_NAME)
+    return await _render_list("doupo_recipes", build_recipes_data(p, page), CARD_RECIPES_NAME, qq=p.get("qq"))
 
 
 def build_help_data() -> dict:
@@ -920,7 +1005,8 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
 async def render_puppet(roster: list, elig: dict, p: dict | None = None) -> bytes | None:
     """「傀儡」出图：名录卡；未拥有时渲染五道资格，绝不降级为纯文字空回。"""
     return await _render_list("doupo_puppet",
-                              build_puppet_data(roster, elig, p), CARD_PUPPET_NAME)
+                              build_puppet_data(roster, elig, p), CARD_PUPPET_NAME,
+                              qq=(p or {}).get("qq"))
 
 
 CARD_RUIN_NAME = "斗破傀儡遗迹"

@@ -93,8 +93,20 @@ def _rows_of(data) -> list:
     return [r for r in (data.get("rows") or []) if isinstance(r, dict)]
 
 
-def _row_h(item: dict, content_w: int) -> int:
-    """单行高度：主标题 + 可选副行（折行）+ 可选等级条。"""
+#: 网格模式固定格高（4 列 × 6 行 = 24 格，每格只放名称 + 数量）。
+GRID_CELL_H = 52
+#: 网格格子间距（格子有自身边框，间距比普通列表行小）。
+GRID_GAP = 8
+
+
+def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
+    """单行高度：主标题 + 可选副行（折行）+ 可选等级条。
+
+    ``grid=True``（背包 4 列紧凑网格）固定为 :data:`GRID_CELL_H`，不渲染长说明，
+    24 格只需 6 行，杜绝「背包卡一长列 3000px」。
+    """
+    if grid:
+        return GRID_CELL_H
     h = FS_ITEM + 12
     sub = item.get("sub") or ""
     if sub:
@@ -110,12 +122,28 @@ def _row_h(item: dict, content_w: int) -> int:
     return max(ROW_MIN, h)
 
 
-#: 双列布局的列间距。仅 data["columns"]=2 时启用（宝库药材 50+ 种，单列会到 5000px）。
+#: 多列布局的列间距。data["columns"] 控制列数（宝库=2，背包=4）：
+#: 宝库药材 50+ 种单列会到 5000px；背包 24 格按游戏实机 4 列网格展示，避免长列。
 COL_GAP = 18
+MAX_COLS = 4
 
 
 def _cols(data: dict) -> int:
-    return 2 if int(data.get("columns") or 1) > 1 else 1
+    """列数：data["columns"] 钳到 [1, MAX_COLS]；>=3 时启用紧凑网格行样式。"""
+    try:
+        return max(1, min(MAX_COLS, int(data.get("columns") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _grid(data: dict) -> bool:
+    """紧凑网格模式（背包 4 列）：每格只画名称 + 数量，不画长说明。
+
+    游戏实机「宝库·包裹」是 4×6 格，每格一个物品图标 + 名称，说明在选中时
+    才显示。QQ 卡片无交互，这里用「格内名称 + 数量、说明并入 tip」等价表达，
+    24 格 6 行即可看完，不再是一长列 24 行带说明的巨型卡片。
+    """
+    return _cols(data) >= 3 and bool(data.get("grid"))
 
 
 def _col_width(content_w: int, cols: int) -> int:
@@ -129,12 +157,14 @@ def _measure(data: dict, content_w: int) -> int:
         y_head += FS_SUB + 10
     cols = _cols(data)
     cw = _col_width(content_w, cols)
+    grid = _grid(data)
     ys = [y_head] * cols
     for i, r in enumerate(_rows_of(data)):
         k = i % cols
-        ys[k] += _row_h(r, cw) + ROW_PAD
+        ys[k] += _row_h(r, cw, grid=grid) + (GRID_GAP if grid else ROW_PAD)
     # 末尾留白用 UI.PAD_B(54)：底部两角只有短 L 线，26 收尾会贴框（2026-11-22）
-    y = max(ys) - ROW_PAD + BAND_GAP + 1 + TIP_GAP + FS_TIP + UI.PAD_B
+    tail = GRID_GAP if grid else ROW_PAD   # 扣回最后一行多加的间距（网格/列表各自口径）
+    y = max(ys) - tail + BAND_GAP + 1 + TIP_GAP + FS_TIP + UI.PAD_B
     return max(330, y)
 
 
@@ -188,13 +218,30 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     # ---- 列表行 ----
     cols = _cols(data)
     cw = _col_width(content_w, cols)
+    grid = _grid(data)
     # 表头高度必须与 _measure 完全一致（含副标题），否则双列底边会错位
     col_y = [y] * cols
     for ri, item in enumerate(_rows_of(data)):
         k = ri % cols
         cx0 = x0 + k * (cw + COL_GAP)
         y = col_y[k]
-        rh = _row_h(item, cw)
+        rh = _row_h(item, cw, grid=grid)
+        if grid:
+            # 游戏包裹式紧凑格子：每格只画「名称 + 数量」，长说明不进格子
+            # （说明是选中态信息，QQ 卡无交互，故并入底部 tip）。锁定项用玫红字。
+            c.rounded_rect((cx0, y, cx0 + cw - 2, y + rh - 2), radius=8,
+                           fill=p["panel"], outline=p["panel_ln"], width=1)
+            name_txt = str(item.get("title") or "")
+            is_locked = name_txt.startswith("〔锁〕")
+            shown = S.fit(name_txt, cw - 16, FS_SMALL, "regular")
+            tcol = p["accent_color"] if is_locked else p["text_color"]
+            cell_cx = cx0 + (cw - 2) // 2
+            cell_cy = y + rh // 2 - 1
+            S.small(c, (cell_cx, cell_cy), shown, size=FS_SMALL, color=tcol,
+                    anchor="mm", max_w=cw - 16)
+            rec("g%d" % ri, shown, cell_cx, cell_cy, FS_SMALL, "regular", "mm")
+            col_y[k] += rh + GRID_GAP
+            continue
         badge = item.get("badge")
         # 角标必须与主标题同一行居中对齐（card-design 红线 4：同列元素起点一致）。
         # 2026-11-15 多维度重构后行变高，旧写法「行内垂直居中」会让角标漂到副行位置、

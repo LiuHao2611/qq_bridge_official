@@ -242,7 +242,8 @@ async def main():
     uncovered = [n for n in listed
                  if not any(any(_re.search(p, n) for p in ps) for ps in pats)]
     # 按钮设置/自定义按钮 是运维口令，故意不进玩家菜单。
-    GREYLIST = ("按钮设置", "自定义按钮")
+    # 主题/主题默认（2026-11-23 双主题切换）也是偏好/运维口令，不进玩家菜单。
+    GREYLIST = ("按钮设置", "自定义按钮", "主题(?:默认|切换)?")
     orphans = [ps for ps in pats
                if not any(any(_re.search(p, n) for p in ps) for n in listed)
                and not any(g in p for p in ps for g in GREYLIST)]

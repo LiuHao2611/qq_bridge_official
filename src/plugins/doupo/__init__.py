@@ -195,6 +195,28 @@ async def _(event: Event):
     await helper.finish(msg)
 
 
+# 卡片主题切换（2026-11-23 双主题）：个人口令 + 运维全局默认。
+# 「主题默认 X」也要被这条正则吃到，handler 内按首词分流，避免多 matcher 互抢。
+theme_cmd = on_regex(_pat(r"主题(?:默认|切换)?"), priority=PRI, block=True,
+                     rule=_mode_is("doupo"))
+
+
+@theme_cmd.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, theme_cmd)
+    qq = str(event.user_id)
+    raw = re.sub(r"^\s*#?\s*", "", _plain(event)).strip()
+    # 分流：主题默认 <风格>（运维全局）/ 主题 <风格>（个人）
+    if raw.startswith("主题默认") or raw.startswith("主题切换默认"):
+        arg = re.sub(r"^主题(?:切换)?默认\s*", "", raw).strip()
+        msg = commands.cmd_theme_default(arg)
+    else:
+        arg = re.sub(r"^主题(?:切换)?\s*", "", raw).strip()
+        msg = commands.cmd_theme(qq, arg)
+    await theme_cmd.finish(msg)
+
+
 # ---------------------------------------------------------------------------
 # 入道 / 人物
 # ---------------------------------------------------------------------------

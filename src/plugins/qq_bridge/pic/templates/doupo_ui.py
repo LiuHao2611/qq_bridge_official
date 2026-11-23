@@ -78,6 +78,79 @@ G: dict[str, str] = {
     "shadow":    "#080610",
 }
 
+# ---------------------------------------------------------------------------
+# 第二套主题：浅色现代风（2026-11-23 用户「两个主题可以自由切换」）。
+# 取自 11-22 被否的「2026 前沿配色」（commit 0312077）但保留游戏本体 UI 的
+# 结构语言（回纹/牌匾/火焰/楷体）——只换色不换骨架，12 张卡零改动即可跟随。
+# 凡是内核里"深色专用"的硬编码值（牌匾字描边、天光、暗角、轨道），都提到
+# 配色表里做键；浅色表给浅色值，游戏表给原值，组件只读 g[...]。
+# ---------------------------------------------------------------------------
+G_LIGHT: dict[str, str] = {
+    "page":      "#EDEAF6",   # 页面外底（浅薰衣草灰）
+    "card_top":  "#FFFFFF",   # 卡片渐变顶（冷白）
+    "card_mid":  "#F6F3FB",
+    "card_bot":  "#EDE8F7",
+    "fret":      "#7B52C9",   # 回纹改靛紫（浅底上玫红不够沉稳）
+    "fret_hi":   "#A17BE0",
+    "fret_dk":   "#C6B2EC",
+    "plaq_top":  "#6D5AE0",   # 牌匾靛紫渐变
+    "plaq_mid":  "#5B3FA8",
+    "plaq_bot":  "#3E2A82",
+    "plaq_cld":  "#C9B8F5",
+    "gold":      "#B07A16",   # 金色压深：浅底上 #FFD058 看不见
+    "gold_hi":   "#D9A62E",
+    "gold_dk":   "#7A5210",
+    "text":      "#26213A",   # 深墨紫字（对比 ≥10:1）
+    "dim":       "#6B6486",
+    "weak":      "#948DA8",
+    "red":       "#D2364E",
+    "green":     "#0F8A67",   # 薄荷绿完成态（0312077 定稿）
+    "cyan":      "#0C8F9E",
+    "panel":     "#F4F0FB",
+    "panel_hi":  "#EAE3F8",
+    "panel_ln":  "#CDBCEC",
+    "cloud":     "#D9C8F0",   # 浅紫祥云水印（浅底要淡）
+    "cloud2":    "#E2D3F2",
+    "shadow":    "#D6CFE6",
+
+    # ---- 深色专用值参数化（浅色表给浅色值）----
+    "title_hi":   "#FFFFFF",  # 牌匾字渐变顶
+    "title_lo":   "#FFE8A8",  # 牌匾字渐变底
+    "title_edge": "#8030B2",  # 牌匾紫描边
+    "title_glow": "#BA6EF6",  # 牌匾外辉光
+    "sky":        "#4A78D0",  # 顶部天光色（浅色表偏冷）
+    "vignette":   "#2A1B4A",  # 暗角色（浅色表很淡）
+    "chip_fill":  "#FFFFFF",  # 状态标签底
+    "ord_num":    "#FFFFFF",  # done 序号徽数字
+    "ord_lock":   "#3E3860",  # locked 序号徽底
+    "bar_track":  "#E4DCF2",  # 进度条轨道
+    "flame_done_outer": "#E82870",  # 火焰外焰（完成）
+    "flame_done_mid":   "#F05228",
+    "flame_lock_outer": "#8E86AC",  # 火焰外焰（未解锁）
+    "flame_lock_mid":   "#B8B0CA",
+}
+
+# 游戏本体风补齐同批参数键（值 = 原来的硬编码，保证老视觉零变化）
+G.update({
+    "title_hi": "#FFFFFF", "title_lo": "#FFE8A8",
+    "title_edge": "#8030B2", "title_glow": "#BA6EF6",
+    "sky": "#96C8FF", "vignette": "#000000",
+    "chip_fill": "#1C1830", "ord_num": "#3A2006", "ord_lock": "#2C2644",
+    "bar_track": "#241E3C",
+    "flame_done_outer": "#CC1E5C", "flame_done_mid": "#F05228",
+    "flame_lock_outer": "#3E3860", "flame_lock_mid": "#544E72",
+})
+
+#: 两套主题名（对外）。游戏本体风为默认。
+STYLE_GAME = "game"
+STYLE_LIGHT = "light"
+STYLES = (STYLE_GAME, STYLE_LIGHT)
+
+
+def palette(style: str | None) -> dict[str, str]:
+    """按主题名取内核配色表；未知/空一律游戏本体风（默认）。"""
+    return G_LIGHT if (style or "").strip().lower() == STYLE_LIGHT else G
+
 #: 回纹角花占位（角内 9px 起、向外 6*unit）。文案缩进据此计算。
 FRET_UNIT = 4
 CORNER_RESERVE = 9 + 6 * FRET_UNIT          # = 33
@@ -434,10 +507,10 @@ def title_plaque(c: Canvas, g: dict, y: float, text: str, *, width: int | None =
     ImageDraw.Draw(g2).rounded_rectangle((ox - 2, oy - 2, ox + pw + 2, oy + ph + 2), radius=17,
                                          outline=rgb(g["fret_hi"]) + (150,), width=3)
     tile.alpha_composite(g2.filter(ImageFilter.GaussianBlur(3)))
-    # 标题
+    # 标题（双主题：牌匾字色/描边/辉光读 g）
     tcx, tcy = ox + pw / 2, oy + ph / 2 + 1
-    _grad_on(tile, (tcx, tcy), text, font_size, "#FFFFFF", "#FFE8A8",
-             sw=3, stroke="#8030B2", glow_col=((186, 110, 246), 7, 150), fake_bold=1)
+    _grad_on(tile, (tcx, tcy), text, font_size, g["title_hi"], g["title_lo"],
+             sw=3, stroke=g["title_edge"], glow_col=(rgb(g["title_glow"]), 7, 150), fake_bold=1)
     img.alpha_composite(tile, (x0 - M, int(y) - M))
     # 匾额挂钉
     dd = ImageDraw.Draw(img)
@@ -504,15 +577,21 @@ def card_shell(c: Canvas, g: dict, title: str, *, top: int = 0,
     cloud_band(wm, 56, H - 84, 3, 24, 62, g["cloud2"], 1.86, 0.20, 2)
     scale_band(wm, W - 200, 210, 9, 28, 23, 46, g["cloud"])
     img.alpha_composite(wm)
-    # 暗角
+    # 暗角（双主题：暗角色读 g；浅色风是很淡的紫，不压字）
     vig = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     vd = ImageDraw.Draw(vig, "RGBA")
-    vd.rectangle((0, 0, W, 88), fill=(0, 0, 0, 52))
-    vd.rectangle((0, H - 108, W, H), fill=(0, 0, 0, 72))
+    vc = rgb(g["vignette"])
+    if g is G_LIGHT:
+        vd.rectangle((0, 0, W, 88), fill=vc + (18,))
+        vd.rectangle((0, H - 108, W, H), fill=vc + (26,))
+    else:
+        vd.rectangle((0, 0, W, 88), fill=vc + (52,))
+        vd.rectangle((0, H - 108, W, H), fill=vc + (72,))
     img.alpha_composite(vig.filter(ImageFilter.GaussianBlur(40)))
-    # 顶部天光
-    def sky(d):
-        d.ellipse((W // 2 - 240, -130, W // 2 + 240, 140), fill=(150, 200, 255, 46))
+    # 顶部天光（双主题：色读 g）
+    sc = rgb(g["sky"])
+    def sky(d, _c=sc, _a=30 if g is G_LIGHT else 46):
+        d.ellipse((W // 2 - 240, -130, W // 2 + 240, 140), fill=_c + (_a,))
     glow(c, sky, 60)
     # 外框
     frame(ImageDraw.Draw(img), (10, 10, W - 11, H - 11), g)
@@ -552,7 +631,7 @@ def panel(c: Canvas, g: dict, box, *, state: str = "done", radius: int = 13,
     x0, y0, x1, y1 = [int(round(v)) for v in box]
     base = fill or (g["panel_hi"] if state == "current" else g["panel"])
     if state == "locked" and fill is None:
-        base = "#2A2546"
+        base = g["ord_lock"]
     c.rounded_rect((x0, y0, x1, y1), radius=radius, fill=base)
     if watermark:
         a = 112 if state == "current" else (84 if state == "done" else 0)
@@ -580,12 +659,12 @@ def ord_badge(c: Canvas, g: dict, cx: float, cy: float, n, state: str = "done",
         c.ellipse((cx - r, cy - r, cx + r, cy + r), fill=g["gold"], outline=g["gold_hi"], width=2)
         c.ellipse((cx - r * 0.72, cy - r * 0.72, cx + r * 0.72, cy + r * 0.72),
                   outline=g["gold_dk"], width=1)
-        num = "#3A2006"
+        num = g["ord_num"]
     elif state == "current":
         c.ellipse((cx - r, cy - r, cx + r, cy + r), fill=g["fret"], outline=g["fret_hi"], width=2)
         num = "#FFFFFF"
     else:
-        c.ellipse((cx - r, cy - r, cx + r, cy + r), fill="#2C2644", outline=g["panel_ln"], width=2)
+        c.ellipse((cx - r, cy - r, cx + r, cy + r), fill=g["ord_lock"], outline=g["panel_ln"], width=2)
         num = g["weak"]
     c.text((cx, cy), str(n), size=int(r * 1.05), color=num, role="bold", bold=True, anchor="mm")
 
@@ -596,7 +675,7 @@ def chip(c: Canvas, g: dict, x_right: float, cy: float, text: str, state: str = 
     col = g["green"] if state == "done" else (g["fret_hi"] if state == "current" else g["dim"])
     sw_ = tw(text, size, "bold") + 40 if tw(text, size, "bold") + 40 > 76 else 76
     x0 = x_right - sw_
-    c.rounded_rect((x0, cy - 13, x_right, cy + 13), radius=9, fill="#1C1830", outline=col, width=1)
+    c.rounded_rect((x0, cy - 13, x_right, cy + 13), radius=9, fill=g["chip_fill"], outline=col, width=1)
     d = ImageDraw.Draw(img_of(c))
     ix = x0 + 11
     icol = rgb(col) + (255,)
@@ -615,7 +694,7 @@ def bar(c: Canvas, g: dict, box, pct: float, *, kind: str = "xp", mark: bool = F
     """游戏风进度条：暗轨 + 渐变填充 + 顶部高光 + 右端亮头。"""
     x0, y0, x1, y1 = [int(round(v)) for v in box]
     h = max(4, y1 - y0)
-    c.rounded_rect((x0, y0, x1, y1), radius=h // 2, fill="#241E3C", outline=g["panel_ln"], width=1)
+    c.rounded_rect((x0, y0, x1, y1), radius=h // 2, fill=g["bar_track"], outline=g["panel_ln"], width=1)
     pct = max(0.0, min(1.0, float(pct)))
     fw = int((x1 - x0 - 2) * pct)
     if fw > 1:
@@ -660,9 +739,9 @@ def flame_badge(c: Canvas, g: dict, cx: float, cy: float, r: float, state: str =
     难看的阶梯（早期版本实测像「岩浆蛋糕」）。
     """
     ring, outer, mid, inner, core = {
-        "done":    (g["fret_hi"], "#CC1E5C", "#F05228", "#FFC234", "#FFFCD6"),
+        "done":    (g["fret_hi"], g["flame_done_outer"], g["flame_done_mid"], "#FFC234", "#FFFCD6"),
         "current": (g["fret_hi"], "#7E28D6", "#C63AB2", "#FA7A5C", "#FFF7CC"),
-        "locked":  (g["panel_ln"], "#3E3860", "#544E72", "#6E6892", "#928CB4"),
+        "locked":  (g["panel_ln"], g["flame_lock_outer"], g["flame_lock_mid"], "#6E6892", "#928CB4"),
     }[state]
     d = ImageDraw.Draw(img_of(c))
     for bx, by, bw, bh in FLAME_BLOBS:
@@ -736,7 +815,7 @@ def divider(c: Canvas, g: dict, y: float, x0: float, x1: float,
         d.polygon([(cx, y - 3), (cx + 3, y), (cx, y + 3), (cx - 3, y)],
                   fill=rgb(g["gold_hi"]) + (255,))
     elif style == "thin":
-        d.line((x0, y, x1, y), fill=rgb("#4A3D66") + (255,), width=1)
+        d.line((x0, y, x1, y), fill=rgb(g["panel_ln"]) + (255,), width=1)
     else:
         d.line((x0, y, x1, y), fill=rgb(g["fret_dk"]) + (255,), width=1)
         cx = (x0 + x1) / 2
