@@ -25,6 +25,14 @@
 """
 from __future__ import annotations
 
+from . import doupo_text as txt
+
+
+def _doupo_tip(win: bool) -> str:
+    """卡面底部提示：走文案池，和纯文本兜底/战斗评价保持同一口吻。"""
+    return txt.battle_tip(bool(win))
+
+
 #: 关键节点上限：超过 5 条就不是「关键」了，页面也会被撑长。
 BEAT_LIMIT = 5
 #: 逐招明细里每条最多带几个词条（再多就该做减法）。
@@ -573,10 +581,7 @@ def build_data(battle: dict) -> dict:
             {"name": "战况", "rows": rows},
             {"name": "逐招明细", "rows": action_rows(battle)},
         ],
-        "tip": ("发「战斗评价」听一句毒舌 · 只保留最后一场战斗"
-                if battle.get("win") else
-                # 战败卡给下一步动作（别的游戏战败界面都会给「重来」入口）
-                "先「服丹」回血再战 · 只保留最后一场战斗"),
+        "tip": _doupo_tip(battle.get("win")),
     }
 
 

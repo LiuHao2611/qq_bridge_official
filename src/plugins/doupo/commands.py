@@ -20,6 +20,7 @@ from . import battle_review as br
 from . import card_theme
 from . import config as cfg
 from . import core
+from . import doupo_text as txt
 from . import duel_challenge as dc
 from . import factions as fac
 from . import flame_skills as fs
@@ -669,7 +670,8 @@ async def cmd_cultivate(store, qq) -> str:
     lv = int(p["lv"])
     need = cfg.exp_need(lv)
     tip = "，可发送「突破」晋升" if core.can_level(p) else ""
-    head = f"🧘 静修 {res['minutes']} 分钟，得修为 +{res['gain']}。" if res["gain"] else "🧘 你刚静修过，气机未动。"
+    head = (txt.cultivate(res["minutes"], _fmt(res["gain"]))
+            if res["gain"] else "🧘 你刚调息过，气机未动。")
     return (f"{head}\n修为 {_fmt(p['exp'])}/{_fmt(need) if need else '—'}{tip}\n"
             f"当前：{cfg.full_realm(lv)}\n"
             f"（想快些可发「入塔」借心火成倍修炼，需火能与火晶卡）")
@@ -687,7 +689,7 @@ async def cmd_break(store, qq, rng=None) -> str:
         return "你已至斗帝之境，此界再无敌手。"
     if not core.can_level(p):
         need = cfg.exp_need(lv) - int(p["exp"])
-        return f"修为不足，距下一星还差 {_fmt(need)}。去「战斗」或「修炼」。"
+        return txt.need_exp(_fmt(need))
     # 2026-11-20 九星突破 BOSS 战重做（用户「BOSS 登场要有引言台词」）：
     # 跨大境界须先战胜一名原著反派（药老/云棱/鹜护法/摘星老鬼/魂灭生/美杜莎/魂天帝）。
     # 战力快照只在 core 内部锁难度，**这里绝不渲染快照战力数字**（用户明确要求）。
@@ -715,36 +717,26 @@ async def cmd_break(store, qq, rng=None) -> str:
         if _intro and _intro != _appear:
             head.append(f"　{_intro}")
         if not br["win"]:
-            tail = [
-                f"　鏖战 {br['rounds']} 回合，终因火候不足而败（余血 {_fmt(br['hp_end'])}）。",
-                "　修为未散，调息再来——「突破」可再战此劫。",
-            ]
-            return "\n".join(head + tail)
+            return "\n".join(head + [txt.boss_fail(br["rounds"], _fmt(br["hp_end"]))])
         # 战胜：挑一条原著台词作收尾（不渲染内部战力快照数字）。
         _quotes = tuple(_ch.get("quotes") or ())
         _end_quote = ("　「%s」——话音未落，强敌已溃。" % _quotes[-1]) if _quotes else ""
-        lines = head + [
-            f"　鏖战 {br['rounds']} 回合，【{_name}】被你击溃！",
-        ]
+        lines = head + [txt.boss_win(br["rounds"], _name)]
         if _end_quote:
             lines.append(_end_quote)
         fl = br.get("flame") or {}
         if fl.get("ok"):
-            if fl.get("duplicate"):
-                lines.append(f"　劫后余烬中遗下一缕【{fl['name']}】你早已拥有，"
-                             f"化作药渣 ×{fl.get('dross', 30)}。")
-            else:
-                _kind = "兽火/其他火焰" if fl.get("kind") == "other" else "异火"
-                lines.append(f"　溃散处遗下一缕【{fl['name']}】（{_kind}），已收入囊中——"
-                             "「养火」可喂药渣升级。")
+            _kind = "兽火/其他火焰" if fl.get("kind") == "other" else "异火"
+            lines.append(txt.flame_drop(fl["name"], _kind, bool(fl.get("duplicate")),
+                                        fl.get("dross", 30)))
         if br.get("tiandi"):
-            lines.append("🔥 你踏碎最后一层壁障，成就【斗帝】！帝炎自燃，机缘全满。")
+            lines.append(txt.tiandi_success())
             return "\n".join(lines)
         if br.get("tiandi_fail"):
-            lines.append(f"💥 冲击斗帝未成（成功率 {int((br.get('rate') or 0) * 100)}%），"
-                         "修为折损，多积机缘再来。")
+            lines.append(txt.tiandi_fail(int((br.get("rate") or 0) * 100)))
             return "\n".join(lines)
-        lines.append(f"✨ 境界突破！由【{cfg.full_realm(lv)}】晋入【{cfg.full_realm(br['new_lv'])}】。")
+        lines.append(txt.break_result(cfg.full_realm(lv), cfg.full_realm(br["new_lv"]),
+                                      cfg.realm_name(br["new_lv"]), True))
         return "\n".join(lines)
     res = core.level_up(p)
     await store.put_player(p)
@@ -755,19 +747,18 @@ async def cmd_break(store, qq, rng=None) -> str:
             "帝炎自燃于体，全属性 ×1.2，机缘值全满。"
         )
     if res.get("reason") == "tiandi_fail":
-        return (f"💥 冲击斗帝失败（成功率 {int(res['rate'] * 100)}%）！\n"
-                "斗气倒灌，修为折损。多积机缘（支线任务 / 九幽散）再来。")
+        return txt.tiandi_fail_plain(int(res["rate"] * 100))
     # 文案把起点终点一起写清楚（用户 2026-11-14：「三星晋升到一星…这顺序不对」）。
     # 九星制下境界内是 三星→四星 这种正常递增，只有跨大境界才会星数归零，
     # 所以跨境界用「境界突破」措辞明确告知「这是换大境界，不是掉星」：
     #   同境界：突破成功！由【三星斗师】晋入【四星斗师】
     #   跨境界：境界突破！由【九星斗者】晋入【一星斗师】
+    # 2026-11-23：正文改由 doupo_text 按境界分档，锚点词保留给既有测试。
     old_name = cfg.full_realm(lv)
     new_lv = int(p.get("lv", lv))
     new_name = res.get("name") or cfg.full_realm(new_lv)
-    if cfg.realm_name(new_lv) != cfg.realm_name(lv):
-        return f"✨ 境界突破！由【{old_name}】晋入【{new_name}】。气血斗气已满。"
-    return f"✨ 突破成功！由【{old_name}】晋入【{new_name}】。气血斗气已满。"
+    return txt.break_result(old_name, new_name, cfg.realm_name(new_lv),
+                            cfg.realm_name(new_lv) != cfg.realm_name(lv))
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +773,7 @@ async def cmd_fight(store, qq) -> str:
     left = int(cfg.FIGHT_CD_SEC - (now - float(p.get("last_fight", 0))))
     if left > 0:
         await store.put_player(p)
-        return f"气血未复，需调息 {left} 秒。"
+        return txt.battle_cd(left)
 
     # 一场遭遇 1~5 个敌人（魔兽 / 悍匪 / 原著反派），逐个调用单敌内核 fight。
     # 难度仍按玩家等级反解，不会出现越级秒杀；斗气跨战结转（见底转普攻）、
@@ -852,22 +843,20 @@ async def cmd_fight(store, qq) -> str:
     else:
         foes = f"{n_total}名敌手"
     killed = sum(1 for x in detail if x.get("win"))
-    verdict = "大捷" if res["win"] else f"力竭·斩{killed}/{n_total}"
 
     # 2026-11-20 结算重排（用户「结算展示乱七八糟」）：固定三段、顺序恒定，
     # 不再用 insert() 往中间插行打乱结构。①战果 ②代价 ③机缘（仅触发时出现）。
+    # 2026-11-23：首行/高光/战果/代价改由 doupo_text 出句，保留原有锚点词。
     lines = [
-        f"⚔️ 遭遇 {n_total} 敌 · {res['rounds']}回合 · {verdict}",
-        f"💥 {spot}",
+        txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed),
+        txt.battle_spot(spot),
     ]
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
     # ① 战果（修为/金币/敌人 + 战利）
     drops = list(res.get("drops") or [])
-    gain = f"🎯 战果 斩获 {foes} · 修为 +{_fmt(res['exp'])} · 金币 +{_fmt(res['gold'])}"
-    if drops:
-        gain += " · " + "、".join(f"{n}×{c}" for n, c in drops[:3])
-    lines.append(gain)
+    _drop_txt = "、".join(f"{n}×{c}" for n, c in drops[:3])
+    lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt))
     # 傀儡料单独一行：不进 bag、直接落傀儡库，与上面「战利」不是同一本账。
     pup = list(res.get("puppet_drops") or [])
     if pup:
@@ -877,15 +866,13 @@ async def cmd_fight(store, qq) -> str:
     # ② 代价（「防御」字样固定出现：属性↔战斗强关联的稳定锚点）
     auto = res.get("auto_pills") or {}
     _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
-    cost = (f"🩸 代价 防御减伤后受伤 {_fmt(res['taken'])} · 气血 {_fmt(p.get('hp') or 0)}"
-            + (f" · 服药 {_pill}" if _pill else ""))
-    lines.append(cost)
+    lines.append(txt.battle_cost(_fmt(res["taken"]), _fmt(p.get("hp") or 0), _pill))
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
-        lines.append("🍀 机缘际会，贵人相助——此战毫发无伤")
+        lines.append(txt.battle_hero_aid())
     lv = int(p["lv"])
     if core.can_level(p):
-        lines.append(f"⬆️ 修为已满（{cfg.full_realm(lv)}），发送「突破」晋升")
+        lines.append(txt.battle_ready(cfg.full_realm(lv)))
     lines.extend(_chance_lines(chance, qq))
     return "\n".join(lines)
 
@@ -943,7 +930,7 @@ async def cmd_enhance(store, qq) -> str:
         head.append("　（打怪掉落 / 「买 炎星石」）")
         return "\n".join(head)
 
-    head.append("✅ 强化成功！")
+    head.append(txt.enhance_ok())
     if res["evolved"]:
         head.append("🔥 玄重尺寸寸崩裂，黑铁尽褪——【异火恒古尺】现世！")
         head.append("　力量 2000　敏捷 2000　斗气 1000　防御 1200")
@@ -1089,7 +1076,8 @@ async def cmd_faction(store, qq, args) -> str:
         await store.put_player(p)
         flame_line = ("\n　随身数值异火【%s】（入道赐下）——「养火」可养。" % res["flame"]) \
             if res.get("flame") else ""
-        return (f"🏯 已转投【{res['name']}】（原【{res['old']}】），耗 {res['cost']:,} 金币。\n"
+        return (txt.sect_change(res["name"]).rstrip("。")
+                + f"（原【{res['old']}】），耗 {res['cost']:,} 金币。\n"
                 f"　四槽已按新门重配：" + "、".join(res["loadout"])
                 + flame_line
                 + "\n　已升的技能等级按技名保留；本门斗技见「斗技」。")
@@ -1444,13 +1432,12 @@ async def cmd_feed(store, qq, name) -> str:
             tip = _unflame_hint(hit)
             return "❌ 【%s】尚未收服，不能直接喂养。%s" % (hit, tip)
         if res.get("reason") == "max":
-            return f"【{hit}】已至 {res['lv']} 级圆满，再多药渣也烧不动了。"
+            return txt.flame_full(hit, res["lv"])
         return "无可喂养。"
     if res["done"]:
-        out = [f"🔥 药渣尽数化入【{hit}】，晋为 {res['lv']} 级！"]
+        out = [txt.feed_flame(hit, res["lv"])]
     else:
-        out = [f"🔥 投入 {res['give']} 份药渣，{hit} 距下一级还差 "
-               f"{_fmt(res['left'])}。"]
+        out = [txt.feed_flame_partial(hit, res["give"], _fmt(res["left"]))]
     out.extend(_chance_lines(chance, qq))
     return "\n".join(out)
 
@@ -1493,7 +1480,7 @@ async def cmd_claim_flame(store, qq, name) -> str:
     if tier == "S":
         return ("🔥 你以意志与境界驭住了【%s】——此为大后期之火，"
                 "「异火」可看其威，「养火」可养其力。" % hit)
-    return "🔥 你收服了数值异火【%s】——「养火」可喂药渣升级，加成即时生效。" % hit
+    return txt.flame_capture(hit)
 
 
 # ---------------------------------------------------------------------------
@@ -1636,32 +1623,29 @@ async def cmd_craft(store, qq, name) -> str:
         return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」（{res['buy']} 金），或先寻得丹方。"
     if res.get("reason") == "cd":
         await store.put_player(p)
-        return f"丹炉尚温，需再候 {res['left']} 秒。"
+        return txt.craft_cd(res["left"])
     chance = core.advance_task(p, "craft", 1) if res.get("ok") else None
     await store.put_player(p)
     # 2026-11-18 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
     # 越2档以上「几无可能」。diff>0 时把原因写进回包，玩家才知道为什么老失败。
     over = int(res.get("diff") or 0)
-    over_hint = ""
-    if over == 1:
-        over_hint = "　⚠ 越1档勉强开炉（药力未熟，成功率骤降）\n"
-    elif over >= 2:
-        over_hint = f"　⚠ 越{over}档——几无可能，仅可勉强尝试\n"
+    over_hint = txt.craft_over(over) if over else ""
     if not res.get("ok"):
         if res.get("reason") == "mat":
-            return "❌ 材料不足：" + "、".join(res["missing"]) + "\n　去「宝库」买药。"
+            return txt.craft_mat("、".join(res["missing"]))
         if res.get("reason") in ("fail",):
-            msg = (f"💨 炼制失败（{cfg.rate_cn(res['rate'])}把握）——\n"
-                   f"{over_hint}　药渣 +{res['dross']}，可拿去「养火」。")
+            msg = txt.craft_fail(res["dross"], cfg.rate_cn(res["rate"]), over_hint,
+                                 seed=int(res["dross"]))
             if res.get("alch_up"):
-                msg += f"\n　炼药经验积累，晋为【{res['alch_up']}炼药师】！"
+                msg += "\n" + txt.alch_up(res["alch_up"])
             return msg
-        return "炼制失败。"
-    msg = f"⚗️ 丹成！【{hit}】×1（{cfg.rate_cn(res['rate'])}把握）"
+        return txt.craft_fail_plain()
+    _grade = str(cfg.RECIPE_BY_NAME.get(hit, {}).get("grade") or "")
+    msg = txt.craft_success(hit, _grade, cfg.rate_cn(res["rate"]))
     if over:
         msg += "\n" + over_hint.rstrip("\n")
     if res.get("alch_up"):
-        msg += f"\n　炼药经验积累，晋为【{res['alch_up']}炼药师】！"
+        msg += "\n" + txt.alch_up(res["alch_up"])
     out = [msg]
     out.extend(_chance_lines(chance, qq))
     return "\n".join(out)
@@ -1680,29 +1664,28 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
         return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」。"
     if res.get("reason") == "cd":
         await store.put_player(p)
-        return f"丹炉尚温，需再候 {res['left']} 秒。"
+        return txt.craft_cd(res["left"])
     if not res.get("ok"):
-        why = {"mat": "药材不足，去「宝库」买药", "mp": "斗气不济，先调息回气"}.get(
-            res.get("reason"), "开炉失败")
-        return f"❌ 未能开炉：{why}。"
+        # craft_batch 的 not-ok 只有 nodrug / buyonly / cd；mat/mp 是 limited，走正常回包。
+        if res.get("reason") == "mat" and res.get("missing"):
+            return txt.craft_mat("、".join(res["missing"]))
+        return txt.craft_generic_fail()
 
     # 任务推进按实际成功炉数（一炉一丹，成功才算练手）
     chance = core.advance_task(p, "craft", int(res["n_ok"])) if res["n_ok"] else None
     await store.put_player(p)
 
-    lines = [f"⚗️ 连炼【{hit}】{res['n_done']}炉　成{res['n_ok']}·败{res['n_fail']}"
-             f"（{cfg.rate_cn(res['rate'])}把握/炉）"]
-    detail = f"　丹 +{res['n_ok']}　药渣 +{res['dross']}　炼药经验 +{res['exp']}"
+    lines = [txt.craft_batch_head(hit, res["n_done"], res["n_ok"], res["n_fail"],
+                                  cfg.rate_cn(res["rate"]))]
+    detail = txt.craft_batch_detail(res["n_ok"], res["dross"], res["exp"])
     if res.get("exp_factor", 1.0) < 1.0:
         detail += f"（低阶丹，经验{cfg.rate_cn(res['exp_factor'])}计）"
     lines.append(detail)
     lines.append(f"　斗气 -{res['mp_used']}（余{res['mp_left']}）")
-    if res.get("limited") == "mat":
-        lines.append("　⚠ 药材见底，余炉未炼")
-    elif res.get("limited") == "mp":
-        lines.append("　⚠ 斗气耗尽，提前收炉")
+    if res.get("limited") in ("mat", "mp"):
+        lines.append(txt.craft_batch_limited(res["limited"]))
     if res.get("alch_up"):
-        lines.append(f"　炼药经验积累，晋为【{res['alch_up']}炼药师】！")
+        lines.append(txt.alch_up(res["alch_up"]))
     out = ["\n".join(lines)]
     out.extend(_chance_lines(chance, qq))
     return "\n".join(out)
@@ -2089,7 +2072,7 @@ async def cmd_rob(store, qq, target) -> str:
         amt = max(1, int(int(vic["gold"]) * 0.10))
         vic["gold"] = int(vic["gold"]) - amt
         p["gold"] = int(p.get("gold", 0)) + amt
-        lines.append(f"😈 夺得 {amt} 金币。")
+        lines.append(txt.rob_win(_fmt(amt)))
     else:
         amt = max(1, int(int(p["gold"]) * 0.10))
         p["gold"] = int(p.get("gold", 0)) - amt
@@ -2229,7 +2212,7 @@ async def cmd_give(store, qq, target, amount) -> str:
     to["gold"] = int(to.get("gold", 0)) + amt
     await store.put_player(p)
     await store.put_player(to)
-    return f"🎁 你赠予对方 {amt} 金币，善缘结下。"
+    return txt.give_ok(amount=str(amt))
 
 
 # ---------------------------------------------------------------------------
@@ -2351,8 +2334,8 @@ async def cmd_gift(store, qq, target, item, n=1, pstore=None) -> str:
     if not ok:
         # 走到这里说明 get 与 transfer 之间状态变了（对方掉档 / 物品被别处扣掉）
         return "赠送失败：对方存档或你的%s已变动，请重试。" % ("包裹" if hit else "材料")
-    return ("🎁 你赠予对方【%s】×%d%s，善缘结下。\n　余 %d 个%s"
-            % (hit or mat, int(n), kind, left, "" if left else "（已送空）"))
+    return (txt.give_ok(item="%s×%d%s" % (hit or mat, int(n), kind))
+            + "\n　余 %d 个%s" % (left, "" if left else "（已送空）"))
 
 
 # ---------------------------------------------------------------------------
@@ -2492,7 +2475,7 @@ async def cmd_tower(store, qq, arg="") -> str:
             f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
         lines = [
             f"{header}🗼 第 {r['floor']} 层【{kind_tag}】{r['name']} {aff}",
-            f"　💀 力竭倒下，止步第 {res['floors']} 层。",
+            txt.tower_down(res["floors"]),
             f"　结算：+{res['gold']} 金币、+{res['exp']} 修为" + _loot_txt
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
         ]
@@ -2779,7 +2762,7 @@ async def cmd_weekly(store, qq) -> str:
         p["weekly_cleared_week"] = week
         ws.STORE.clear(qq)
         await store.put_player(p)
-        lines.append(f"　🏆 七层通关！结算到账：+{res['gold']} 金币、+{res['exp']} 修为"
+        lines.append("　" + txt.weekly_clear() + f"+{res['gold']} 金币、+{res['exp']} 修为"
                      + (f"，神兵 {('、'.join(res['weapons']))} 入包" if res["weapons"] else "")
                      + "。")
         lines.append("　本周已通关，下周再来挑战自己的新快照。")

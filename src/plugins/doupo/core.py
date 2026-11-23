@@ -17,6 +17,7 @@ import re
 import time
 
 from . import config as cfg
+from . import doupo_text as txt
 from . import flame_bonus as _flame_bonus
 from . import factions as fac
 from . import skills as sk_mod
@@ -3288,30 +3289,25 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
                 and cfg.realm_index(lv + 1) == to_realm:
             _advance_one(p)
             return {"ok": True, "breakthrough": True,
-                    "msg": (lead + "丹力冲关，一举踏破【%s】壁障——晋入【%s】，气血斗气已满"
-                            % (realm_name, cfg.full_realm(int(p["lv"]))))}
+                    "msg": lead + txt.pill_break(realm_name,
+                                                 cfg.full_realm(int(p["lv"])))}
         if ri == to_realm:
             used = int((used_counts or {}).get(ri, 0))
             if used_counts is not None and used >= max_per:
                 # 丹药已被扣掉（take_item 在最前面），如实告知「白服」。
                 return {"ok": False, "reason": "resisted",
-                        "msg": ("药体已生抗性，同阶再服只是白费——【%s】这一阶"
-                                "至多服 %d 枚见效，晋阶后可再服"
-                                % (realm_name, max_per))}
+                        "msg": lead + txt.pill_resist(realm_name, max_per)}
             if rng() < float(rec.get("star_chance", 0.0)):
                 _advance_one(p)
                 return {"ok": True, "star_up": True, "mark_used": ri,
-                        "msg": (lead + "药力化开，硬生生拔起一星——晋入【%s】"
-                                % cfg.full_realm(int(p["lv"])))}
+                        "msg": lead + txt.pill_star(cfg.full_realm(int(p["lv"])))}
             p["exp"] = int(p.get("exp", 0)) + val
             p["pill_exp"] = int(p.get("pill_exp", 0)) + val
             return {"ok": True, "mark_used": ri,
-                    "msg": (lead + "药力打了个转，星位未动（无药效反噬），"
-                            "余力化修为 +%d" % val)}
+                    "msg": lead + txt.pill_no_star(val)}
         p["exp"] = int(p.get("exp", 0)) + val
         p["pill_exp"] = int(p.get("pill_exp", 0)) + val
-        return {"ok": True, "msg": lead + "此丹专为破【%s】而炼，"
-                "当前境界药力不显，化修为 +%d" % (realm_name, val)}
+        return {"ok": True, "msg": lead + txt.pill_wrong_realm(realm_name, val)}
     if eff == "luck":
         p["luck"] = min(9999, int(p.get("luck", 0)) + val)
         return {"ok": True, "msg": lead + f"机缘 +{val}（现 {p['luck']}）"}
