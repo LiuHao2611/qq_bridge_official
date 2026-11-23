@@ -38,7 +38,10 @@ _roster / _battle / _ruin / _help / _craft）各写一套装饰必然漂移。�
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+from collections import OrderedDict
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
@@ -554,6 +557,36 @@ def _grad_on(base: Image.Image, xy, s, size, top, bot, *, role="kai", anchor="mm
     base.alpha_composite(grad, (ox, oy))
 
 
+# ---------------------------------------------------------------------------
+# 外壳缓存（2026-11-23 性能调研 §5.2）
+# ---------------------------------------------------------------------------
+# 外壳只依赖 (配色, W, H, title, top, width)，与玩家数据无关；但含 8 处
+# GaussianBlur，真机实测 527ms，占整卡绘制 81%。按内容寻址缓存整幅外壳，
+# 命中时用 paste 覆盖（**不能用 alpha_composite**，会与已有像素叠加重影）。
+_SHELL_CACHE: "OrderedDict[str, tuple[Image.Image, int]]" = OrderedDict()
+_SHELL_BYTES = 0
+_SHELL_MAX = 16
+#: 按字节兜底：文档按人物卡 810 高估成 ~37MB，但菜单卡高 3069（~8.8MB/条），
+#: 16 条全是大卡会到 140MB。64MB 上限既覆盖常见组合，又不会压手机内存。
+_SHELL_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _shell_key(g: dict, W: int, H: int, title: str, top: int,
+                width: int | None) -> str:
+    # g 主题色是内容寻址的源头：编辑器逐键改色 -> key 变 -> 自动失效。
+    # 末位布尔是双主题 identity 分支（g is G_LIGHT）的显式输入，防同色值不同分支。
+    raw = json.dumps([g, W, H, str(title), int(top), int(width or 0), g is G_LIGHT],
+                     sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def clear_shell_cache() -> None:
+    """主题编辑器热更新等场景可主动清空；正常换色靠 key 自动失效。"""
+    global _SHELL_BYTES
+    _SHELL_CACHE.clear()
+    _SHELL_BYTES = 0
+
+
 def card_shell(c: Canvas, g: dict, title: str, *, top: int = 0,
                width: int | None = None) -> int:
     """卡片外壳一笔画完：底渐变 + 斜纹 + 云纹 + 暗角 + 天光 + 回纹外框 + 牌匾。
@@ -561,8 +594,16 @@ def card_shell(c: Canvas, g: dict, title: str, *, top: int = 0,
     调用方必须在算 ``h`` 之后、画内容之前调用；返回值即内容起始 y。
     注意：模板**不要再自己画卡片圆角底**，本函数已覆盖整幅。
     """
+    global _SHELL_BYTES
     img = img_of(c)
     W, H = img.size
+    key = _shell_key(g, W, H, title, top, width)
+    hit = _SHELL_CACHE.get(key)
+    if hit is not None:
+        _SHELL_CACHE.move_to_end(key)
+        shell, content_y = hit
+        img.paste(shell, (0, 0))       # 覆盖式，不能 alpha_composite（重影）
+        return content_y
     inset = 8
     img.alpha_composite(vgrad3((W - 2 * inset, H - 2 * inset), g["card_top"], g["card_mid"],
                               g["card_bot"]).convert("RGBA"), (inset, inset))
@@ -598,7 +639,15 @@ def card_shell(c: Canvas, g: dict, title: str, *, top: int = 0,
     # 牌匾
     y = 30 if not top else top
     y2 = title_plaque(c, g, y, title, width=width or W)
-    return y2 + 20
+    content_y = y2 + 20
+    shell = img.copy()
+    cost = shell.width * shell.height * 4
+    _SHELL_CACHE[key] = (shell, content_y)
+    _SHELL_BYTES += cost
+    while len(_SHELL_CACHE) > _SHELL_MAX or _SHELL_BYTES > _SHELL_MAX_BYTES:
+        _, (old, _) = _SHELL_CACHE.popitem(last=False)
+        _SHELL_BYTES -= old.width * old.height * 4
+    return content_y
 
 
 def sub_line(c: Canvas, g: dict, y: float, text: str, *, size: int = 17) -> int:

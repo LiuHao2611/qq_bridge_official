@@ -35,6 +35,12 @@ Box = tuple[int, int, int, int]  # x0, y0, x1, y1
 #: 会失败——因为粗体真的粗了，笔画缝隙同样会糊。小字只靠字号与颜色分层。
 _MIN_BOLD_FS = 22
 
+#: PNG 编码级别（2026-11-23 性能调研 §3.1/§5.1）。
+#: `optimize=True` 等价于最高 zlib 压缩，在骁龙 835 上是单 CPU 大头：
+#: 真机 720×810 人物卡 614ms；`compress_level=6` 仅 100ms，体积 +4.4%，
+#: PNG 无损 → 逐像素字节差异 = 0。只对 PNG 生效，JPEG 等格式不认该参数。
+_PNG_COMPRESS_LEVEL = 6
+
 
 def _is_real_bold(font) -> bool:
     """加载到的字体本身就是粗体 face？
@@ -529,11 +535,16 @@ class Canvas:
         buf = BytesIO()
         # RGBA→RGB：半透明像素（卡片透明度/阴影）合成到页面底色，避免丢 alpha 变实心
         base = Image.new("RGBA", self.img.size, rgb(self.bg) + (255,))
-        Image.alpha_composite(base, self.img).convert("RGB").save(buf, format=fmt, optimize=True)
+        if str(fmt).upper() == "PNG":
+            # 与 optimize=True 逐像素一致，但手机端省 84% 编码时间（见 _PNG_COMPRESS_LEVEL）
+            kwargs = {"format": fmt, "compress_level": _PNG_COMPRESS_LEVEL}
+        else:
+            kwargs = {"format": fmt, "optimize": True}
+        Image.alpha_composite(base, self.img).convert("RGB").save(buf, **kwargs)
         return buf.getvalue()
 
     def save(self, path: str) -> str:
-        self.img.convert("RGB").save(path, format="PNG", optimize=True)
+        self.img.convert("RGB").save(path, format="PNG", compress_level=_PNG_COMPRESS_LEVEL)
         return path
 
 
