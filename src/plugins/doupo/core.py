@@ -654,6 +654,7 @@ def make_breakthrough_boss(p, rng=random.random, puppet=None, formation_n=0,
         "hard": 1.0, "exp_mul": 1.0, "gold_mul": 1.0,
         "kind": cfg.BOSS_BREAK_KIND,
         "skill": dict(ch["skill"]),
+        "skills": [dict(s) for s in (ch.get("skills") or []) if isinstance(s, dict)],
         "character": _ch,
     }
     # 傀儡（2026-11-20 第二轮）：怪血锚快照 snap（锁难度），实战锚真人 p。
@@ -977,7 +978,9 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
                 _skill = _sk
                 break
     _panel = monster_panel(int(mon["lv"]), _kind, _is_boss)
-    return {
+    # 只在 species 显式带 skills 时新增字段；其余怪旧路径逐字节不变。
+    _skills = [dict(s) for s in (mon.get("skills") or []) if isinstance(s, dict)]
+    _out = {
         "name": mon["name"], "lv": int(mon["lv"]),
         "hp": max(1, m_hp), "atk": max(1, m_atk), "def": m_def,
         "exp": max(1, exp), "gold": max(1, gold),
@@ -989,6 +992,9 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
         # 也让手搓怪（测试里直接给 hp/atk 的字典）保持零面板 → 行为零回归。
         "panel": _panel,
     }
+    if _skills:
+        _out["skills"] = _skills
+    return _out
 
 
 def _legacy_entries() -> list[dict]:
@@ -1449,6 +1455,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     var = max(0.0, float(cfg.MON_DMG_VAR))
     # 2026-11-15 多维效果：本场临时状态（战后即弃，绝不写回 p/mon）
     p_fx, m_fx = fx.new_state(), fx.new_state()
+    # 四技能候选池 + 大招冷却；无 skills 的怪继续走旧分支。
+    _boss_skills = [dict(s) for s in (mon.get("skills") or []) if isinstance(s, dict)]
+    _boss_ult_cd = 0
     # 2026-11-20 怪物隐藏面板（命中/暴击/闪避，%）。**只认 monster_scaled 挂在
     # 实例上的 panel**：手搓怪（测试/工具直接给 hp/atk 的字典）没有 panel →
     # 三项全 0 → 判定阈值逐字节等于旧版，既有逐招快照零回归。
@@ -1666,66 +1675,100 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                 # 效果一律并入「兽击」那一条 log 的 notes —— 不额外插 dmg=0 的条目，
                 # 否则回看卡会把一次攻击渲染成两行、并把总量算重。
                 sk_note, sk_name = [], ""
-                # 禁技（2026-11-19 修）：玩家技挂 silence 到 m_fx，本回合怪放不出技能
-                sk = mon.get("skill") if int(m_fx.get("silence", 0)) <= 0 else None
-                if sk:
-                    _sc = float(sk.get("chance") or cfg.MONSTER_SKILL_BASE_CHANCE)
-                    if mon.get("is_boss"):
-                        _sc *= 2.0
-                    elif mon_tier(_kind) == "elite":
-                        _sc *= 1.5
-                    if rng() < _sc:
-                        _se, _sm = str(sk.get("effect") or ""), float(sk.get("mult") or 0)
-                        sk_name = str(sk.get("name") or "怪技")
-                        if _se == "burst":
-                            dealt = max(1, int(dealt * _sm))
-                            sk_note.append("%s！伤害×%.1f" % (sk_name, _sm))
-                        elif _se == "drain":
-                            _drain = max(1, int(mp_max(p) * _sm))
-                            mp = max(0, mp - _drain)
-                            sk_note.append("%s！斗气被夺 -%d" % (sk_name, _drain))
-                        elif _se == "poison":
-                            # 2026-11-20 修真 bug：旧版只算 poison_dmg 写进 notes，
-                            # 从没挂到 p_fx["dot"] —— 玩家根本不掉血，是假效果。
-                            # 现在真挂 DoT：base=本次毒伤，v=1.0，两回合各扣一次。
-                            # ⚠️ 只走 p_fx 一条路：旧 poison_turns 计数器会与 DoT
-                            # 叠加成 4 次扣血，已整段删除（见 on_turn_start 调用处）。
-                            poison_dmg = max(1, int(dealt * _sm))
-                            p_fx["dot"].append({"v": 1.0, "d": 2,
-                                                "kind": sk_name, "base": poison_dmg})
-                            sk_note.append("%s！中毒 %d×2 回合" % (sk_name, poison_dmg))
-                        else:
-                            dealt = max(1, int(dealt * max(1.0, _sm)))
-                            sk_note.append(sk_name)
-                        # 2026-11-20 原著 BOSS：技能命中时滚动播一条原著台词，
-                        # 并把"恶心机制"（禁技/眩晕/反伤/减疗/降攻/毒）挂到玩家 p_fx。
-                        # mech 复用 skill_effects.on_hit，效果类型全在既有系统内，无新轮子。
-                        if _character:
-                            _quotes = tuple(_character.get("quotes") or ())
-                            if _quotes:
-                                _q = _quotes[int(rng() * len(_quotes)) % len(_quotes)]
-                                sk_note.append("「%s」" % _q)
-                            _mech = _character.get("mech")
-                            if _mech:
-                                _mn = str(_mech.get("kind") or sk_name)
-                                _mech_eff = dict(_mech)
-                                _mech_eff["t"] = _mech.get("t") or "debuff_atk"
-                                # 2026-11-20 复核更正：这里原有一行
-                                #   if t == "dot": _mech_eff["base"] = ...
-                                # 是**死代码**——skill_effects.on_hit 的 dot 分支一律用
-                                # 本次命中伤害 dmg 作 base（"base": max(1, int(dmg))），
-                                # 根本不读 e["base"]。已删，避免以后有人当它是有效开关。
-                                # 真正保证"机制毒不是每回合掉 1 点"的是 on_hit 那行。
-                                if _mech_eff["t"] == "reflect":
-                                    # 反伤要被玩家受击侧 on_incoming(p_fx) 读到：
-                                    # fx.on_hit 把 reflect 写到 self_state，故这里
-                                    # self=p_fx（反伤归玩家），不能像其他机制那样 self=m_fx。
-                                    fx.on_hit([_mech_eff], p_fx, p_fx, dealt, rng,
-                                              ctx={"target_flags": set(), "target_hp_ratio": 0.5})
-                                else:
-                                    fx.on_hit([_mech_eff], m_fx, p_fx, dealt, rng,
-                                              ctx={"target_flags": set(), "target_hp_ratio": 0.5})
-                                sk_note.append("%s！" % _mn)
+                _tier = "normal"
+                # 禁技时不出手；四技能每回合一次权重选择，旧 skill 路径保留。
+                sk = None
+                _sk_hit = False
+                if int(m_fx.get("silence", 0)) <= 0:
+                    if _boss_skills:
+                        _boss_ult_cd = max(0, int(_boss_ult_cd) - 1)
+                        _pool, _cum = [], 0.0
+                        for _cand in _boss_skills:
+                            if bool(_cand.get("ultimate")) and (
+                                    rounds < int(cfg.BOSS_ULTIMATE_MIN_ROUND)
+                                    or _boss_ult_cd > 0):
+                                continue
+                            _raw_chance = _cand.get("chance")
+                            _p = float(cfg.MONSTER_SKILL_BASE_CHANCE
+                                       if _raw_chance is None else _raw_chance)
+                            if mon.get("is_boss"):
+                                _p *= 2.0
+                            elif mon_tier(_kind) == "elite":
+                                _p *= 1.5
+                            _p = min(1.0, _p)
+                            if _p <= 0:
+                                continue
+                            _cum += _p
+                            _pool.append((_cum, _cand))
+                        _cap = min(float(cfg.BOSS_SKILL_MAX_CHANCE), _cum)
+                        _roll = rng()
+                        if _pool and _cap > 0 and _roll < _cap:
+                            _scaled = _roll * _cum / _cap  # 按原权重缩放到 cap
+                            for _lim, _cand in _pool:
+                                if _scaled < _lim:
+                                    sk = _cand
+                                    break
+                            if sk is not None:
+                                _sk_hit = True
+                                _tier = "ultimate" if bool(sk.get("ultimate")) else "normal"
+                                if _tier == "ultimate":
+                                    _boss_ult_cd = int(
+                                        sk.get("cooldown") or cfg.BOSS_ULTIMATE_COOLDOWN)
+                    else:
+                        sk = mon.get("skill")
+                        if sk:
+                            _raw_chance = sk.get("chance")
+                            _sc = float(cfg.MONSTER_SKILL_BASE_CHANCE
+                                        if _raw_chance is None else _raw_chance)
+                            if mon.get("is_boss"):
+                                _sc *= 2.0
+                            elif mon_tier(_kind) == "elite":
+                                _sc *= 1.5
+                            if rng() < _sc:
+                                _sk_hit = True
+                if _sk_hit and sk:
+                    _se, _sm = str(sk.get("effect") or ""), float(sk.get("mult") or 0)
+                    sk_name = str(sk.get("name") or "怪技")
+                    _disp = ("【大招】" if _tier == "ultimate" else "") + sk_name
+                    if _se == "burst":
+                        dealt = max(1, int(dealt * _sm))
+                        sk_note.append("%s！伤害×%.1f" % (_disp, _sm))
+                    elif _se == "drain":
+                        _drain = max(1, int(mp_max(p) * _sm))
+                        mp = max(0, mp - _drain)
+                        sk_note.append("%s！斗气被夺 -%d" % (_disp, _drain))
+                    elif _se == "poison":
+                        # 2026-11-20 修真 bug：旧版只算 poison_dmg 写进 notes，
+                        # 从没挂到 p_fx["dot"] —— 玩家根本不掉血，是假效果。
+                        # 现在真挂 DoT：base=本次毒伤，v=1.0，两回合各扣一次。
+                        # ⚠️ 只走 p_fx 一条路：旧 poison_turns 计数器会与 DoT
+                        # 叠加成 4 次扣血，已整段删除（见 on_turn_start 调用处）。
+                        poison_dmg = max(1, int(dealt * _sm))
+                        p_fx["dot"].append({"v": 1.0, "d": 2,
+                                            "kind": sk_name, "base": poison_dmg})
+                        sk_note.append("%s！中毒 %d×2 回合" % (_disp, poison_dmg))
+                    else:
+                        dealt = max(1, int(dealt * max(1.0, _sm)))
+                        sk_note.append(_disp)
+                    # 命中滚原著台词；四技能只用技能自带 mech，旧路径用角色包 mech。
+                    if _character:
+                        _quotes = tuple(_character.get("quotes") or ())
+                        if _quotes:
+                            _q = _quotes[int(rng() * len(_quotes)) % len(_quotes)]
+                            sk_note.append("「%s」" % _q)
+                        _mech = sk.get("mech") if _boss_skills else _character.get("mech")
+                        if _mech:
+                            _mn = str(_mech.get("kind") or sk_name)
+                            _mech_eff = dict(_mech)
+                            _mech_eff["t"] = _mech.get("t") or "debuff_atk"
+                            if _mech_eff["t"] == "reflect":
+                                # reflect 写 self_state：self=p_fx 才能在受击侧读到。
+                                fx.on_hit([_mech_eff], p_fx, p_fx, dealt, rng,
+                                          ctx={"target_flags": set(), "target_hp_ratio": 0.5})
+                            else:
+                                fx.on_hit([_mech_eff], m_fx, p_fx, dealt, rng,
+                                          ctx={"target_flags": set(), "target_hp_ratio": 0.5})
+                            sk_note.append("%s！" % _mn)
                 # 怪击暴击（2026-11-20 隐藏面板）：与伤害浮动**共用同一次采样**。
                 # roll 是那次采样的单调变换，判「roll 落在区间顶端 2·var·c 内」
                 # 等价于独立掷一次暴击（概率精确等于 c），却不多消耗一次 rng ——
@@ -1822,6 +1865,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                     log_entry["notes"] = notes
                 if sk_name:
                     log_entry["monster_skill"] = sk_name
+                    # 2026-11-23 四技能：只进战报/日志，不渲染成玩家可见元说明。
+                    log_entry["monster_skill_tier"] = _tier
                 if fortune_left > 0:
                     log_entry["fortune_guard"] = True
                 dmg_log.append(_mark(log_entry, m_hp))
