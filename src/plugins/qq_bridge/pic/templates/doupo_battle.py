@@ -87,6 +87,16 @@ END_AFTER = 8             # 与下方 KPI 的间距
 # ---- 原著 BOSS 登场引言（2026-11-20）：胜负徽标下方一条强调引文 ----
 INTRO_ROW = LINE_H        # 引言正文行高（折行按实测行数累加）
 INTRO_AFTER = 12          # 与下方"终局"块的间距（独立于 CAP_BEFORE，避免双重间距）
+# 2026-11-23 用户点名「顶部深色块内外边距没调好、字体颜色看不清」：
+# 底色 ord_lock 两套主题都是深色（#2C2644/#3E3860），正文必须固定用深底亮字，
+# 不能跟随 p["text"]（浅色主题里是深墨紫 #26213A，深底深字对比仅 1.1~1.4:1）。
+INTRO_TEXT = "#F0EAFB"    # 深底正文：浅紫白，双深底对比 9.2~12.2:1
+INTRO_HEAD = "#FFD058"    # 深底标题：金，与卡片金字同色系，双深底对比 7.4~9.8:1
+INTRO_INSET_L = 26        # 正文/标题左边距（玫红竖条在 x0+14，留 12px 呼吸）
+INTRO_PAD_R = 16          # 右边距：折行必须扣掉它，否则文字贴面板右缘
+INTRO_PAD_T = 12          # 块内顶部留白（标题不再贴面板上沿）
+INTRO_HEAD_GAP = 6        # 标题与正文首行的额外间隙（原来挤在一起）
+INTRO_PAD_B = 12          # 块内底部留白
 
 _WHITE = "#FFFFFF"
 
@@ -465,13 +475,17 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
         if not paras:
             paras = [str(intro["quote"])]
         q_lines = []
+        # 折行宽度必须扣掉左缩进 + 右内边距，否则正文右端越过面板右缘（2026-11-23）
+        text_w = content_w - INTRO_INSET_L - INTRO_PAD_R
         for pa in paras:
-            q_lines.extend(_wrap_no_orphan(pa, content_w - 16))
+            q_lines.extend(_wrap_no_orphan(pa, text_w))
         speaker = str(intro.get("speaker") or "")
         title = str(intro.get("title") or "")
         head = "【登场】%s%s" % (speaker, ("·" + title) if title else "")
+        intro_h = (INTRO_PAD_T + FS_BODY + INTRO_HEAD_GAP
+                   + len(q_lines) * INTRO_ROW + INTRO_PAD_B)
         blocks.append(("intro", {"head": head, "lines": q_lines},
-                       FS_BODY + len(q_lines) * INTRO_ROW + INTRO_AFTER))
+                       intro_h + INTRO_AFTER))
 
     # 终局资源条紧跟胜负徽标：先回答「为什么输」，再谈打得多狠。
     # 旧档（无 end_reason）end 为 {}，整块不出现。
@@ -529,23 +543,33 @@ def _rich_layout(data: dict, content_w: int) -> list[tuple]:
 # ---------------------------------------------------------------- 各区块绘制
 def _draw_intro(c: Canvas, payload: dict, x0: int, y: int, content_w: int,
                 p: dict, rec) -> None:
-    """原著 BOSS 登场引言：面板 + 玫红竖条 + 金色「登场」头 + 引文（2026-11-20）。"""
+    """原著 BOSS 登场引言：深色面板 + 玫红竖条 + 金色「登场」头 + 深底亮字引文。
+
+    2026-11-23 用户点名顶部深色块「内外边距没调好、字体颜色看不清」：
+    * 色：ord_lock 双主题都是深底，正文/标题固定用 INTRO_TEXT/INTRO_HEAD 亮字，
+      不再跟随 p["text"]（浅色主题里那是深墨紫，深底深字对比仅 1.1~1.4:1）；
+    * 距：块内上下留白、标题与正文间隙、左右对称缩进全部走常量，测画共用。
+    """
     head = str(payload.get("head") or "")
     lines = list(payload.get("lines") or [])
-    total_h = FS_BODY + len(lines) * INTRO_ROW
+    body_top = INTRO_PAD_T + FS_BODY + INTRO_HEAD_GAP
+    total_h = body_top + len(lines) * INTRO_ROW + INTRO_PAD_B
     UI.panel(c, p, (x0, y, x0 + content_w, y + total_h), state="locked",
              radius=12, watermark=False, outline=p["fret_dk"])
     d = UI.img_of(c)
-    ImageDraw.Draw(d).line((x0 + 14, y + 8, x0 + 14, y + total_h - 8),
+    ImageDraw.Draw(d).line((x0 + 14, y + INTRO_PAD_T, x0 + 14, y + total_h - INTRO_PAD_T),
                            fill=UI.rgb(p["fret"]) + (255,), width=3)
-    UI.kai_text(c, (x0 + 26, y + FS_BODY // 2), head, FS_BODY, p["fret_hi"], anchor="lm")
-    rec("intro_head", head, x0 + 26, y + FS_BODY // 2, FS_BODY)
-    yy = y + FS_BODY
+    head_ly = y + INTRO_PAD_T + FS_BODY // 2
+    UI.kai_text(c, (x0 + INTRO_INSET_L, head_ly), head, FS_BODY, INTRO_HEAD, anchor="lm")
+    rec("intro_head", head, x0 + INTRO_INSET_L, head_ly, FS_BODY)
+    yy = y + body_top
     for i, line in enumerate(lines):
         ly = yy + i * INTRO_ROW + INTRO_ROW // 2
-        c.text((x0 + 26, ly), line, size=FS_BODY, color=p["text"],
+        c.text((x0 + INTRO_INSET_L, ly), line, size=FS_BODY, color=INTRO_TEXT,
                role="regular", anchor="lm")
-        rec("intro_%d" % i, line, x0 + 26, ly - INTRO_ROW // 2, FS_BODY)
+        # rec 内部已按 anchor="lm" 扣 hh//2，这里不能再减半行高（否则 boxes 记录偏上 13px，
+        # 让标题与首行在 boxes 门禁里假重叠）
+        rec("intro_%d" % i, line, x0 + INTRO_INSET_L, ly, FS_BODY)
 
 
 def _draw_verdict(c: Canvas, v: dict, x0: int, y: int, content_w: int,
