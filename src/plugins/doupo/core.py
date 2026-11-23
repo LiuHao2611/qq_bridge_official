@@ -3102,8 +3102,10 @@ def _alch_level_up(p) -> str:
     """
     start = int(p.get("alch", cfg.ALCH_START))
     idx = start
+    # 2026-11-23 未入品起步：idx=-1 时 alch_tier 给「未入品/400」，攒够升一品。
+    # 绝不能写 ALCHEMIST[idx] —— 负索引会取到九品（门槛 0）导致首炉白跳一品。
     while idx < cfg.ALCH_MAX:
-        need = cfg.ALCHEMIST[idx][1]
+        _name, need = cfg.alch_tier(idx)
         if int(p.get("alch_exp", 0)) < need:
             break
         nxt = idx + 1
@@ -3113,7 +3115,8 @@ def _alch_level_up(p) -> str:
         p["alch_exp"] = int(p["alch_exp"]) - need
         idx = nxt
         p["alch"] = idx
-    return cfg.ALCHEMIST[idx][0] if idx != start else ""
+    name, _need = cfg.alch_tier(idx)
+    return name if idx != start else ""
 
 
 def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:

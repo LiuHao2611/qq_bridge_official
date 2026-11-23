@@ -3508,3 +3508,11 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
 - 🔑 K_RAMP=0 = 退回旧的匀速升级（变异反证 M7 钉住，测试必红）；只改 K_BASE 不改 RAMP 仍是匀速——两者缺一不可。
 - 守门 `tests/test_doupo_exp_balance.py`：新增 `test_exp_divisor_front_fast_back_slow`（K 单调/lv1=K_BASE/末级倍数=1+RAMP×(MAX-2)/(MAX-1)/体感≥4倍）、M7 变异；原 0.375 期望改为经 `encounter_exp_divisor(50)` 计算（杜绝手抄）。300 断言 + 7 变异全绿全红，相关套件 112 passed。
 - 设计文档 `docs/斗破_升级节奏与爬塔500层_重设计方案_2026-11-23.md`（v0.2）：**只落地了升级部分**；爬塔 400-500 层（P-B/C/D）未拍板未动，别误当已做。
+
+### 新号「未入品」起步（2026-11-23，用户「新入道就四品炼药师不合理」+ 拍板「增设未入品」）
+- 🚨 **新号 `alch = ALCH_NONE = -1`（未入品），不再是四品**。原著萧炎开局非炼药师。
+- 🔑 **`-1` 绝不能直接喂 `ALCHEMIST[idx]`**：负索引静默取到「九品」（门槛 0）→ 新号首炉白跳一品、面板显示「九品炼药师」。**所有 alch 下标访问的唯一入口 = `config.alch_tier(idx)`**（返回 `(name, need)`，`-1`→`("未入品",400)` 且 400 直接取 `ALCHEMIST[0][1]` 不新造魔数；越界显式 `ValueError` 不兜底）；展示串唯一入口 = `config.alch_label(idx)`（未入品无「炼药师」后缀）。
+- **老存档 alch=0..8 语义零变更**：ALCHEMIST 表不挪位；未入品用表外独立索引 -1，不塞进表（塞进去就得给所有老档 +1，牵连 DB/测试/傀儡门槛）。
+- 已改生产代码 5 处：`core._alch_level_up`（循环 need/返回名走 alch_tier）、`card.build_data` + `card.build_recipes_data`、`commands` 人物面板 + `cmd_recipes`、`puppet_core.gate_soul`。`craft_rate_for/low_grade_exp_factor` 对 -1 的算术已探针验证合理（炼一品 diff=1 一成把握、能炼能攒经验），不改。
+- 守门 `tests/test_doupo_alch_start_ranked.py` 12 例全绿；3 变异（ALCH_START=3 / 负索引取九品 / 首炉白跳一品）全部命中。肉眼验新号面板卡「炼药·未入品 0/400」+ 丹方卡「未入品·…」真实出图。
+- ⚠️ 未入品新号 lv1 仍能看到一~四品丹（GRADE_MIN_LV 一~四品门槛=1 的既有设计），但显示「零成·越4档·几无」——不影响业务，若要收紧可见丹方门槛属另一次改动，本次未动。

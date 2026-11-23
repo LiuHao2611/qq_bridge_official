@@ -32,7 +32,7 @@ def gate_realm(p: dict, tier: int) -> tuple[bool, str]:
 def gate_soul(p: dict) -> tuple[bool, str]:
     """② 灵魂境界闸（E20/E22/E23/E24）：炼药品阶达标才有灵境灵魂去'分半'认主。"""
     if int(p.get("alch", 0)) < cfg.PUPPET_ALCH_MIN:
-        grade = cfg.ALCHEMIST[min(cfg.PUPPET_ALCH_MIN, cfg.ALCH_MAX)][0]
+        grade, _need = cfg.alch_tier(min(cfg.PUPPET_ALCH_MIN, cfg.ALCH_MAX))
         return False, "灵魂境界未达灵境，须炼药师品阶到%s" % grade
     return True, ""
 
