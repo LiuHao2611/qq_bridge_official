@@ -3516,3 +3516,11 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
 - 已改生产代码 5 处：`core._alch_level_up`（循环 need/返回名走 alch_tier）、`card.build_data` + `card.build_recipes_data`、`commands` 人物面板 + `cmd_recipes`、`puppet_core.gate_soul`。`craft_rate_for/low_grade_exp_factor` 对 -1 的算术已探针验证合理（炼一品 diff=1 一成把握、能炼能攒经验），不改。
 - 守门 `tests/test_doupo_alch_start_ranked.py` 12 例全绿；3 变异（ALCH_START=3 / 负索引取九品 / 首炉白跳一品）全部命中。肉眼验新号面板卡「炼药·未入品 0/400」+ 丹方卡「未入品·…」真实出图。
 - ⚠️ 未入品新号 lv1 仍能看到一~四品丹（GRADE_MIN_LV 一~四品门槛=1 的既有设计），但显示「零成·越4档·几无」——不影响业务，若要收紧可见丹方门槛属另一次改动，本次未动。
+
+### 爬塔 400-500 层重设计（2026-11-23，用户「400-500层是正常范围不是上限，按中上战力标定」+ 拍板 P-B/C/D）
+- 🚨 **爬塔难度已重标定：中上战力（满级+武器6）真跑中位 419 层**（满级裸 413 / 顶配武器9+帝炎 539 / lv90 中期 149）。改 4 个常量：`tower_data.TOWER_ATK_SCALE 0.18→0.015`、`FLOOR_REST_HEAL 0.12→0.45`、`FLOOR_REST_DMG_RATIO 0.5→0.9`、`DIFF_QUAD 0.15→0.0003`。
+- 🔑 **卡点认知（别改回去）**：塔是连爬消耗战，怪血 `hp_mult` 直接决定回合数→承伤。旧 `DIFF_QUAD=0.15` 使 500 层 hp 达 374×（顶配战力仅 88× 上界 ⇒ 假目标，顶配满级实跑只到 45 层）。现 500 层 hp 1.75×、1000 层 3.99×、1500 层 7.74×，二次项继续变陡成软墙（500 不是上限）。**标尺保持 103 封顶**（P-B 拍板①），别动 `REF_LV_CAP`。
+- 🔑 定参探针 `tmp/probe_tower_tune2.py` / `probe_tower_verify.py`（3~10 种子真跑），别用倍率估算定参——要真跑 `core.tower_floor` 连爬。
+- **逐层分档掉落**（P-D 增强版）：`tower_data.floor_loot(n)` 确定性（不掷骰，同层恒定）按层数分档（0/51/151/301→tier1~4）+ 怪种定品级（normal-1/elite 0/boss+1，钳1~4），tier 封顶后数量随层数递增（无限层「以此类推」）。材料名取 `NOVEL_MATERIALS` tier1~4，丹药取既有配方，**不新增物品**。`_LOOT_MATERIAL_POOL` 是零依赖镜像，守门逐 tier 比对真源防漂移。
+- 🔑 **掉落跟随 `tower_paid_floor` 水位线**（`incremental_loot(to,paid)`）：电梯重打旧层不再刷材料/丹药；分轮领==一口气领（确定性掉落才能做累计差，绝不能给逐层掉落加 rng）。`core.tower_settle` 入包并在回包 dict 带 `loot`；三处结算回包（cmd_tower_settle/超时自动/阵亡）全部展示。
+- 守门 `tests/test_doupo_tower_500.py` 12 例 + 4 变异（DIFF_QUAD 回 0.15 / ATK 回 0.18 / 怪种品级颠倒 / 忽略水位线）全绿全红；塔相关 36 passed。`test_doupo_tower.py::test_floor_kind_and_hard` 的 `d50>3.0` 旧断言已改新口径（低层平缓+500后变陡）。

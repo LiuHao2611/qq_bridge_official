@@ -2370,9 +2370,12 @@ def _expired_settle_line(p, qq) -> str:
     res = core.tower_settle(p, stale)
     if not res.get("ok"):
         return ""
+    _loot = res.get("loot") or {}
+    _loot_txt = ("、".join(f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
     return ("⏰ 上一轮闲置超时（%d 小时），已自动结算："
-            "+%d 金币、+%d 修为，止步第 %d 层%s"
+            "+%d 金币、+%d 修为，止步第 %d 层%s%s"
             % (ts.DEFAULT_TTL // 3600, res["gold"], res["exp"], res["floors"],
+               ("　🎁 " + _loot_txt) if _loot_txt else "",
                "　🏆 新纪录！" if res["new_record"] else ""))
 
 
@@ -2484,10 +2487,13 @@ async def cmd_tower(store, qq, arg="") -> str:
         # 阵亡：结算
         res = core.tower_settle(p, st)
         ts.STORE.clear(qq)
+        _loot = res.get("loot") or {}
+        _loot_txt = ("\n　🎁 掉落：" + "、".join(
+            f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
         lines = [
             f"{header}🗼 第 {r['floor']} 层【{kind_tag}】{r['name']} {aff}",
             f"　💀 力竭倒下，止步第 {res['floors']} 层。",
-            f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
+            f"　结算：+{res['gold']} 金币、+{res['exp']} 修为" + _loot_txt
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
         ]
         # 电梯提示（2026-11-17）：止步层 > 1 才值得坐；已领过的层不重复给奖励。
@@ -2624,7 +2630,10 @@ async def cmd_tower_settle(store, qq) -> str:
     res = core.tower_settle(p, st)
     ts.STORE.clear(qq)
     await store.put_player(p)
+    loot = res.get("loot") or {}
+    loot_txt = ("\n　🎁 掉落：" + "、".join(f"{nm}×{qty}" for nm, qty in loot.items())) if loot else ""
     return (f"🗼 收手结算：通过 {res['floors']} 层，+{res['gold']} 金币、+{res['exp']} 修为"
+            + loot_txt
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
 
 

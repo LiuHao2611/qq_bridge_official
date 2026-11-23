@@ -360,7 +360,7 @@ async def main():
     # 2026-11-16：等级不够的丹药不展示。A 为低境界，应见一~四品常用丹方，
     # 且帝品「灭神丹/九幽散」不得出现（min_lv 按品阶映射到斗帝境界）。
     check("炼药 列出丹方（等级过滤）",
-          "回灵丹" in r and "炼药师" in r
+          "回灵丹" in r and ("炼药师" in r or cfg.ALCH_NONE_NAME in r)
           and "灭神丹" not in r and "九幽散" not in r,
           r[:80])
     p = await store.get_player(A)
