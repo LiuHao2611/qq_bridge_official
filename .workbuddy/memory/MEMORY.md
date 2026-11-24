@@ -31,6 +31,7 @@
 - **诊断口诀**：怀疑"数据没迁过来"时先比**行数**（`select count(*) from players`，生产应 4 行）和**文件 mtime**，再看 `/proc/<pid>/fd`、再看 `.env` 有没有 DATA_PATH；别先怀疑迁移包。生产存档备份在 `data/backup-YYYYmmdd-HHMMSS/`。
 - **已知残留**：`MANJU_API_BASE`/`TASK_MONITOR_BASE` 仍指 `127.0.0.1:7788/8099`（主项目后端在 Windows，手机上没有）⇒ 生图/主项目联动不可用（ComfyUI 无法跑在手机上，属物理限制，非配置错误）；`OPS_GIT_REPO` 默认 `D:\AI\manju_agent` 会打一条 `watch_git_failed` 启动警告（无害）；NapCat 通道未上手机（`channels.napcat=false`，主号 2149466287 那条路径在电脑上本来也没在跑）。
 - **网络身份固定（2026-11-21 20:12）**：WiFi 静态 `192.168.0.50/24`（`ipv4.method=manual`，跨 4 次重启验证不变）；`802-11-wireless.cloned-mac-address=02:53:41:47:49:54`——**原本每次开机 `invalid MAC address; choosing random`，MAC 随机，路由器会把手机当新设备**，固定后才能稳定 ARP/DHCP 身份。
+- **🚨 部署后必跑 `python tools/phone_deploy.py drift`（2026-11-24 周本事故的制度化修复）**：`verify` 只校验 `.deployed` 清单里登记过的文件，**漏推的文件根本不进清单 ⇒ 闸门 PASS 线上却是坏的**。11-23 那次就是「`core.py` 推了新版（`weekly_floor` 传 `snapshot_lv=`）但 `weekly_data.py` 还是旧签名 `floor_reward(n)`」，玩家发「周本」直接 `TypeError: unexpected keyword argument 'snapshot_lv'`。`drift` 把判据换成「目录对目录」：本地 `src/**/*.py` md5 vs 手机全量，漏推/旧版立刻 FAIL 点名。正常态应输出 `291 个 .py` 两侧相等。`tools/` 是电脑侧开发脚本，不上手机，属正常差异。
 
 ## 索引
 - 游戏侧全部红线（数据入库存真列 / 战斗回看 / 异火 / 傀儡三件套 / 沉浸文案 / 命中闪避面板 / 紫卡 / 沙盒 / 赠送 / 成卡回执 / 养魂）见同目录 `MEMORY_REDLINES.md`，动这些模块前必读。
