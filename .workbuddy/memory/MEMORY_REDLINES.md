@@ -62,6 +62,9 @@
 🚨 **背包不许再分页/截断**：`bagview.page_of` / `PER_PAGE` 已**删除**，`build_bag_data(p, locked=None)` / `render_bag(p, locked=None)` / `cmd_bag(store, qq)` **都没有 page 形参**。禁恢复 `items[:24]`、禁再加翻页按钮、禁往卡面塞 `page`/`total_pages` 字段（`test_bagview.py::t_no_truncation` 守门，64 种必须 64 行）。卡高随物品数增长，可到 1300px+ 属正常。
 🚨 **带纹丹卡面/文本都不改名**：显示 `cfg.base_of_danwen(name)`，纹数只走行 dict 的 `corner_tr`（一纹/二纹/三纹，几纹写几），锁定只走 `corner_tl="锁"`。禁再把「纹·丹名」写进 title、禁回退成 `〔纹〕/〔锁〕` 前缀。
 🚨 **角标字色只能取调色板 `gold`**（浅 `#B07A16` / 深 `#FFD058`），因为要和「包裹」牌匾同族金；禁用 `accent_color`/硬编码色（`test_bagview.py` + `tmp/check_bag_boxes.py` 双主题守门）。
-🚨 **`S.small` 默认 `anchor="lm"`（垂直中线）**：给它是「中线」不是「上缘」。旧代码传 `cell_y+3` 导致 14px 小字浮到格子上方 4px（真图抓到）。用 `doupo_list.corner_cy(y)`，`CORNER_TOP=2`；名称中线 `GRID_NAME_CY` **恒为常量**，禁按「有无角标」偏移（同排基线必须一致）。
+🚨 **格子角标 = 楷体 + 金色光晕 + 骑在格子上边框（截断框线）**（2026-11-25 用户二次定稿）：
+唯一入口 `doupo_list.draw_corner_badge()`。①字体必须 `UI.font(size,"kai")`（doupo_kai.ttf，与「包裹」牌匾同族），禁退回等线；②光晕必须 `GaussianBlur` 且光晕层比色块大 `CORNER_GLOW`，**禁叠两层 + 禁竖向伪粗**（小字会糊死），伪粗只取横向 ±1；③必须先用 `p["panel"]` 实心块盖断格顶框线再压字（这是「截断边框」的全部观感来源）；④`CORNER_INSET` 必须 > 格子圆角半径 8，否则把圆角啃成方角。
+🚨 **`S.small` 默认 `anchor="lm"`（垂直中线）**：给它是「中线」不是「上缘」（旧代码传 `cell_y+3` 让小字浮到格子外）。角标一律走 `corner_cy()/corner_top()/corner_bottom()`；名称中线 `GRID_NAME_CY` **恒为常量**，禁按「有无角标」偏移（同排基线必须一致）。
+⚠️ **斗破卡存在两套主题**：本地默认渲染的是深色 game 风，**手机生产实际出的是浅色**（浅 lavender 格 + 深色字）。改任何卡片配色/角标后，`light` 与 `dark` 都要实渲染看图，别只按一边下结论。
 🚨 **丹纹档位必须真有效果**，不能只是标签：`_TIER_SCALE=(1,1,1.5,2)` **只放大次数/时长、百分比一分不动**（用户定的平衡杠杆=限时/限次）；三纹额外多赐一条福且躲开同 id（同名 `max()` 刷新会白吃）。存量 `·丹纹` 永久保留为别名按一纹读，**禁删**（老档会失效）。
 🚨 **变异反证禁 `git checkout -- <file>`**：当天 23:40 用它还原 `card.py`，把未提交的 build_bag_data 重写一起冲掉了（退回分页版）。只许 `cp` 到 /tmp 备份、`cp` 回来，再 `git diff --stat` 复核增删行数。
