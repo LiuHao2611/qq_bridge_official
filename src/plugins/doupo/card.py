@@ -42,6 +42,10 @@ CARD_MENU_NAME = "斗破菜单"
 #: 卡片宽度（QQ 聊天窗内 720 显示效果最稳，过宽会被压缩导致字小）
 CARD_WIDTH = 720
 
+#: 分页卡并发渲染上限（真机实测 sweet spot：x2=1.7x、x4=1.1x、x8=0.5x）
+#: 只用于战斗回看这类多页卡，封顶 2 防多用户同时触发时线程爆炸。
+_PAGE_RENDER_CONCURRENCY = 2
+
 _PKG_NAME = "_qq_bridge_pic_standalone"
 _PIC = None
 _PIC_FAILED = False
@@ -295,25 +299,43 @@ async def _render_pages(template: str, data: dict, card_name: str,
     # 主题按整份解析一次（分页共享同一风格），qq 来自 data 内部键（若有）。
     style, token, tpl = _style_for(data)
     render_pages = [_styled(pg, style) for pg in pages]
-    out: list[bytes] = []
+
+    async def _one(idx: int, page_data: dict) -> bytes | None:
+        """渲染单页：主题链路 → 内置 light 兜底；整页失败返回 None。"""
+        try:
+            return await pic.render(template, card=card_name,
+                                    width=CARD_WIDTH, data=page_data)
+        except Exception as e:  # noqa: BLE001
+            log.debug("%s 第 %d 页主题链路失败，试内置 light：%s", card_name, idx, e)
+        try:
+            return await asyncio.to_thread(
+                pic.render_sync, template, "light", card_name,
+                width=CARD_WIDTH, data=page_data)
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s 第 %d/%d 页渲染失败（整份降级纯文本）：%s: %s",
+                        card_name, idx, len(pages), type(e).__name__, e)
+            return None
+
+    # 分页并发上限 2（2026-11-24 真机实测）：单卡渲染受 GIL 保护，线程>2 反而
+    # 比串行慢（x2=1.7x / x4=1.1x / x8=0.5x），但同模板多页缓存友好、PNG 编码
+    # 释放 GIL，x2 实测战斗回看 3 页 2777ms→738ms(3.8x)。gather 保序，Semaphore
+    # 封顶 2 防止多用户同时触发时线程爆炸。contextvar 主题由 create_task/to_thread
+    # 各自复制，缓存 PicCache 有 RLock，均无竞态。
+    gate = asyncio.Semaphore(_PAGE_RENDER_CONCURRENCY)
+
+    async def _bounded(idx: int, page_data: dict) -> bytes | None:
+        async with gate:
+            return await _one(idx, page_data)
+
     try:
-        for i, page_data in enumerate(render_pages, 1):
-            try:
-                out.append(await pic.render(template, card=card_name,
-                                            width=CARD_WIDTH, data=page_data))
-                continue
-            except Exception as e:  # noqa: BLE001
-                log.debug("%s 第 %d 页主题链路失败，试内置 light：%s", card_name, i, e)
-            try:
-                out.append(await asyncio.to_thread(
-                    pic.render_sync, template, "light", card_name,
-                    width=CARD_WIDTH, data=page_data))
-            except Exception as e:  # noqa: BLE001
-                log.warning("%s 第 %d/%d 页渲染失败（整份降级纯文本）：%s: %s",
-                            card_name, i, len(pages), type(e).__name__, e)
-                return []
+        got = await asyncio.gather(*[
+            _bounded(i, pd) for i, pd in enumerate(render_pages, 1)
+        ])
     finally:
         _reset_style(token, tpl)
+    if any(p is None for p in got):
+        return []  # 任一页失败整份降级
+    out = list(got)
     log.info("%s 出图 %d 页", card_name, len(out))
     return out
 
