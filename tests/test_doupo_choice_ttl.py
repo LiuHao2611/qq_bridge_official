@@ -151,9 +151,17 @@ def test_no_hardcoded_seconds_in_player_text():
     菜单例外：``MENU_GROUPS`` 必须保持纯字面量（按钮门禁用 ast.literal_eval 静态
     解析，写成 ``"…%d 秒" % cfg.CHOICE_TTL`` 会解析失败），因此允许写「N 分钟」，
     但必须与 ``cfg.CHOICE_TTL`` 的分钟数一致。
+
+    🚨 2026-11-24：本函数以前把**所有**「N 分钟」都当成选项时限，于是限时增益丹药
+    的「力量 +45%（15 分钟）」被误判。药效时长与回复时限是两个语义域，不能共用
+    一条判据 —— 所以「分钟」改成只在**选项语境**里审判（``CHOICE_CTX``），
+    药效时长由 ``test_doupo_temp_buff.py`` 的 ``buff_min`` 一致性守门覆盖。
+    秒数检查保持全量（药效从不按秒写）。
     """
     import re
 
+    #: 出现这些词才说明这句在讲「回 1/2/3 的时限」，而不是丹药药效时长。
+    CHOICE_CTX = ("回", "选择", "超时", "失效", "邀请", "战利品", "入塔", "内")
     bad = []
     for fn in sorted(os.listdir(DP)):
         if not fn.endswith(".py") or fn.startswith("test_"):
@@ -165,6 +173,8 @@ def test_no_hardcoded_seconds_in_player_text():
             sec = re.search(r"(\d+)\s*秒", s)
             if sec and int(sec.group(1)) != int(cfg.CHOICE_TTL):
                 bad.append("%s 写死 %s 秒（实际 %d）" % (where, sec.group(1), cfg.CHOICE_TTL))
+            if not any(w in s for w in CHOICE_CTX):
+                continue
             for mn in re.finditer(r"(\d+)\s*分钟", s):
                 if int(mn.group(1)) * 60 != int(cfg.CHOICE_TTL):
                     bad.append("%s 写「%s 分钟」与 %d 秒不一致"

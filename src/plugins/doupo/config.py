@@ -745,6 +745,8 @@ EFFECT_TAG = {
     "luck": "增机缘", "crit": "增暴击", "dodge": "增闪避", "hit": "增命中",
     # 2026-11-23：暴击率 80% 硬顶之后的「增幅战力」词条（炎魔清玄丹）。
     "critdmg": "增暴伤",
+    # 2026-11-24 限时增益（原著「短时间内」类：蓄力丹/龙力丹/速灵风丹）。
+    "temp_buff": "限时增益",
     # 2026-11-23：帝品雏丹 = 原著「可助人成为斗帝」，不是五维丹。
     "ascend": "成帝",
     "skill": "升级技",
@@ -789,6 +791,9 @@ IMPL_BY_EFFECT = {
     # 无 %d（一次性剧情道具，不是数值丹）—— recipe_impl 对无 % 模板原样返回。
     "ascend": "斗帝突破必成（102→103 不再掷机缘，用掉即止）",
     "hit": "永久命中 +%d%%",
+    # 基础模板：真正的 impl 由 recipe_impl 里的 temp_buff 分支按 buff_key/buff_min
+    # 拼出「力量 +20%（20 分钟）」——时长必须进承诺，否则又是「短时」不写时长。
+    "temp_buff": "限时增益 +%d%%",
     "stat": "全属性 +%d",
     # 默认模板只给量纲；上限写不进单据（模板只吃一个 %d），所以养魂涎在
     # RECIPE_IMPL_OVERRIDE 里手写了「傀儡灵魂 +10（上限 200）」这句承诺。
@@ -894,6 +899,15 @@ def recipe_impl(rec: dict) -> str:
     if tpl:
         # skill 等模板没有 %d（「用于升级斗技」），不能盲目套 %
         out = (tpl % val) if "%" in tpl else tpl
+        if eff == "temp_buff":
+            # 时长是承诺的一部分（原著「短时间」），必须由配方字段拼出来。
+            mins = int(float(rec.get("buff_min") or 0))
+            out = "%s +%d%%（%d 分钟）" % (rec.get("buff_key") or "力量", val, mins)
+            pen = rec.get("buff_penalty") or {}
+            if pen and float(pen.get("min") or 0) > 0:
+                out += "；到期后 %d 分钟 %s %d%%" % (
+                    int(float(pen["min"])), rec.get("buff_key") or "力量",
+                    int(round(float(pen.get("mul") or 0) * 100)))
         return _with_stat_scope(out) if eff == "stat" else out
     return ""
 

@@ -21,6 +21,7 @@ from . import card_theme
 from . import config as cfg
 from . import core
 from . import doupo_text as txt
+from . import temp_buff as tb
 from . import duel_challenge as dc
 from . import factions as fac
 from . import flame_skills as fs
@@ -633,6 +634,8 @@ async def cmd_panel(store, qq) -> str:
         f"{int(p.get('duel_losses', 0))}负（无惩罚，仅本群）",
         _regen_line(p, st),
     ]
+    # 2026-11-24 限时增益：药力未散时必须看得见剩余时间（否则玩家以为丹没效果）。
+    rows.extend(tb.lines(p))
     return "\n".join(rows)
 
 
@@ -849,8 +852,12 @@ async def cmd_fight(store, qq) -> str:
     # 2026-11-23：首行/高光/战果/代价改由 doupo_text 出句，保留原有锚点词。
     lines = [
         txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed),
-        txt.battle_spot(spot),
     ]
+    # 2026-11-24 限时增益：药力还有余就得在战报里露一行，否则玩家以为丹白吃了。
+    _bl = tb.battle_line(p)
+    if _bl:
+        lines.append(_bl)
+    lines.append(txt.battle_spot(spot))
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
     # ① 战果（修为/金币/敌人 + 战利）

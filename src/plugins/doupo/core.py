@@ -18,7 +18,7 @@ import time
 
 from . import config as cfg
 from . import doupo_text as txt
-from . import flame_bonus as _flame_bonus
+from . import flame_bonus as _flame_bonus, temp_buff as tb
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
@@ -174,14 +174,16 @@ def stats(p) -> dict:
     lv = int(p.get("lv", 1))
     out = {k: c_stat(v, lv) for k, v in cfg.HERO_BASE.items()}
 
-    # 武器四词条：与 weapon_panel / enhance_preview 同一口径（_weapon_rows）。
-    # 装备玄重尺且 w<9 时逐字节等于原逻辑（实机数值断言 / 平衡全部不动）。
+    # 武器四词条（口径见上 docstring）：_weapon_rows 与 weapon_panel 同源。
     cur_weapon, _ = _weapon_rows(p)
     for k, v in cur_weapon.items():
         out[k] = out.get(k, 0) + v
 
     for k, v in (p.get("bonus") or {}).items():
         out[k] = out.get(k, 0) + int(v)
+
+    # 2026-11-24 限时增益：与五维丹同口径（帝炎同样放大），逻辑见 temp_buff。
+    tb.merge(out, p)
 
     # 其他火焰（兽火/天然/人造/融合火）的比例加成：atk→力量、hp→体力。
     # 与 flame_bonus 同源；只有已收服才生效，新号无这些火 → 逐字节不变。
@@ -3350,9 +3352,8 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
                 return {"ok": False, "reason": "resisted",
                         "msg": lead + txt.pill_resist(realm_name, max_per)}
             if rng() < float(rec.get("star_chance", 0.0)):
-                # 2026-11-23 修 P1-4：九星位**不得跨大境界**。旧版 _advance_one 只
-                # 做 lv+1，于是斗灵丹 lv54→55 直接晋斗皇、紫心破障丹 lv36→37 晋
-                # 斗灵 —— 把 commands 的九星突破 BOSS 战整个绕过去了（那是境界关口）。
+                # 2026-11-23 修 P1-4：九星位不得跨大境界。旧版 _advance_one 只做
+                # lv+1，斗灵丹 lv54→55 直接晋斗皇，绕过了九星突破 BOSS 战。
                 if cfg.realm_index(lv + 1) != ri:
                     p["exp"] = int(p.get("exp", 0)) + val
                     p["pill_exp"] = int(p.get("pill_exp", 0)) + val
@@ -3386,6 +3387,8 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
         # 帝品雏丹：一缕本源帝气，下一次 102→103 必成（见 level_up）。
         p["ascend"] = int(p.get("ascend", 0)) + 1
         return {"ok": True, "msg": lead + "本源帝气入体——斗帝壁障已可叩开"}
+    if eff == "temp_buff":
+        return {"ok": True, "msg": lead + tb.eat(p, rec)}
     return {"ok": False, "reason": "unknown"}
 
 
@@ -3662,7 +3665,7 @@ def shop_buy(p, name, n=1) -> dict:
         return {"ok": False, "reason": "noitem"}
     total = int(item["price"]) * n
     # 2026-11-23 修速通：min_lv 旧版只过滤「炼药名录」，商店不认 —— lv1 拿 1 万
-    # 起始金币买 66 枚破障丹直接跳 23 级。丹药品阶本就是门槛（低阶修士受不住）。
+    # 起始金币买 66 枚破障丹跳 23 级。丹药品阶本就是门槛（低阶修士受不住）。
     _need_lv = cfg.recipe_min_lv(name)
     if _need_lv > int(p.get("lv", 1)):
         return {"ok": False, "reason": "lv", "need_lv": _need_lv}

@@ -38,6 +38,8 @@ import json
 import os
 import sqlite3
 import time
+
+from . import temp_buff as _tbuff
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -440,7 +442,20 @@ class Store:
             p = self._data["players"].get(key)
         if p is not None:
             await self._maybe_regen(key, p)
+            await self._sweep_buffs(p)
         return p
+
+    async def _sweep_buffs(self, p: dict) -> None:
+        """限时增益到期清扫（2026-11-24，见 temp_buff 模块头）。
+
+        和调息一样挂在**唯一读存档入口**：口令、按钮、卡片渲染都会经过这里，
+        所以「到期」不需要任何定时器。纯本地计算，失败只留痕、不拦读取。
+        """
+        try:
+            if _tbuff.sweep(p):
+                await self.put_player(p)
+        except Exception as e:  # noqa: BLE001
+            _log("warning", "限时增益清扫失败（%s）：%s" % (type(e).__name__, str(e)[:160]))
 
     async def _maybe_regen(self, qq: str, p: dict) -> None:
         """按 regen_clock 结算一次气血/斗气恢复（失败只记日志，不拦任何读取）。"""
