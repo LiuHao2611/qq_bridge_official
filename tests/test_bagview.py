@@ -153,29 +153,44 @@ def t_lock_corner():
 
 
 def t_corner_geometry_inside_cell():
-    """🔒 角标必须画在格子**内部**，且不压名称、不高低错位（2026-11-24 实图事故）。
+    """🔒 角标必须**骑在格子上边框**（截断框线）、用楷体+金色光晕、且不压名称。
 
-    事故原样：``S.small`` 默认 ``anchor="lm"``（垂直**中**线），旧代码把
-    ``cell_y + 3`` 当中线传 → 14px 小字上缘跑到格子顶边**上方** 4px，
-    实图里「锁」浮在框外、看着像掉到上一行。另一处：名称曾按「有角标就下移
-    4px」处理 → 同一行里破厄丹比三纹青灵丹低 4px，违反同排基线一致。
+    2026-11-24 首版把角标塞在格子内部（``S.small`` 默认 ``anchor="lm"`，
+    传 ``cell_y+3`` 被当中线 → 小字上缘浮到格子外）；用户看完实图要求
+    「用特殊字体 + 金色光晕 + 骑在边框上，看上去是截断边框的感觉」。
+    本用例钉死改版后的几何与画法：上缘越过格顶（框线真被截断）、下缘进格子、
+    上探量 ≤ 行间距（不啃上一行）、内缩 > 圆角半径（不糊角）、走楷体 + 高斯光晕。
     """
     tpl = _tpl_mod()
-    # ① 角标上缘在格子内（>0 即不进上一行），且下缘不压名称
-    assert tpl.CORNER_TOP > 0, tpl.CORNER_TOP
+    # ① **骑在框线上**：上缘必须高于格顶（否则只是塞在格子里，框线不会断），
+    #    下缘必须进入格子（否则整块浮在行缝里，看着像另一行的东西）。
     for cell_y in (0, 120, 640):
-        top = cell_y + tpl.CORNER_TOP
-        assert top >= cell_y, (cell_y, top)
-        assert top > cell_y - 1, "角标上缘浮到格子外了：%s" % top
-        # S.small 传的是中线，换算回上缘必须等于 top
-        assert tpl.corner_cy(cell_y) - tpl.FS_CORNER // 2 == top, (
-            cell_y, tpl.corner_cy(cell_y), top)
-        assert top + tpl.FS_CORNER <= cell_y + tpl.GRID_CELL_H, "角标超出格底"
+        top = tpl.corner_top(cell_y)
+        bot = tpl.corner_bottom(cell_y)
+        assert top < cell_y, "角标上缘没越过格顶，框线不会被截断：top=%s cell=%s" % (
+            top, cell_y)
+        assert bot > cell_y, "角标整块浮在框线上方：bot=%s cell=%s" % (bot, cell_y)
+        assert tpl.corner_cy(cell_y) - tpl.corner_badge_h() // 2 == top, "中线换算不一致"
+        assert bot <= cell_y + tpl.GRID_CELL_H, "角标超出格底"
+    # ② 上探量必须 >0（真截断）且 ≤ 行间距（不许啃上一行格底）
+    over = tpl.corner_overhang()
+    assert 0 < over <= tpl.GRID_GAP, "上探 %spx 越界（GRID_GAP=%s）" % (over, tpl.GRID_GAP)
+    # ③ 不压名称
     gap = tpl.corner_name_gap()
     assert gap >= 2, "角标下缘与名称上缘净空只有 %spx（会黏字）" % gap
-    # ② 名称中线与「有无角标」无关（常量，不是条件表达式）
+    # ④ 不糊圆角：内缩必须大于格子圆角半径
+    assert tpl.CORNER_INSET > 8, "CORNER_INSET=%s 会盖掉格子圆角" % tpl.CORNER_INSET
+    # ⑤ 光晕必须外扩（等于色块边界就成了描边，不是「晕」）
+    assert tpl.CORNER_GLOW > 0, tpl.CORNER_GLOW
+    # ⑥ 特殊字体：必须走楷体（doupo_kai.ttf），不能退回等线
+    import inspect
+    src = inspect.getsource(tpl.draw_corner_badge)
+    assert 'UI.font(size, "kai")' in src, "角标没走楷体（特殊字体）"
+    assert "GaussianBlur" in src, "角标没有高斯光晕"
+    assert 'g["panel"]' in src, "角标没铺格子底色去截断边框"
+    # ⑦ 名称中线与「有无角标」无关（常量，不是条件表达式）
     name_top = tpl.GRID_NAME_CY - tpl.FS_SMALL // 2
-    assert name_top > tpl.CORNER_TOP + tpl.FS_CORNER, (name_top, tpl.CORNER_TOP)
+    assert name_top > tpl.CORNER_CY_OFF + tpl.corner_badge_h() // 2, name_top
     assert tpl.GRID_NAME_CY * 2 <= tpl.GRID_CELL_H, "名称中线把格子撑爆"
 
 

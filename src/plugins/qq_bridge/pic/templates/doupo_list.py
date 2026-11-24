@@ -30,7 +30,7 @@
 """
 from __future__ import annotations
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from .. import icons
 from ..canvas import Canvas
@@ -95,32 +95,113 @@ def _rows_of(data) -> list:
 
 
 #: 网格模式固定格高（4 列，每格只放名称 + 数量 + 角标）。
-#: 2026-11-24：52 → 60。格子右上/左上要放「几纹」「锁」小字（FS_CORNER=14），
-#: 52 高时角标下缘与名称上缘只差 2px 会黏在一起；加 8px 让两者分开。
+#: 2026-11-24：52 → 60。格子右上/左上要放「几纹」「锁」角标；52 高时角标
+#: 与名称上缘会黏在一起，加 8px 拉开净空。
 GRID_CELL_H = 60
-#: 角标文字**上缘**距格子顶边的距离（像素）。必须 >0：<0 就浮到框外了。
-CORNER_TOP = 2
+#: 网格格子间距（格子有自身边框，间距比普通列表行小）。
+GRID_GAP = 8
 #: 网格格子内名称的垂直中线距格顶的距离。**与有无角标无关**——同一行必须基线一致。
 GRID_NAME_CY = GRID_CELL_H // 2 - 1
 
+# ---- 格子角标（2026-11-24 二次改版：用户「特殊字体 + 金色光晕 + 骑在边框上」）----
+#: 角标字用**楷体**（doupo_kai.ttf，与「包裹」牌匾同一族；缺文件时 fonts 会告警
+#: 并退等线 Bold）。16px + 1px 伪粗是小字号下不糊的上限，绝不放大到 22（格子装不下）。
+FS_CORNER = 18
+#: 角标中线比格子顶边（= 上边框线）偏移 5px：字的墨迹压在框线上、且大部分落在格子内（归属明确，不会被看成上一行的）（几何中线上移
+#: 会让字看着浮在缝里）。色块上探 6px < GRID_GAP(8)，不会啃上一行格子。
+CORNER_CY_OFF = 5
+#: 遮边框色块在字四周的留白（左右 / 上下）。左右够宽，断口才不会贴字。
+CORNER_PAD_X = 5
+CORNER_PAD_Y = 1
+#: 角标距格子左右内沿的距离。必须 > 格子圆角半径(8)，否则会把左上/右上圆角整块糊掉
+#: ——2026-11-24 实图抓到「锁」把圆角啃成方角，看着像渲染坏了。
+CORNER_INSET = 12
+#: 光晕外扩：金雾画在比色块更大的透明层上，才不会被色块边界截成硬边，
+#: 顺便让金光微微溢到断口两侧的框线上（这才是「光晕」而不是描边）。
+CORNER_GLOW = 6
+
+
+def corner_badge_h() -> int:
+    """角标色块高度（= 字高 + 上下留白）。"""
+    return FS_CORNER + CORNER_PAD_Y * 2
+
 
 def corner_cy(cell_y: int) -> int:
-    """角标的垂直**中线**坐标。
+    """角标色块的垂直**中线**坐标（格子顶边往下 CORNER_CY_OFF）。"""
+    return cell_y + CORNER_CY_OFF
 
-    ``doupo_style.S.small`` 默认 ``anchor="lm"``（左/右-**中**），所以要给中线。
-    2026-11-24 事故：直接传 ``cell_y + 3`` 被当成中线 → 14px 小字上缘跑到格子
-    顶边**上方** 4px，实图里「锁」浮在框外（``tests/test_bagview.py``
-    ``t_corner_geometry_inside_cell`` 钉死此契约）。
-    """
-    return cell_y + CORNER_TOP + FS_CORNER // 2
+
+def corner_top(cell_y: int) -> int:
+    """角标色块上缘 y（应 < cell_y：要压在边框线上，「截断」才看得出来）。"""
+    return corner_cy(cell_y) - corner_badge_h() // 2
+
+
+def corner_bottom(cell_y: int) -> int:
+    """角标色块下缘 y。"""
+    return corner_top(cell_y) + corner_badge_h()
 
 
 def corner_name_gap() -> int:
     """角标下缘到名称上缘的净空（像素）；名称中线见 :data:`GRID_NAME_CY`。"""
     name_top = GRID_NAME_CY - FS_SMALL // 2
-    return name_top - (CORNER_TOP + FS_CORNER)
-#: 网格格子间距（格子有自身边框，间距比普通列表行小）。
-GRID_GAP = 8
+    return name_top - (CORNER_CY_OFF + corner_badge_h() // 2)
+
+
+def corner_overhang() -> int:
+    """色块向上探出格子顶边的像素数（必须 ≤ GRID_GAP，别啃上一行）。"""
+    return max(0, int(-(corner_top(0))))
+
+
+
+def draw_corner_badge(c: Canvas, g: dict, text: str, cell_x: int, cell_w: int,
+                      cell_y: int, *, right: bool) -> tuple[int, int, int, int]:
+    """在格子上边框画一个「骑框」角标：底色块截断边框 + 金色光晕楷体字。
+
+    用户 2026-11-24 口径（二次改版）：
+      * **特殊字体**：楷体（``doupo_kai.ttf``，与「包裹」牌匾同族），不是等线；
+      * **金色光晕**：字外围一圈高斯模糊的金雾（描边做不到「晕」）；
+      * **骑在边框上**：先用格子底色铺一块把边框线盖断，再压字 —— 看上去就是
+        边框被这块牌子截断了，比塞在格子里直观。
+
+    做法：色块（panel 实心，盖断框线）先画在画布上；再把「模糊金雾 + 伪粗楷体字」
+    画在一块**比色块更大**的透明 tile 上整块贴回 —— 光晕因此能溢出断口两侧，
+    不会被色块边界切成硬边。只对小球做模糊，64 格背包也不卡。
+
+    返回色块包围盒 ``(x0, y0, x1, y1)``（供 ``boxes`` 自检登记）。
+    """
+    size = FS_CORNER
+    # kai 的 1px 伪粗会向左右各溢 1px，量宽度时补回来，否则字贴到断口边缘
+    tw_ = int(UI.tw(text, size, "kai")) + 2
+    pw = tw_ + CORNER_PAD_X * 2
+    ph = corner_badge_h()
+    cy = corner_cy(cell_y)
+    px0 = (cell_x + cell_w - 2 - CORNER_INSET - pw) if right else (cell_x + CORNER_INSET)
+    py0 = cy - ph // 2
+    img = UI.img_of(c)
+
+    # ① 截断边框：格子底色实心块，无描边 —— 框线在这里就断了
+    ImageDraw.Draw(img).rounded_rectangle(
+        (px0, py0, px0 + pw - 1, py0 + ph - 1), radius=3,
+        fill=UI.rgb(g["panel"]) + (255,))
+
+    # ② 光晕 + 楷体字：透明层比色块大 CORNER_GLOW，金雾可外溢
+    m = CORNER_GLOW
+    bw, bh = pw + m * 2, ph + m * 2
+    f = UI.font(size, "kai")
+    ccx, ccy = bw / 2.0, bh / 2.0
+    glow = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).text((ccx, ccy), text, font=f, anchor="mm",
+                              fill=UI.rgb(g["gold_hi"]) + (255,))
+    glow = glow.filter(ImageFilter.GaussianBlur(3.0))
+    tile = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    tile.alpha_composite(glow)          # 单层：叠两层会把笔画缝隙糊成一片
+    dd = ImageDraw.Draw(tile)
+    col = UI.rgb(g["gold"]) + (255,)          # 字取正金，晕取高光金：亮环绕实金
+    for dx in (-1, 1):                        # 只横向伪粗：竖向叠加会在小字号上发虚
+        dd.text((ccx + dx, ccy), text, font=f, fill=col, anchor="mm")
+    dd.text((ccx, ccy), text, font=f, fill=col, anchor="mm")
+    img.alpha_composite(tile, (int(px0) - m, int(py0) - m))
+    return (px0, py0, px0 + pw, py0 + ph)
 
 
 def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
@@ -257,25 +338,17 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                            fill=p["panel"], outline=p["panel_ln"], width=1)
             name_txt = str(item.get("title") or "")
             is_locked = bool(item.get("corner_tl")) or name_txt.startswith("〔锁〕")
-            # 角标（2026-11-24 用户口径）：右上角 = 丹纹「几纹」，左上角 = 「锁」。
-            # 字色取调色板 gold —— 与「包裹」牌匾字同族金，且随主题自动压深/提亮
-            # （浅底用 #B07A16，深底用 #FFD058），小字在任何主题上都看得见。
-            # 格子只有 4 列宽，名称必须让位：角标画在上下留白里、不占名称行宽。
             tr = str(item.get("corner_tr") or "")
             tl = str(item.get("corner_tl") or "")
-            if tr or tl:
-                ccol = p.get("gold") or p["text_color"]
-                # 角标占 y+CORNER_TOP .. y+CORNER_TOP+FS_CORNER，名称中线固定
-                # 在 y+GRID_NAME_CY（上缘 ~y+20），净空见 corner_name_gap()。
-                ctop = y + CORNER_TOP
-                ccy = corner_cy(y)
-                if tl:
-                    S.small(c, (cx0 + 7, ccy), tl, size=FS_CORNER, color=ccol)
-                    rec("g%d.tl" % ri, tl, cx0 + 7, ctop, FS_CORNER, "regular", "la")
-                if tr:
-                    S.small(c, (cx0 + cw - 9, ccy), tr, size=FS_CORNER, color=ccol,
-                            anchor="ra")
-                    rec("g%d.tr" % ri, tr, cx0 + cw - 9, ctop, FS_CORNER, "regular", "ra")
+            # 角标（2026-11-24 二次改版）：右上 = 丹纹「几纹」，左上 = 「锁」。
+            # 骑在格子上边框上（底色块截断边框 + 金色光晕楷体），见 draw_corner_badge。
+            # 必须在格子 rounded_rect 之后画，否则框线会把色块盖回去。
+            for _txt, _right in ((tl, False), (tr, True)):
+                if not _txt:
+                    continue
+                bb = draw_corner_badge(c, p, _txt, cx0, cw, y, right=_right)
+                if boxes is not None:
+                    boxes.append(("g%d.%s" % (ri, "tr" if _right else "tl"),) + bb)
             shown = S.fit(name_txt, cw - 16, FS_SMALL, "regular")
             tcol = p["accent_color"] if is_locked else p["text_color"]
             cell_cx = cx0 + (cw - 2) // 2
