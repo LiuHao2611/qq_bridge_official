@@ -31,20 +31,28 @@ _R = random.Random()
 
 #: 赐福池唯一真源。id 稳定（存档只存 id），改数值只改这里。
 #: kind=charges 走 danwen_charges；kind=timed 走 temp_buff.add。
+#: 文案里的 ``{n}``/``{min}`` 是丹纹档位缩放后的实数值（见 :func:`_fmt`）。
 BLESSINGS: tuple[dict, ...] = (
     {"id": "B01", "name": "焚天之威", "kind": "charges", "n": 3,
-     "desc": "每场战斗前 3 次出手伤害 ×2", "effect": "dmg_x2"},
+     "desc": "每场战斗前 {n} 次出手伤害 ×2", "effect": "dmg_x2"},
     {"id": "B02", "name": "一击必中", "kind": "charges", "n": 1,
      "desc": "每场战斗首次技能伤害必定暴击", "effect": "crit_first"},
     {"id": "B03", "name": "蛮牛之力", "kind": "timed", "key": "力量", "mul": 0.25,
-     "minutes": 30, "desc": "力量、斗气 +25%（30 分钟）", "effect": "stat_atk"},
+     "minutes": 30, "desc": "力量、斗气 +25%（{min} 分钟）", "effect": "stat_atk"},
     {"id": "B04", "name": "疾风之势", "kind": "timed", "key": "敏捷", "mul": 0.25,
-     "minutes": 30, "desc": "敏捷、防御 +25%（30 分钟）", "effect": "stat_def"},
+     "minutes": 30, "desc": "敏捷、防御 +25%（{min} 分钟）", "effect": "stat_def"},
     {"id": "B05", "name": "虎躯之固", "kind": "timed", "key": "体力", "mul": 0.30,
-     "minutes": 30, "desc": "气血上限 +30%（30 分钟）", "effect": "stat_hp"},
+     "minutes": 30, "desc": "气血上限 +30%（{min} 分钟）", "effect": "stat_hp"},
     {"id": "B06", "name": "丹田盈溢", "kind": "charges", "n": 1,
      "desc": "斗气上限 +20%，且下一场开战时斗气回满 1 次", "effect": "mp_refill"},
 )
+
+#: 丹纹档位对赐福的缩放（下标=纹数）：**百分比不动，只放大次数/时长**。
+#: 用户定的平衡杠杆是「限时/限次」，所以档位差距落在「撑多久、能打几下」，
+#: 而不是把 ×2 变成 ×4 去破坏伤害曲线。
+_TIER_SCALE = (1.0, 1.0, 1.5, 2.0)
+#: 三纹额外多赐一条福（用户：「一个丹药的最高丹纹，额外给特殊加成」）。
+_TIER_EXTRA = 3
 
 _BY_ID = {b["id"]: b for b in BLESSINGS}
 #: 限时型的第二属性键（B03 力量→斗气，B04 敏捷→防御）。
@@ -55,12 +63,60 @@ def get(bid: str) -> dict | None:
     return _BY_ID.get(str(bid))
 
 
-def roll(grade: str, rng=None) -> bool:
-    """按品阶掷是否出纹。默认用独立源 _R（不动注入 rng，既有序列不变）；
-    单测传 rng 可钉死。config 延迟 import 避免环。"""
+def roll(grade: str, rng=None) -> int:
+    """按品阶掷纹数：返回 **0=不出纹 / 1=一纹 / 2=二纹 / 3=三纹**。
+
+    默认用独立源 ``_R``（不动注入的成败 rng，既有序列逐字节不变）；单测传 rng 可钉死。
+    档位分布取 ``config.DANWEN_TIER_W``（70%/25%/5%），只在出纹之后才掷第二颗骰子。
+    config 延迟 import 避免环。
+    """
     from . import config as cfg
     r = _R.random if rng is None else rng
-    return r() < cfg.danwen_rate(grade)
+    if r() >= cfg.danwen_rate(grade):
+        return 0
+    x = r()
+    acc = 0.0
+    for i, w in enumerate(cfg.DANWEN_TIER_W, 1):
+        acc += float(w)
+        if x < acc:
+            return i
+    return 1                      # 权重和 <1 的兜底：给最低档，绝不返回 0（已判定出纹）
+
+
+def _clamp_tier(tier) -> int:
+    try:
+        t = int(tier or 0)
+    except (TypeError, ValueError):
+        t = 0
+    return max(1, min(3, t)) if t > 0 else 1
+
+
+def tier_of(name: str) -> int:
+    """从丹名反推纹数（``·二纹``→2，存量 ``·丹纹``→1）；非带纹丹返回 0。"""
+    from . import config as cfg
+    return int(cfg.danwen_tier(name))
+
+
+def _scale_of(tier) -> float:
+    return _TIER_SCALE[_clamp_tier(tier)]
+
+
+def _n_of(blessing: dict, scale: float) -> int:
+    """缩放后的次数：至少 1（缩放到 0 就等于没给）。"""
+    base = int(blessing.get("n", 1) or 1)
+    return max(1, int(round(base * float(scale))))
+
+
+def _mins_of(blessing: dict, scale: float) -> float:
+    return float(blessing.get("minutes", 30) or 30) * float(scale)
+
+
+def _fmt(blessing: dict, scale: float = 1.0) -> str:
+    """把赐福文案里的 ``{n}``/``{min}`` 换成缩放后的真实数字。"""
+    return str(blessing["desc"]).format(
+        n=_n_of(blessing, scale),
+        min=int(_mins_of(blessing, scale)) if _mins_of(blessing, scale) % 1 == 0
+        else round(_mins_of(blessing, scale), 1))
 
 
 def pick(rng=None) -> dict:
@@ -77,36 +133,40 @@ def _charges(p: dict) -> dict:
     return c
 
 
-def attach(p: dict, blessing: dict, src: str, now=None) -> str:
+def attach(p: dict, blessing: dict, src: str, now=None, scale: float = 1.0) -> str:
     """把一条赐福挂到玩家身上，返回给玩家的可见文案。
 
     charges 型写 ``p["danwen_charges"][id] = {"n": n, "src": src}``（同名刷新取较大次数，
     不叠加，防囤丹刷满）；timed 型交给调用方通过 ``timed_items()`` 写 temp_buff，
     以免本模块 import temp_buff 形成环（其实 temp_buff 不 import 本模块，可安全调用，
     但保持纯函数边界，显式由 core 落库更清晰）。
+
+    ``scale``：丹纹档位缩放（一纹 1.0 / 二纹 1.5 / 三纹 2.0），只放大次数与时长。
     """
     bid = str(blessing["id"])
     if blessing["kind"] == "charges":
         c = dict(_charges(p))
-        n = int(blessing.get("n", 1))
+        n = _n_of(blessing, scale)
         old = c.get(bid)
         if isinstance(old, dict):
             n = max(n, int(old.get("n", 0)))  # 同名刷新：取较大剩余次数，不累加
         c[bid] = {"n": n, "src": str(src)}
         p["danwen_charges"] = c
-    return blessing["desc"]
+    return _fmt(blessing, scale)
 
 
-def timed_items(p: dict, blessing: dict, now=None) -> list[tuple[str, float, float, str]]:
+def timed_items(p: dict, blessing: dict, now=None,
+                scale: float = 1.0) -> list[tuple[str, float, float, str]]:
     """返回限时型赐福要写进 temp_buff 的条目 ``(key, mul, minutes, src)``。
 
     B03/B04 是双属性，返回两条；B05 单属性一条。由 core 统一调 temp_buff.add。
+    百分比 ``mul`` 不随档位变，只有 ``minutes`` 按 ``scale`` 放大。
     """
     if blessing["kind"] != "timed":
         return []
     key = str(blessing["key"])
     mul = float(blessing.get("mul", 0))
-    mins = float(blessing.get("minutes", 30))
+    mins = _mins_of(blessing, scale)
     src = str(blessing["name"])
     out = [(key, mul, mins, src)]
     twin = _TWIN.get(blessing["id"])
@@ -155,18 +215,44 @@ def bid_of(p: dict, effect: str) -> str | None:
     return None
 
 
-def grant(p: dict, src_name: str, rng=None, add_fn=None) -> dict:
-    """服带纹丹后挂一条赐福，返回 ``{"id","name","desc","msg"}``。
+def grant(p: dict, src_name: str, rng=None, add_fn=None, tier=0) -> dict:
+    """服带纹丹后挂赐福，返回 ``{"id","name","desc","tier","extra","lines"}``。
 
     ``add_fn(key, mul, minutes, src)`` 由 core 注入 temp_buff.add（避免本模块 import）。
     次数型写 danwen_charges，限时型通过 add_fn 写 temp_buff。
+
+    档位（``tier`` 不传就从丹名后缀反推）：
+      * 一纹：1 条赐福，原始次数/时长；
+      * 二纹：1 条赐福，次数与时长 ×1.5；
+      * 三纹：**2 条**赐福（第二条避开同 id），各自原始次数/时长 —— 用户要的
+        「最高丹纹额外给特殊加成」。
+    百分比永远不动，档位只买「撑更久 / 打更多下」，符合「限时限次即平衡」。
     """
+    t = _clamp_tier(tier if tier else tier_of(src_name))
+    scale = _scale_of(t)
     b = pick(rng)
-    attach(p, b, src_name)
-    if add_fn is not None:
-        for key, mul, mins, src in timed_items(p, b):
-            add_fn(key, mul, mins, src)
-    return {"id": b["id"], "name": b["name"], "desc": b["desc"]}
+    pairs = [(b, scale)]
+    extra = None
+    if t >= _TIER_EXTRA:
+        extra = pick(rng)
+        if str(extra["id"]) == str(b["id"]):
+            # 抽到同一条 → 顺延一条，否则同名刷新会把第二条白白吃掉
+            i = (BLESSINGS.index(b) + 1) % len(BLESSINGS)
+            extra = BLESSINGS[i]
+        pairs.append((extra, 1.0))
+    lines = []
+    for bl, sc in pairs:
+        txt = attach(p, bl, src_name, scale=sc)
+        if add_fn is not None:
+            for key, mul, mins, src in timed_items(p, bl, scale=sc):
+                add_fn(key, mul, mins, src)
+        lines.append((str(bl["name"]), txt))
+    # 纹数与「额外那条」都拼进 desc：core 只需把 desc 交给文本层，不再单独传参
+    desc = "（%s纹）%s" % ("一二三"[t - 1], lines[0][1])
+    if extra is not None:
+        desc += "；并额外得【%s】%s" % (extra["name"], lines[1][1])
+    return {"id": b["id"], "name": b["name"], "desc": desc, "tier": t,
+            "extra": str(extra["name"]) if extra else "", "lines": lines}
 
 
 def fight_state(p: dict) -> dict:

@@ -229,14 +229,16 @@ def craft_batch_limited(kind: str) -> str:
     return "　⚠ 斗气耗尽，提前收炉"
 
 
-def craft_danwen(name: str, n: int) -> str:
-    """开炉出纹的回执（丹成卡/纯文本共用）。"""
-    return f"✨ 丹纹浮现！{n} 枚【{name}·丹纹】出炉——品相绝佳，服下另有奇效。"
+def craft_danwen(name: str, n: int, tier: int = 1) -> str:
+    """开炉出纹的回执（丹成卡/纯文本共用）。tier=几纹（1~3）。"""
+    t = "一二三"[max(1, min(3, int(tier))) - 1] if int(tier) else "一"
+    return f"✨ {t}纹浮现！{n} 枚【{name}】出炉——丹身缠纹，品相绝佳，服下另有奇效。"
 
 
-def danwen_grant(bless_name: str, desc: str) -> str:
+def danwen_grant(bless_name: str, desc: str, tier: int = 0) -> str:
     """服带纹丹后挂赐福的可见回执。文案不透露概率/考据。"""
-    return f"　✨ 丹纹赐福【{bless_name}】入体——{desc}。"
+    t = ("（%s纹）" % "一二三"[max(1, min(3, int(tier))) - 1]) if int(tier or 0) else ""
+    return f"　✨ 丹纹赐福【{bless_name}】入体{t}——{desc}。"
 
 
 # ---------------------------------------------------------------------------

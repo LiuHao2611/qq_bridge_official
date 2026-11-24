@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""包裹视图守门（2026-11-24）—— 丹药优先排序 + 全量分页。
+"""包裹视图守门（2026-11-24）—— 丹药优先排序 + 全量不翻页 + 格子角标。
 
 事故背景：背包卡与「背包」文本都写死 ``items[:24]``，且排序是「数量降序」，
 lv100+ 的号 64 种物品里前 24 全是堆量药材，**刚炼的丹药被整段截掉**
 （用户原话「我炼制的丹药没显示在背包里」）。
 
-本测试钉死三件事：
-1. 丹药（含丹纹丹）必须排在任何材料之前；
-2. 24 格一页，全量内容都能翻到（不丢任何一件）；
-3. 页码越界落末页，不吐空页。
+本测试钉死四件事：
+1. 丹药（含带纹丹）必须排在任何材料之前；
+2. **全量展示、不翻页**（用户口径「背包别搞翻页，延长」）——64 种物品一行不许丢；
+3. 带纹丹**名称不变**（卡面/文本都显示基础丹名），纹数只走右上角标
+   ``corner_tr``，几纹写几；锁定只走左上角标 ``corner_tl``＝「锁」；
+4. 角标颜色与卡片标题同族金（``gold``），不吃 accent/text 色。
 
 自带 runner：python tests/test_bagview.py
 """
@@ -57,6 +59,16 @@ _stub()
 from doupo import bagview, card, config as cfg  # noqa: E402
 
 
+def _tpl_mod():
+    """取 standalone pic 包里的 doupo_list 模板模块（宿主零依赖，不需要 nonebot）。"""
+    pic = card._load_pic()
+    assert pic is not None, "pic 包加载失败"
+    return sys.modules[pic.__name__ + ".templates.doupo_list"]
+
+#: 带纹丹名（一纹），全测试共用
+DW1 = "聚气散" + cfg.danwen_suffix(1)
+
+
 def _big_bag():
     """造一个「64 种物品、新材料堆量、丹药各 1~2 枚」的极端背包（复刻线上号）。"""
     p = {"gold": 4370584, "bag": {}}
@@ -65,14 +77,14 @@ def _big_bag():
         p["bag"]["材料%02d" % i] = 900 - i * 10
     # 4 种刚炼出来的丹药（数量很小 → 旧排序必被截断）
     p["bag"]["聚气散"] = 2
-    p["bag"]["聚气散" + cfg.DANWEN_SUFFIX] = 1
+    p["bag"][DW1] = 1
     p["bag"]["破厄丹"] = 1
     p["bag"]["回灵丹"] = 3
     return p
 
 
 def t_pills_first():
-    """🔒 丹药（含丹纹丹）必须排在任何材料之前——本次事故的就医点。"""
+    """🔒 丹药（含带纹丹）必须排在任何材料之前——本次事故的就医点。"""
     p = _big_bag()
     items = bagview.sorted_items(p)
     names = [n for n, _ in items]
@@ -81,45 +93,123 @@ def t_pills_first():
     assert pill_pos, "没识别出任何丹药"
     assert max(pill_pos) < first_material, (
         "丹药被材料挤到后面了：丹药位次 %s，第一个材料位次 %s" % (pill_pos, first_material))
-    # 具体到玩家最关心的四枚
-    for nm in ("聚气散", "聚气散" + cfg.DANWEN_SUFFIX, "破厄丹", "回灵丹"):
-        assert names.index(nm) < bagview.PER_PAGE, "%s 不在第一页" % nm
+    # 具体到玩家最关心的四枚（全量展示，位次无关页码）
+    for nm in ("聚气散", DW1, "破厄丹", "回灵丹"):
+        assert nm in names, "%s 不在包裹里" % nm
 
 
-def t_page1_covers_all_pills():
-    """第一页必须装得下全部丹药（当前丹药种类远小于 24）。"""
+def t_no_truncation():
+    """🔒 全量展示：64 种物品一件都不许丢（旧版 items[:24] 会砍掉 40 种）。"""
     p = _big_bag()
     items = bagview.sorted_items(p)
-    chunk, page, total = bagview.page_of(items, 1)
-    got = {n for n, _ in chunk}
-    pills = {n for n, _ in items if bagview.is_pill(n)}
-    assert pills <= got, "第一页漏了丹药：%s" % (pills - got)
-    assert page == 1 and total == 3, (page, total, len(items))  # 64 件 / 24 = 3 页
+    assert len(items) == 64, len(items)
+    d = card.build_bag_data(p)
+    assert len(d["rows"]) == 64, "卡片只画了 %d 行，丢了 %d 种" % (
+        len(d["rows"]), 64 - len(d["rows"]))
+    assert "64 种物品" in d["subtitle"], d["subtitle"]
+    # 不翻页：卡面不许再出现页码字段
+    assert "page" not in d and "total_pages" not in d, sorted(d)
 
 
-def t_no_item_lost():
-    """翻完所有页 = 全量物品，一件都不许丢。"""
+def t_pill_name_unchanged():
+    """🔒 带纹丹在格子里**显示基础丹名**，纹数只走右上角标（用户：名称不要变）。"""
     p = _big_bag()
-    items = bagview.sorted_items(p)
-    seen = []
-    total_pages = bagview.page_of(items, 1)[2]
-    for pg in range(1, total_pages + 1):
-        chunk, _, _ = bagview.page_of(items, pg)
-        seen.extend(n for n, _ in chunk)
-    assert len(seen) == len(items), (len(seen), len(items))
-    assert set(seen) == {n for n, _ in items}
+    d = card.build_bag_data(p)
+    row = next(r for r in d["rows"] if r.get("corner_tr"))
+    assert row["title"].startswith("聚气散 ×"), "格子标题被改名了：%r" % row["title"]
+    assert "一纹" not in row["title"], "纹数不该进标题：%r" % row["title"]
+    assert row["corner_tr"] == "一纹", row["corner_tr"]
+    # 普通丹不该有角标
+    plain = next(r for r in d["rows"] if r["title"].startswith("破厄丹 "))
+    assert "corner_tr" not in plain and "corner_tl" not in plain, plain
 
 
-def t_page_clamp():
-    """页码越界落末页，不吐空页；非法页码回第 1 页。"""
+def t_tier_badge_matches_tier():
+    """几纹就显示几：一纹/二纹/三纹各自对应角标。"""
+    p = {"gold": 0, "bag": {"聚气散": 1}}
+    for i in range(1, len(cfg.DANWEN_TIERS) + 1):
+        p["bag"]["聚气散" + cfg.danwen_suffix(i)] = 1
+    d = card.build_bag_data(p)
+    got = sorted(r["corner_tr"] for r in d["rows"] if r.get("corner_tr"))
+    assert got == sorted(cfg.DANWEN_TIERS), got
+    # 三个带纹版本 + 基础丹 = 4 行，名称全部是「聚气散」
+    assert len(d["rows"]) == 4, len(d["rows"])
+    assert all(r["title"].startswith("聚气散") for r in d["rows"]), d["rows"]
+
+
+def t_lock_corner():
+    """锁定只写左上角「锁」，名字与纹数都不受影响。"""
     p = _big_bag()
-    items = bagview.sorted_items(p)
-    chunk, page, total = bagview.page_of(items, 99)
-    assert page == total and chunk, (page, total)
-    chunk, page, total = bagview.page_of(items, 0)
-    assert page == 1 and chunk
-    chunk, page, total = bagview.page_of(items, "abc")
-    assert page == 1 and chunk
+    d = card.build_bag_data(p, locked={"破厄丹", DW1})
+    locked_rows = [r for r in d["rows"] if r.get("corner_tl")]
+    assert len(locked_rows) == 2, [r["title"] for r in locked_rows]
+    assert all(r["corner_tl"] == "锁" for r in locked_rows)
+    dw_row = next(r for r in locked_rows if r.get("corner_tr"))
+    assert dw_row["corner_tr"] == "一纹" and dw_row["corner_tl"] == "锁"
+    assert dw_row["title"].startswith("聚气散 ×"), dw_row["title"]
+    # 锁定的普通丹不带纹角标
+    plain_row = next(r for r in locked_rows if not r.get("corner_tr"))
+    assert plain_row["title"].startswith("破厄丹 ×"), plain_row["title"]
+
+
+def t_corner_geometry_inside_cell():
+    """🔒 角标必须画在格子**内部**，且不压名称、不高低错位（2026-11-24 实图事故）。
+
+    事故原样：``S.small`` 默认 ``anchor="lm"``（垂直**中**线），旧代码把
+    ``cell_y + 3`` 当中线传 → 14px 小字上缘跑到格子顶边**上方** 4px，
+    实图里「锁」浮在框外、看着像掉到上一行。另一处：名称曾按「有角标就下移
+    4px」处理 → 同一行里破厄丹比三纹青灵丹低 4px，违反同排基线一致。
+    """
+    tpl = _tpl_mod()
+    # ① 角标上缘在格子内（>0 即不进上一行），且下缘不压名称
+    assert tpl.CORNER_TOP > 0, tpl.CORNER_TOP
+    for cell_y in (0, 120, 640):
+        top = cell_y + tpl.CORNER_TOP
+        assert top >= cell_y, (cell_y, top)
+        assert top > cell_y - 1, "角标上缘浮到格子外了：%s" % top
+        # S.small 传的是中线，换算回上缘必须等于 top
+        assert tpl.corner_cy(cell_y) - tpl.FS_CORNER // 2 == top, (
+            cell_y, tpl.corner_cy(cell_y), top)
+        assert top + tpl.FS_CORNER <= cell_y + tpl.GRID_CELL_H, "角标超出格底"
+    gap = tpl.corner_name_gap()
+    assert gap >= 2, "角标下缘与名称上缘净空只有 %spx（会黏字）" % gap
+    # ② 名称中线与「有无角标」无关（常量，不是条件表达式）
+    name_top = tpl.GRID_NAME_CY - tpl.FS_SMALL // 2
+    assert name_top > tpl.CORNER_TOP + tpl.FS_CORNER, (name_top, tpl.CORNER_TOP)
+    assert tpl.GRID_NAME_CY * 2 <= tpl.GRID_CELL_H, "名称中线把格子撑爆"
+
+
+def t_row_baseline_aligned():
+    """🔒 同一行内「有角标」与「无角标」格子的名称必须同一基线（不许下移）。
+
+    2026-11-24 实图事故：名称曾按「有角标就 +4px」下移，同一行里破厄丹比
+    三纹青灵丹低 4px，肉眼一眼就能看出歪。这里用模板自带的 ``boxes`` 自检协议
+    拿真实文字盒，直接比同一行四格的名称中心 y。
+    """
+    tpl = _tpl_mod()
+    pic = card._load_pic()
+    p = {"qq": "1", "gold": 0, "bag": {
+        "聚气散" + cfg.danwen_suffix(2): 1,   # 有角标（二纹）
+        "回灵丹": 2,                          # 无角标
+        "血蟒枝": 3,                          # 无角标（材料）
+        "冰晶石": 4,                          # 无角标（材料）
+    }}
+    boxes: list[tuple] = []
+    theme = pic.resolve_theme("light", "斗破背包")
+    tpl.build(theme, card.build_bag_data(p), card.CARD_WIDTH, boxes=boxes)
+    names = {b[0]: b for b in boxes if str(b[0]).startswith("g") and "." not in str(b[0])}
+    assert len(names) == 4, sorted(names)
+    centers = {}
+    for k in range(4):
+        b = names["g%d" % k]
+        centers[k] = (b[2] + b[4]) / 2.0       # (top + bottom) / 2
+    ys = set(round(v) for v in centers.values())
+    assert len(ys) == 1, "同一行名称高低不一：%s（角标格不得下移）" % centers
+    # 且本行确实是「有角标 + 无角标」混排（否则用例白跑）
+    badged = {str(b[0]).split(".")[0] for b in boxes if "." in str(b[0])
+              and str(b[0]).startswith("g") and str(b[0]).split(".")[1] in ("tl", "tr")}
+    assert badged, "本行没有角标盒，用例失效"
+    assert badged != {"g0", "g1", "g2", "g3"}, "四格全有角标，混排断言失效"
 
 
 def t_zero_and_dirty_filtered():
@@ -129,19 +219,9 @@ def t_zero_and_dirty_filtered():
     assert names == ["聚气散"], names
 
 
-def t_card_data_is_paged():
-    """卡片数据：页码/页数进卡面，且行数不超 24（防一次性画 64 行）。"""
-    p = _big_bag()
-    d = card.build_bag_data(p, set(), 1)
-    assert d["page"] == 1 and d["total_pages"] == 3, (d.get("page"), d.get("total_pages"))
-    assert len(d["rows"]) <= bagview.PER_PAGE, len(d["rows"])
-    assert "第 1/3 页" in d["subtitle"], d["subtitle"]
-    d2 = card.build_bag_data(p, set(), 2)
-    assert len(d2["rows"]) <= bagview.PER_PAGE and d2["page"] == 2
-
-
-TESTS = [t_pills_first, t_page1_covers_all_pills, t_no_item_lost,
-         t_page_clamp, t_zero_and_dirty_filtered, t_card_data_is_paged]
+TESTS = [t_pills_first, t_no_truncation, t_pill_name_unchanged,
+         t_tier_badge_matches_tier, t_lock_corner, t_corner_geometry_inside_cell,
+         t_row_baseline_aligned, t_zero_and_dirty_filtered]
 
 if __name__ == "__main__":
     ok = 0

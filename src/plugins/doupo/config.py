@@ -704,7 +704,17 @@ DANWEN_BY_GRADE: dict[str, float] = {
     "一品": 0.20, "二品": 0.18, "三品": 0.15, "四品": 0.12, "五品": 0.10,
     "六品": 0.08, "七品": 0.06, "八品": 0.04, "九品": 0.02, "帝品": 0.01,
 }
-DANWEN_SUFFIX = "·丹纹"           # 带纹丹名后缀，背包按完整名计数
+#: 丹纹档位（2026-11-24 用户「前面再带上一，二，三等等，几纹就显示几」）。
+#: 物品名**自带档位**（``丹名·二纹``），存档不新增字段：丹被吃/卖光自然消失，
+#: 不会像 ``{物品名: 纹数}`` 那样留下跟背包对不上的脏数据。
+DANWEN_TIERS = ("一纹", "二纹", "三纹")
+#: 出纹后的档位分布（按顺序累计）：一纹 70% / 二纹 25% / 三纹 5%。
+#: 锚原著「二纹、三纹青灵丹」——纹数越高越罕见，但三纹不是必得（避免经济失控）。
+DANWEN_TIER_W = (0.70, 0.25, 0.05)
+#: 2026-11-24 首版无档位的后缀，存量存档里可能还有（线上实测 2 枚）。
+#: 一律按**一纹**解释，绝不因升级让玩家的丹变成无主物品。
+DANWEN_LEGACY = "·丹纹"
+DANWEN_SUFFIX = DANWEN_LEGACY     # 旧引用兼容（等价于一纹后缀）
 DANWEN_CAP = 0.20                 # 任何品阶丹纹率硬顶
 
 
@@ -715,6 +725,19 @@ def danwen_rate(grade: str) -> float:
     except (TypeError, ValueError):
         return 0.0
     return min(DANWEN_CAP, max(0.0, v))
+
+
+def danwen_suffix(tier) -> str:
+    """档位 → 物品名后缀。越界夹到 1..3，绝不抛异常（结算路径不许因数据脏而炸）。"""
+    try:
+        i = int(tier)
+    except (TypeError, ValueError):
+        i = 1
+    return "·" + DANWEN_TIERS[max(1, min(len(DANWEN_TIERS), i)) - 1]
+
+
+def _all_danwen_suffixes() -> tuple[str, ...]:
+    return tuple("·" + t for t in DANWEN_TIERS) + (DANWEN_LEGACY,)
 
 
 # 带纹丹：不进 RECIPES / RECIPE_NAMES（丹方卡、宝库、名录都不出现），
@@ -729,22 +752,40 @@ DANWEN_RECIPE_NAMES: list[str] = []
 for _base in list(RECIPES):
     if str(_base.get("effect") or "") in _DANWEN_SKIP_EFFECTS:
         continue
-    _dn = str(_base["name"]) + DANWEN_SUFFIX
-    _r = dict(_base)                     # 浅拷贝 need/buy/src 等值；不修改原丹
-    _r["name"] = _dn
-    _r["danwen"] = True
-    _r["base_name"] = str(_base["name"])
-    RECIPE_BY_NAME[_dn] = _r
-    DANWEN_RECIPE_NAMES.append(_dn)
+    _bn = str(_base["name"])
+    # 三档全注册 + 旧后缀兼容别名（线上已有「聚气散·丹纹」这种名字的丹）
+    for _dn in [_bn + s for s in _all_danwen_suffixes()]:
+        _r = dict(_base)                 # 浅拷贝 need/buy/src 等值；不修改原丹
+        _r["name"] = _dn
+        _r["danwen"] = True
+        _r["base_name"] = _bn
+        # 档位写进配方，供 use_item 的赐福文案说清「几纹」
+        _r["danwen_tier"] = next(
+            (i for i, t in enumerate(DANWEN_TIERS, 1) if _dn.endswith("·" + t)), 1)
+        RECIPE_BY_NAME[_dn] = _r
+        DANWEN_RECIPE_NAMES.append(_dn)
 
 
 def is_danwen_name(name: str) -> bool:
-    return str(name).endswith(DANWEN_SUFFIX)
+    s = str(name)
+    return any(s.endswith(suf) for suf in _all_danwen_suffixes())
 
 
 def base_of_danwen(name: str) -> str:
     s = str(name)
-    return s[:-len(DANWEN_SUFFIX)] if s.endswith(DANWEN_SUFFIX) else s
+    for suf in _all_danwen_suffixes():
+        if s.endswith(suf):
+            return s[:-len(suf)]
+    return s
+
+
+def danwen_tier(name: str) -> int:
+    """物品名 → 纹数（1/2/3）。非带纹丹返回 0；旧后缀按一纹。"""
+    s = str(name)
+    for i, t in enumerate(DANWEN_TIERS, 1):
+        if s.endswith("·" + t):
+            return i
+    return 1 if s.endswith(DANWEN_LEGACY) else 0
 
 
 #: 炼药师品阶。下标 0..8 = 一品..九品（**老存档语义不变，绝不整体挪位**）。

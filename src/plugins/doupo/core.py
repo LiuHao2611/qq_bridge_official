@@ -3121,10 +3121,10 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
         up = _alch_level_up(p)
         res = {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
-        # 丹纹：成功之后按品阶掷，命中额外产一枚带纹丹（服用给随机赐福）
-        if dw.roll(rec.get("grade", "")):
-            add_item(p, name + cfg.DANWEN_SUFFIX, 1)
-            res["danwen"] = True
+        # 丹纹：成功之后按品阶掷，命中额外产一枚带纹丹（纹数 1~3，服用给随机赐福）
+        if (_t := dw.roll(rec.get("grade", ""))):
+            add_item(p, name + cfg.danwen_suffix(_t), 1)
+            res["danwen"] = _t
         if _danhui > 0:
             res["danhui"] = round(_danhui, 4)
         return res
@@ -3223,9 +3223,9 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
             if _is_high:
                 p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
             exp += int(cfg.CRAFT_EXP * exp_factor)
-            # 丹纹：每炉成功独立掷，命中额外产带纹丹
-            if dw.roll(rec.get("grade", "")):
-                add_item(p, name + cfg.DANWEN_SUFFIX, 1)
+            # 丹纹：每炉成功独立掷，命中额外产带纹丹（纹数 1~3 各自成物）
+            if (_t := dw.roll(rec.get("grade", ""))):
+                add_item(p, name + cfg.danwen_suffix(_t), 1)
                 n_danwen += 1
         else:
             add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)

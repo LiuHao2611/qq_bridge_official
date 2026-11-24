@@ -1814,18 +1814,15 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
     return "\n".join(out)
 
 
-async def cmd_bag(store, qq, page: int = 1) -> str:
+async def cmd_bag(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    items_all = bagview.sorted_items(p)
-    items, page, total_pages = bagview.page_of(items_all, page)
+    items = bagview.sorted_items(p)
     locked = await store.item_locks(str(qq))
-    # 2026-11-24：旧版写「展示前 24 格」并静默丢弃其余 40 种（lv100+ 实测），
-    # 玩家看不到刚炼的丹药。改为丹药优先 + 真翻页，全量内容都能看到。
-    head = f"🎒 包裹（{len(items_all)} 种物品 · 丹药优先"
-    head += f" · 第 {page}/{total_pages} 页）　💰 {p['gold']}" if total_pages > 1 else f"）　💰 {p['gold']}"
-    out = [head]
+    # 2026-11-24：用户「背包别搞翻页，延长」—— 一次列全，丹药优先排前，
+    # 带纹丹显示基础丹名 + 括号纹数（不出现「·三纹」这种后缀）。
+    out = [f"🎒 包裹（{len(items)} 种物品 · 丹药优先）　💰 {p['gold']}"]
     # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
     # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
     known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
@@ -1833,14 +1830,15 @@ async def cmd_bag(store, qq, page: int = 1) -> str:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
-    for i, (name, n) in enumerate(items):
-        mark = "🔒" if name in locked else ""
-        out.append(f"　[{i + 1 + (page - 1) * bagview.PER_PAGE}] {mark}{name} ×{n}")
-        if name in known:
-            out.append(f"　　　{known[name]}")
+    for i, (name, n) in enumerate(items, 1):
+        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
+        shown = cfg.base_of_danwen(name) if tier else name
+        mark = "🔒" if (name in locked or shown in locked) else ""
+        tail = f"（{cfg.DANWEN_TIERS[min(3, tier) - 1]}）" if tier else ""
+        out.append(f"　[{i}] {mark}{shown} ×{n}{tail}")
+        if name in known or shown in known:
+            out.append(f"　　　{known.get(name) or known[shown]}")
     out.append("")
-    if total_pages > 1:
-        out.append(f"　发「背包2」…「背包{total_pages}」翻页（共 {len(items_all)} 种）")
     out.append("　用法：服丹 回灵丹　｜　锁定 回灵丹 / 解锁 回灵丹（锁定后战斗不会自动服用）")
     return "\n".join(out)
 

@@ -44,7 +44,10 @@ def _stub():
 _stub()
 from doupo import core, config as cfg, danwen as dw, temp_buff as tb  # noqa: E402
 
-DN = "凝血散" + cfg.DANWEN_SUFFIX
+DN = "凝血散" + cfg.DANWEN_SUFFIX          # 存量存档名（·丹纹），按一纹兼容
+DN1 = "凝血散" + cfg.danwen_suffix(1)       # 新产出名（·一纹）
+DN2 = "凝血散" + cfg.danwen_suffix(2)
+DN3 = "凝血散" + cfg.danwen_suffix(3)
 
 
 def P(alch=5):
@@ -74,8 +77,31 @@ class _AlwaysHit:
     def random(self): return 0.0
 
 
+class _Seq:
+    """按序吐出指定随机数；耗尽后重复最后一个值。"""
+    def __init__(self, vals): self.vals = list(vals)
+
+    def random(self):
+        if len(self.vals) > 1:
+            return self.vals.pop(0)
+        return self.vals[0] if self.vals else 0.0
+
+
+def _craft_once(vals):
+    """用给定丹纹随机序列炼一炉凝血散，返回 (结果, 玩家)（成败恒成功）。"""
+    p = P()
+    for m in cfg.RECIPE_BY_NAME["凝血散"]["need"]:
+        p["bag"][m] = 100
+    old = dw._R
+    dw._R = _Seq(vals)
+    try:
+        return core.craft(p, "凝血散", rng=lambda: 0.0, now_ts=1000), p
+    finally:
+        dw._R = old
+
+
 def t_craft_emits_danwen():
-    """炼制成功 + 丹纹命中 → 产一枚带纹丹，回执带 danwen。"""
+    """炼制成功 + 丹纹命中 → 产一枚带纹丹（一纹），回执带纹数。"""
     p = P()
     for m, n in cfg.RECIPE_BY_NAME["凝血散"]["need"].items():
         p["bag"][m] = 100
@@ -85,8 +111,26 @@ def t_craft_emits_danwen():
         r = core.craft(p, "凝血散", rng=lambda: 0.0, now_ts=1000)
     finally:
         dw._R = old
-    assert r.get("danwen") is True
-    assert core.count_item(p, DN) == 1
+    assert r.get("danwen") == 1, r.get("danwen")
+    assert core.count_item(p, DN1) == 1
+
+
+def t_craft_tier_by_weight():
+    """纹数按 70/25/5 权重落到 一纹/二纹/三纹，品名后缀与纹数一致。"""
+    for x, tier in ((0.10, 1), (0.80, 2), (0.98, 3)):
+        r, p = _craft_once([0.0, x])
+        nm = "凝血散" + cfg.danwen_suffix(tier)
+        assert r.get("danwen") == tier, (x, r.get("danwen"))
+        assert core.count_item(p, nm) == 1, (x, nm, p["bag"])
+
+
+def t_legacy_suffix_reads_as_tier1():
+    """存量存档「·丹纹」仍算丹纹丹、按一纹算；名称不与新后缀冲突。"""
+    assert cfg.is_danwen_name(DN) and cfg.danwen_tier(DN) == 1
+    assert cfg.base_of_danwen(DN) == "凝血散"
+    assert cfg.base_of_danwen(DN3) == "凝血散"
+    for s in (DN1, DN2, DN3):
+        assert s in cfg.RECIPE_BY_NAME and s in cfg.DANWEN_RECIPE_NAMES, s
 
 
 def t_batch_counts_danwen():
@@ -102,7 +146,7 @@ def t_batch_counts_danwen():
     finally:
         dw._R = old
     assert r["ok"] and r["n_danwen"] == r["n_done"], r
-    assert core.count_item(p, DN) == r["n_done"]
+    assert core.count_item(p, DN1) == r["n_done"]
 
 
 def t_use_grants_blessing():
@@ -193,11 +237,55 @@ def t_full_hp_keeps_danwen_pill():
 def t_special_pills_have_no_danwen():
     """兽火单方/升技材料/养魂涎不能有带纹版（服下必先扣后失败 = 吞丹）。"""
     for nm in ("焚血散", "养魂涎", "紫火丹", "桃花丹"):
-        dn = nm + cfg.DANWEN_SUFFIX
-        assert dn not in cfg.RECIPE_BY_NAME, dn
-        assert dn not in cfg.DANWEN_RECIPE_NAMES, dn
-    # 常规丹必须仍有带纹版
-    assert "凝血散" + cfg.DANWEN_SUFFIX in cfg.RECIPE_BY_NAME
+        for i in range(1, len(cfg.DANWEN_TIERS) + 1):
+            dn = nm + cfg.danwen_suffix(i)
+            assert dn not in cfg.RECIPE_BY_NAME, dn
+            assert dn not in cfg.DANWEN_RECIPE_NAMES, dn
+        assert nm + cfg.DANWEN_LEGACY not in cfg.RECIPE_BY_NAME, nm
+    # 常规丹必须仍有全部档位（含存量别名）
+    for s in (cfg.danwen_suffix(1), cfg.danwen_suffix(2),
+              cfg.danwen_suffix(3), cfg.DANWEN_LEGACY):
+        assert "凝血散" + s in cfg.RECIPE_BY_NAME, s
+
+
+def t_tier_scales_duration_not_pct():
+    """档位只放大次数/时长，**不动百分比**——平衡靠限时限次（用户红线）。"""
+    p = P()
+    b = dw.get("B03")
+    _k1, mul1, min1, _s = dw.timed_items(p, b, scale=dw._scale_of(1))[0]
+    _k3, mul3, min3, _s = dw.timed_items(p, b, scale=dw._scale_of(3))[0]
+    assert abs(float(b["mul"]) - 0.25) < 1e-9
+    assert mul3 == mul1, (mul1, mul3)                     # mul 不变
+    assert float(min3) > float(min1), (min1, min3)        # 分钟放大
+    n1 = dw._n_of(dw.get("B01"), dw._scale_of(1))
+    n3 = dw._n_of(dw.get("B01"), dw._scale_of(3))
+    assert n1 == 3 and n3 > n1, (n1, n3)
+
+
+def t_tier3_grants_two_blessings():
+    """🔒 三纹额外多一条赐福，且绝不与第一条同 id（同名刷新会白吃一条）。"""
+    for seed in (0.0, 0.2, 0.5, 0.83, 0.99):
+        p = P()
+        applied = []
+        g = dw.grant(p, DN3, rng=lambda s=seed: s,
+                     add_fn=lambda k, m, mi, s: applied.append(k))
+        assert g["tier"] == 3 and g["extra"], (seed, g)
+        assert g["extra"] != g["name"], (seed, g["extra"], g["name"])
+        assert len(g["lines"]) == 2, g["lines"]
+        assert "并额外得" in g["desc"], g["desc"]
+        # 两条都真落地：一次次数型或一条限时属性，合计至少 1 处效果
+        got = len(p.get("danwen_charges") or {}) + len(applied)
+        assert got >= 1, (seed, g, p.get("danwen_charges"), applied)
+
+
+def t_tier1_grants_one_blessing():
+    """一纹只一条；存量「·丹纹」等同于一纹（不白送额外福）。"""
+    for nm in (DN1, DN):
+        p = P()
+        g = dw.grant(p, nm, rng=lambda: 0.0)
+        assert g["tier"] == 1 and not g["extra"], (nm, g)
+        assert len(g["lines"]) == 1
+        assert g["desc"].startswith("（一纹）"), g["desc"]
 
 
 def t_blessings_all_ge_10():
@@ -210,11 +298,14 @@ def t_blessings_all_ge_10():
             assert True  # ×2 = +100%
 
 
-TESTS = [t_rate_table, t_craft_emits_danwen, t_batch_counts_danwen,
+TESTS = [t_rate_table, t_craft_emits_danwen, t_craft_tier_by_weight,
+         t_legacy_suffix_reads_as_tier1, t_batch_counts_danwen,
          t_use_grants_blessing, t_b01_dmg_x2_consumed, t_b02_crit_guaranteed,
          t_b03_timed_stats, t_b06_mp_refill, t_zero_and_sweep,
          t_danwen_does_not_consume_battle_rng, t_full_hp_keeps_danwen_pill,
-         t_special_pills_have_no_danwen, t_blessings_all_ge_10]
+         t_special_pills_have_no_danwen, t_tier_scales_duration_not_pct,
+         t_tier3_grants_two_blessings, t_tier1_grants_one_blessing,
+         t_blessings_all_ge_10]
 
 if __name__ == "__main__":
     ok = 0

@@ -867,59 +867,51 @@ def build_shop_data(p: dict, beast: bool = False) -> dict:
     }
 
 
-def build_bag_data(p: dict, locked=None, page: int = 1) -> dict:
-    """背包列表 → doupo_list 模板参数。
+def build_bag_data(p: dict, locked=None) -> dict:
+    """背包列表 → doupo_list 模板参数（2026-11-24 用户口径：**不翻页、一卡到底**）。
 
-    ``locked``：被玩家锁定的物品名集合（2026-11-19），标题前加 🔒。
-    ``page``：24 格一页（2026-11-24）。排序/分页口径统一走 ``bagview``，
-    与 ``cmd_bag`` 文本版**同一份**，杜绝「卡里翻页了文字没翻」。
+    ``locked``：被锁定的物品名集合（2026-11-19）。
+
+    用户明确的两条视觉规则（照多数游戏的做法）：
+      * **带纹丹不改名**：格子里仍显示基础丹名，只在右上角用标题同族金丝小字
+        标「一纹/二纹/三纹」，几纹就写几（``corner_tr``）；
+      * **锁定不写前缀**：左上角一个「锁」字（``corner_tl``），别把名字挤掉。
 
     丹药说明与 ``cmd_bag`` 同源，走 ``cfg.recipe_impl`` —— 卡面只印「本作真会
     发生的事」；直接用 ``desc``（原著承诺）会违反 2026-11-18 的诚实契约。
     """
     locked = set(locked or ())
-    items_all = bagview.sorted_items(p)
-    items, page, total_pages = bagview.page_of(items_all, page)
+    items = bagview.sorted_items(p)
     # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
     known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
              for n, r in cfg.RECIPE_BY_NAME.items()}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items:
-        # ⚠️ Pillow 自绘无 emoji 字形：🔒 会被静默丢弃（11-19 实拍）；用中文标记。
-        mark = "〔锁〕" if name in locked else ""
-        # 丹纹带纹丹：网格格窄，用单字「纹」代替后缀（标记已表意，保住丹名可读）；
-        # 非网格列表用完整名 + 赐福说明。
-        if cfg.is_danwen_name(name):
-            grid_title = f"纹·{cfg.base_of_danwen(name)} ×{n}"
-            mark = "〔纹〕" + mark
-            sub = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
-            rows.append({"title": grid_title, "grid_title": grid_title,
-                         "list_title": f"{mark}{name} ×{n}", "sub": sub})
-        else:
-            rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
+        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
+        # 显示名一律剥掉丹纹后缀（用户：丹药名称不要变），纹数交给右上角角标
+        shown = cfg.base_of_danwen(name) if tier else name
+        row = {"title": f"{shown} ×{n}", "sub": known.get(name) or known.get(shown, "")}
+        if tier:
+            row["corner_tr"] = cfg.DANWEN_TIERS[min(3, tier) - 1]
+            row["sub"] = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
+        # 锁定：只认真正被锁的那个名字（普通丹与带纹丹是两件独立的物品）
+        if name in locked or shown in locked:
+            row["corner_tl"] = "锁"
+        rows.append(row)
     return {
         "icon": "diamond", "title": "包裹",
-        # 2026-11-24：分页后「本卡展示前 24 格」这种说法会误导（现在能翻页）。
-        # 只报真实口径：共 N 种 · 丹药优先排前 · 第 x/y 页。
-        "subtitle": (f"{len(items_all)} 种物品 · 丹药优先 · 第 {page}/{total_pages} 页"
-                     f" · 金币 {int(p.get('gold', 0))}"),
-        "page": page,
-        "total_pages": total_pages,
-        "total_avail": len(items_all),
-        # 2026-11-23 用户「背包别太长，学游戏展示方式」：游戏实机包裹是 4×6 网格，
-        # 故 4 列紧凑格子（每格只画名称+数量），24 格 6 行看完，不再是一长列带说明。
+        "subtitle": (f"{len(items)} 种物品 · 丹药优先 · 金币 {int(p.get('gold', 0))}"),
+        # 用户「背包别搞翻页，延长」：4 列网格一卡到底，行数随物品数自然增长。
         "columns": 4,
         "grid": True,
         "rows": rows,
-        "tip": ("发「背包2」翻页 · 服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用"
-                if total_pages > 1 else
-                "服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用 · 〔锁〕=已锁定"),
+        "tip": "服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用 · 左上「锁」=已锁定",
     }
 
 
-async def render_bag(p: dict, locked=None, page: int = 1) -> bytes | None:
-    return await _render_list("doupo_list", build_bag_data(p, locked, page), "斗破背包",
+async def render_bag(p: dict, locked=None) -> bytes | None:
+    return await _render_list("doupo_list", build_bag_data(p, locked), "斗破背包",
                               qq=p.get("qq"))
 
 
