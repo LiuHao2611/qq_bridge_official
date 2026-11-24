@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from . import battle_review as br
+from . import bagview
 from . import card_theme
 from . import config as cfg
 from . import core
@@ -866,21 +867,25 @@ def build_shop_data(p: dict, beast: bool = False) -> dict:
     }
 
 
-def build_bag_data(p: dict, locked=None) -> dict:
+def build_bag_data(p: dict, locked=None, page: int = 1) -> dict:
     """背包列表 → doupo_list 模板参数。
 
     ``locked``：被玩家锁定的物品名集合（2026-11-19），标题前加 🔒。
+    ``page``：24 格一页（2026-11-24）。排序/分页口径统一走 ``bagview``，
+    与 ``cmd_bag`` 文本版**同一份**，杜绝「卡里翻页了文字没翻」。
+
     丹药说明与 ``cmd_bag`` 同源，走 ``cfg.recipe_impl`` —— 卡面只印「本作真会
     发生的事」；直接用 ``desc``（原著承诺）会违反 2026-11-18 的诚实契约。
     """
     locked = set(locked or ())
-    items = core.bag_slots(p)
+    items_all = bagview.sorted_items(p)
+    items, page, total_pages = bagview.page_of(items_all, page)
     # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
     known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
              for n, r in cfg.RECIPE_BY_NAME.items()}
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
-    for name, n in items[:24]:
+    for name, n in items:
         # ⚠️ Pillow 自绘无 emoji 字形：🔒 会被静默丢弃（11-19 实拍）；用中文标记。
         mark = "〔锁〕" if name in locked else ""
         # 丹纹带纹丹：网格格窄，用单字「纹」代替后缀（标记已表意，保住丹名可读）；
@@ -895,21 +900,27 @@ def build_bag_data(p: dict, locked=None) -> dict:
             rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
     return {
         "icon": "diamond", "title": "包裹",
-        # 2026-11-23 修「57/24 格」误导：len(items)=物品**种数**（可 >24），
-        # 卡片只展示前 24 格（见上方 items[:24]）。用斜杠连接会被读成「超容量」。
-        # 改为显式说明：共 N 种、本卡展示前 24 格。
-        "subtitle": f"{len(items)} 种物品 · 本卡展示前 24 格 · 金币 {int(p.get('gold', 0))}",
+        # 2026-11-24：分页后「本卡展示前 24 格」这种说法会误导（现在能翻页）。
+        # 只报真实口径：共 N 种 · 丹药优先排前 · 第 x/y 页。
+        "subtitle": (f"{len(items_all)} 种物品 · 丹药优先 · 第 {page}/{total_pages} 页"
+                     f" · 金币 {int(p.get('gold', 0))}"),
+        "page": page,
+        "total_pages": total_pages,
+        "total_avail": len(items_all),
         # 2026-11-23 用户「背包别太长，学游戏展示方式」：游戏实机包裹是 4×6 网格，
         # 故 4 列紧凑格子（每格只画名称+数量），24 格 6 行看完，不再是一长列带说明。
         "columns": 4,
         "grid": True,
         "rows": rows,
-        "tip": "服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用 · 〔锁〕=已锁定",
+        "tip": ("发「背包2」翻页 · 服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用"
+                if total_pages > 1 else
+                "服丹 <丹名> 使用 · 锁定 <丹名> 后战斗不自动服用 · 〔锁〕=已锁定"),
     }
 
 
-async def render_bag(p: dict, locked=None) -> bytes | None:
-    return await _render_list("doupo_list", build_bag_data(p, locked), "斗破背包", qq=p.get("qq"))
+async def render_bag(p: dict, locked=None, page: int = 1) -> bytes | None:
+    return await _render_list("doupo_list", build_bag_data(p, locked, page), "斗破背包",
+                              qq=p.get("qq"))
 
 
 def build_rank_data(top: list) -> dict:

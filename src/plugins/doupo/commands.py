@@ -17,6 +17,7 @@ from datetime import date
 
 from . import battle_comments as bc
 from . import battle_review as br
+from . import bagview
 from . import card_theme
 from . import config as cfg
 from . import core
@@ -389,7 +390,7 @@ MENU_GROUPS = (
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
         ("炼制 回灵丹", "开炉炼丹；「炼制 回灵丹 5次」连炼5炉，失败得药渣"),
         ("服丹 回灵丹", "服用丹药"),
-        ("背包", "包裹（24 格）；锁定的物品带 🔒，战斗不会自动服用"),
+        ("背包", "包裹：丹药优先、24 格一页，「背包2」翻页；锁定物品带 🔒，战斗不自动服用"),
         ("锁定 回灵丹", "锁定物品：只拦「战斗自动服药」，手动服丹照旧"),
         ("解锁 回灵丹", "解除锁定，恢复自动服用"),
     )),
@@ -1813,13 +1814,18 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
     return "\n".join(out)
 
 
-async def cmd_bag(store, qq) -> str:
+async def cmd_bag(store, qq, page: int = 1) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    items = core.bag_slots(p)
+    items_all = bagview.sorted_items(p)
+    items, page, total_pages = bagview.page_of(items_all, page)
     locked = await store.item_locks(str(qq))
-    out = [f"🎒 包裹（{len(items)} 种物品，展示前 24 格）　💰 {p['gold']}"]
+    # 2026-11-24：旧版写「展示前 24 格」并静默丢弃其余 40 种（lv100+ 实测），
+    # 玩家看不到刚炼的丹药。改为丹药优先 + 真翻页，全量内容都能看到。
+    head = f"🎒 包裹（{len(items_all)} 种物品 · 丹药优先"
+    head += f" · 第 {page}/{total_pages} 页）　💰 {p['gold']}" if total_pages > 1 else f"）　💰 {p['gold']}"
+    out = [head]
     # 包裹里的丹药同样只显示「本作真会发生的事」，不印原著承诺。
     # 2026-11-23：按 RECIPE_BY_NAME 遍历，别名（复紫灵丹）也有说明，不会在包裹里变哑巴。
     known = {n: (cfg.recipe_impl(r) or r.get("desc", ""))
@@ -1827,12 +1833,14 @@ async def cmd_bag(store, qq) -> str:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
-    for i, (name, n) in enumerate(items[:24]):
+    for i, (name, n) in enumerate(items):
         mark = "🔒" if name in locked else ""
-        out.append(f"　[{i + 1}] {mark}{name} ×{n}")
+        out.append(f"　[{i + 1 + (page - 1) * bagview.PER_PAGE}] {mark}{name} ×{n}")
         if name in known:
             out.append(f"　　　{known[name]}")
     out.append("")
+    if total_pages > 1:
+        out.append(f"　发「背包2」…「背包{total_pages}」翻页（共 {len(items_all)} 种）")
     out.append("　用法：服丹 回灵丹　｜　锁定 回灵丹 / 解锁 回灵丹（锁定后战斗不会自动服用）")
     return "\n".join(out)
 

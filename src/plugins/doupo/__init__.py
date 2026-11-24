@@ -35,6 +35,7 @@ from . import commands
 from . import card
 from . import avatar
 from . import core
+from . import bagview
 from . import store as store_mod
 from . import puppet_store as puppet_store_mod
 
@@ -802,18 +803,25 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, bag)
     qq = str(event.user_id)
+    # 2026-11-24 分页：手打「背包2/包裹3」翻页，无数字默认第 1 页。
+    # 页码夹取与卡片/文本共用 bagview.page_of（越界落末页，不吐空页）。
+    page = _num(event, 1)
     # 纯文本兜底（与图片同源）
-    msg = await commands.cmd_bag(store, qq)
+    msg = await commands.cmd_bag(store, qq, page)
     png = None
+    total_pages = 1
     try:
         p = await store.get_player(qq)
         if p:
             # 锁定集合进卡面（🔒 前缀），与 cmd_bag 同一数据源
-            png = await card.render_bag(p, await store.item_locks(qq))
+            _chunk, page, total_pages = bagview.page_of(
+                bagview.sorted_items(p), page)
+            png = await card.render_bag(p, await store.item_locks(qq), page)
     except Exception as e:  # noqa: BLE001
         logger.warning("斗破背包卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:
-        await finish_card(bag, event, png, "bag", "doupo_bag.png")
+        await finish_card(bag, event, png, "bag", "doupo_bag.png",
+                          page=page, total_pages=total_pages)
         return
     await bag.finish(msg)
 
