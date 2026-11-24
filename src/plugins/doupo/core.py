@@ -1347,7 +1347,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     st = stats(p)
     root = cfg.root_factor(p)   # 根基裁定（隐形）：PVE 承伤侧打折；输出侧在 _hit 内
     hp = int(p.get("hp") or st["体力"])
-    # 开战沿用当前斗气（结转），不再无条件满蓝；clamp 到上限防越界存档。
+    # 开战沿用当前斗气；clamp 到上限防越界存档。
     mp = max(0, min(mp_max(p), int(p.get("mp", mp_max(p)))))
     # 丹纹赐福：本场快照；斗气回满型开战生效一次
     _dw = dw.fight_state(p)
@@ -3265,16 +3265,18 @@ def _advance_one(p) -> int:
 def use_item(p, name, used_counts=None, rng=random.random, _skip_take=False) -> dict:
     """服丹/炼化。effect 分支与 msg 前缀沿用旧口径，既有测试逐字不变。
     used_counts=破境丹一阶限次；rng 可注入；_skip_take 内部递归用（带纹丹）。"""
-    # 丹纹带纹丹：扣带纹丹 → 按基础丹执行药效 → 成功后挂随机赐福
+    # 丹纹带纹丹：先验有丹→跑基础药效→成功才扣（反序会白吃稀有丹，同养魂涎吞丹洞）
     if cfg.is_danwen_name(name):
-        if not take_item(p, name, 1):
+        if count_item(p, name) < 1:
             return {"ok": False, "reason": "none"}
-        _base = cfg.base_of_danwen(name)
-        res = use_item(p, _base, used_counts=used_counts, rng=rng, _skip_take=True)
-        if res.get("ok"):
-            g = dw.grant(p, name, rng=rng, add_fn=lambda k, m, mi, s: tb.add(p, k, m, mi, s))
-            res["msg"] += "\n" + txt.danwen_grant(g["name"], g["desc"])
-            res["danwen"] = g
+        res = use_item(p, cfg.base_of_danwen(name), used_counts=used_counts,
+                       rng=rng, _skip_take=True)
+        if not res.get("ok"):
+            return res
+        take_item(p, name, 1)
+        g = dw.grant(p, name, rng=rng, add_fn=lambda k, m, mi, s: tb.add(p, k, m, mi, s))
+        res["msg"] += "\n" + txt.danwen_grant(g["name"], g["desc"])
+        res["danwen"] = g
         return res
     rec = cfg.RECIPE_BY_NAME.get(name)
     is_material = False

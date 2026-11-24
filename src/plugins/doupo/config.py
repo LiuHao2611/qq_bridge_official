@@ -720,8 +720,15 @@ def danwen_rate(grade: str) -> float:
 # 带纹丹：不进 RECIPES / RECIPE_NAMES（丹方卡、宝库、名录都不出现），
 # 只注册到 RECIPE_BY_NAME（供 use_item 解析基础药效）与 DANWEN_RECIPE_NAMES
 # （供服丹口令匹配）。配方浅拷贝基础丹 + danwen 标记，服下时先走基础药效再挂赐福。
+# 🚨 只给「能正常服下去」的丹注册带纹版。这三类若出带纹版，服下**必然**在
+#    基础药效那一步失败（兽火单方要 take_item 基础丹、焚血散是升技材料、
+#    养魂涎要渡进傀儡），旧版先扣后跑会白吃掉玩家的稀有带纹丹
+#    —— 2026-11-24 实测抓出的吞丹洞，别再把它们放开。
+_DANWEN_SKIP_EFFECTS = frozenset({"beast_flame", "skill", "puppet_soul"})
 DANWEN_RECIPE_NAMES: list[str] = []
 for _base in list(RECIPES):
+    if str(_base.get("effect") or "") in _DANWEN_SKIP_EFFECTS:
+        continue
     _dn = str(_base["name"]) + DANWEN_SUFFIX
     _r = dict(_base)                     # 浅拷贝 need/buy/src 等值；不修改原丹
     _r["name"] = _dn

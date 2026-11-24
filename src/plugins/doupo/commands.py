@@ -22,6 +22,7 @@ from . import config as cfg
 from . import core
 from . import doupo_text as txt
 from . import temp_buff as tb
+from . import danwen as dw
 from . import duel_challenge as dc
 from . import factions as fac
 from . import flame_drop as _fdrop
@@ -650,6 +651,8 @@ async def cmd_panel(store, qq) -> str:
     ]
     # 2026-11-24 限时增益：药力未散时必须看得见剩余时间（否则玩家以为丹没效果）。
     rows.extend(tb.lines(p))
+    # 丹纹赐福剩次数同理：给了就得看得见，否则玩家不知道还没用完。
+    rows.extend(dw.lines(p))
     return "\n".join(rows)
 
 
@@ -871,6 +874,9 @@ async def cmd_fight(store, qq) -> str:
     _bl = tb.battle_line(p)
     if _bl:
         lines.append(_bl)
+    # 丹纹赐福：本场用掉几次后还剩几次，战报里给一行（用完自然消失）
+    for _dl in dw.lines(p):
+        lines.append(_dl)
     lines.append(txt.battle_spot(spot))
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")

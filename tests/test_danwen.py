@@ -176,6 +176,30 @@ def t_danwen_does_not_consume_battle_rng():
     assert r["n_ok"] == 3 and r["n_fail"] == 2, r  # 序列没被丹纹打乱
 
 
+def t_full_hp_keeps_danwen_pill():
+    """🚨 吞丹守门：满血服带纹丹 → 基础药效返回 full，**丹必须还在**、不挂赐福。
+
+    反序实现（先扣后跑）会让玩家白丢一枚稀有带纹丹 —— 2026-11-24 实测抓出过。
+    """
+    p = P()                      # P() 已满血
+    p["bag"][DN] = 1
+    assert int(p["hp"]) >= int(core.stats(p)["体力"])
+    res = core.use_item(p, DN, rng=lambda: 0.0)
+    assert not res.get("ok") and res.get("reason") == "full", res
+    assert core.count_item(p, DN) == 1, "满血服丹把带纹丹吃掉了"
+    assert not p.get("danwen_charges"), p.get("danwen_charges")
+
+
+def t_special_pills_have_no_danwen():
+    """兽火单方/升技材料/养魂涎不能有带纹版（服下必先扣后失败 = 吞丹）。"""
+    for nm in ("焚血散", "养魂涎", "紫火丹", "桃花丹"):
+        dn = nm + cfg.DANWEN_SUFFIX
+        assert dn not in cfg.RECIPE_BY_NAME, dn
+        assert dn not in cfg.DANWEN_RECIPE_NAMES, dn
+    # 常规丹必须仍有带纹版
+    assert "凝血散" + cfg.DANWEN_SUFFIX in cfg.RECIPE_BY_NAME
+
+
 def t_blessings_all_ge_10():
     """用户红线：所有赐福加成 ≥ 10%，池子 6 条。"""
     assert len(dw.BLESSINGS) == 6
@@ -189,7 +213,8 @@ def t_blessings_all_ge_10():
 TESTS = [t_rate_table, t_craft_emits_danwen, t_batch_counts_danwen,
          t_use_grants_blessing, t_b01_dmg_x2_consumed, t_b02_crit_guaranteed,
          t_b03_timed_stats, t_b06_mp_refill, t_zero_and_sweep,
-         t_danwen_does_not_consume_battle_rng, t_blessings_all_ge_10]
+         t_danwen_does_not_consume_battle_rng, t_full_hp_keeps_danwen_pill,
+         t_special_pills_have_no_danwen, t_blessings_all_ge_10]
 
 if __name__ == "__main__":
     ok = 0
