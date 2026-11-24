@@ -295,9 +295,11 @@ async def main():
     await fire("异火 无传承→纯文本", mk_group(A, "异火"), "本宗无传承异火")
     # 2026-11-18 A 方案：未收服的异火不能直接养（堵住「养火即收服」的后门）。
     # A 是无传承宗门（云岚宗），本宗不发火 → 先验门禁，再手工收服走一遍正路。
-    await fire("养火 未收服→拒绝", mk_group(A, "养火 青莲地心火"), "尚未收服")
+    # 2026-11-24 入道不送火：空火先被 nofire 拦（文案给获取路径）
+    await fire("养火 空火→拒绝", mk_group(A, "养火 青莲地心火"), "尚未拥有火焰")
     _pa = await p_mod.store.get_player(str(A))
     _pa.setdefault("flames", {})["青莲地心火"] = 1
+    await fire("养火 未收服该朵→拒绝", mk_group(A, "养火 陨落心炎"), "尚未收服")
     await fire("养火 已收服→生效", mk_group(A, "养火 青莲地心火"), "药渣")
     await fire("宝库", mk_group(A, "宝库"), None, expect_image=True)
     await fire("买 血灵草 2", mk_group(A, "买 血灵草 2"), "血灵草")

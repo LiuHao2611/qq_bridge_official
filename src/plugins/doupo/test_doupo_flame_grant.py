@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""异火发放自检（2026-11-18 A 方案 → 2026-11-19 三层投放重构）。exit 0 = 全绿。
+"""火焰发放自检（2026-11-24 兽火改造：入道不送火）。exit 0 = 全绿。
 
-口径（与 config.STARTER_FLAME / FLAME_TIER 同源）：
-  * 入道/转宗只发一朵 B 线数值 starter（火云水炎），不再白送青莲/陨落/三千三朵超标火；
-  * 青莲=A线隐藏彩蛋、陨落/三千/净莲/帝炎=S线大后期，见 test_flame_tiers.py；
-  * 只在玩家一朵异火都没有时发放 → 老档可补发、转宗不能刷；
-  * 未收服不可喂养（堵住 0→1 后门）；
-  * 卡面/文本「用法」指向玩家真能养的那一朵。
+口径（与 config.STARTER_FLAME / BEAST_FLAMES 同源）：
+  * 入道/转宗**一律不发火**（用户：异火极其稀有，直接送不符合原著）；
+  * 首发火的三条真实路径：野外对应魔兽掉兽火 / 九星突破分档掉落 / 兽火单方；
+  * 未收服不可喂养（堵住 0→1 后门）；空火禁炼普通丹（兽火单方例外）；
+  * 卡面/文本「用法」指向玩家真能养的或明确获取路径。
 
-运行：/opt/venv/bin/python src/plugins/doupo/test_doupo_flame_grant.py
+运行：python src/plugins/doupo/test_doupo_flame_grant.py
 """
 from __future__ import annotations
 
@@ -69,76 +68,71 @@ async def main():
     store = store_mod.Store(os.path.join(_TMP, "doupo.json"))
     await store.load()
 
-    # ---- 1. starter 配置本身有据 ----
+    # ---- 1. 入道不送火（2026-11-24 用户口径）----
     starter = cfg.STARTER_FLAME
-    check("starter 登记在可持有表", starter in cfg.OWNED_FLAME_NAMES, starter)
-    check("starter 是 B 线数值火", cfg.FLAME_TIER.get(starter) == "B", starter)
-    check("starter 在 BONUS_FLAMES 有数值定义", starter in cfg.BONUS_FLAME_BY_NAME, starter)
-    check("不再有按宗门发 S/A 的旧映射", not cfg.FACTION_FLAME_GRANT,
+    check("STARTER_FLAME 已清空", starter == "", repr(starter))
+    check("不再有按宗门发火的旧映射", not cfg.FACTION_FLAME_GRANT,
           str(cfg.FACTION_FLAME_GRANT))
 
-    # ---- 2. 入道发放：任何宗门都只发 starter ----
+    # ---- 2. 任何宗门入道都是空火 ----
     qq = find_start_qq("sherenzu")
     check("能构造蛇人族新号（种子稳定）", bool(qq), qq)
     p = core.create_player(qq, "火主", 900000077)
-    check("蛇人族入道即得 starter",
-          p["faction"] == "sherenzu" and owned(p).get(starter) == 1, str(owned(p)))
-    check("入道不发超标 S/A 火",
-          not any(cfg.FLAME_TIER.get(n) in ("S", "A") for n in owned(p)), str(owned(p)))
+    check("蛇人族入道不带任何火", p["faction"] == "sherenzu" and owned(p) == {}, str(owned(p)))
 
     qq2 = find_start_qq("xiaojia")
     p2 = core.create_player(qq2, "无火", 900000077)
-    check("任何宗门都发 starter（不再有「无火宗门」）",
-          p2["faction"] == "xiaojia" and owned(p2).get(starter) == 1, str(owned(p2)))
+    check("萧家入道同样空火（全宗门一致）",
+          p2["faction"] == "xiaojia" and owned(p2) == {}, str(owned(p2)))
 
-    # ---- 3. 幂等 / 防刷 ----
-    before = owned(p)[starter]
+    # ---- 3. 转宗也不发火（幂等，任何档位都没有白送）----
     again = core.grant_faction_flame(p)
-    check("重复发放幂等（不会 1→2）",
-          again == "" and owned(p)[starter] == before, str(owned(p)))
+    check("兼容入口不发火", again == "" and owned(p) == {}, str(owned(p)))
 
     p3 = dict(p)
     p3["faction"] = "jianan"
     p3["faction_name"] = fac.FACTIONS["jianan"]["name"]
     got = core.grant_faction_flame(p3)
-    check("已有异火者转宗不再发（防刷）",
-          got == "" and owned(p3) == {starter: 1}, str(owned(p3)))
+    check("转宗不发火", got == "" and owned(p3) == {}, str(owned(p3)))
 
-    # ---- 4. 老档补发：全 0 玩家转宗 ----
-    legacy = core.create_player(qq2, "老档", 900000077)
-    legacy["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}
-    legacy["lv"] = 40
-    legacy["gold"] = 999999
-    res = core.change_faction(legacy, "jianan")
-    check("老档全 0 转宗补发 starter",
-          res.get("ok") and res.get("flame") == starter
-          and owned(legacy) == {starter: 1}, str(res))
+    # ---- 3b. 首发火真实路径：炼兽火单方（空火也能开炉）----
+    seal = core.create_player("12009", "引火", 900000077)
+    seal["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}
+    for _m, _n in cfg.RECIPE_BY_NAME["桃花丹"]["need"].items():
+        core.add_item(seal, _m, _n)
+    r = core.craft(seal, "桃花丹", rng=lambda: 0.0)
+    check("空火可炼兽火单方（引火通道）", r.get("ok") is True and r.get("rate") == 0.70, str(r))
 
     # ---- 5. 未收服不可养 ----
     q = core.create_player("12001", "喂火", 900000077)
     q["flames"] = {n: 0 for n in cfg.OWNED_FLAME_NAMES}
     core.add_item(q, "药渣", 500)
     r = core.feed_flame(q, "净莲妖火")
-    check("未收服喂养被拒", r.get("ok") is False and r.get("reason") == "unowned",
-          str(r))
+    check("空火养火先被 nofire 拦（提示先得火）",
+          r.get("ok") is False and r.get("reason") == "nofire", str(r))
     check("被拒后不扣药渣", core.count_item(q, "药渣") == 500,
           str(core.count_item(q, "药渣")))
+    # 有火之后，喂「未收服的那一朵」才是 unowned
+    q["flames"]["火云水炎"] = 1
+    r1b = core.feed_flame(q, "净莲妖火")
+    check("有火但未收服该朵 → unowned",
+          r1b.get("ok") is False and r1b.get("reason") == "unowned", str(r1b))
 
-    q["flames"][starter] = 1
-    r2 = core.feed_flame(q, starter)
+    q["flames"]["火云水炎"] = 1
+    r2 = core.feed_flame(q, "火云水炎")
     check("已收服 B 线数值火可正常喂养", r2.get("ok") is True, str(r2)[:120])
 
-    # ---- 6. 命令层文案 ----
+    # ---- 6. 命令层文案（入道回包不提火；养火提示给真实获取路径）----
     qq3 = find_start_qq("sherenzu")
     txt = await cmds.cmd_enter(store, qq3, "入道火主", 900000077)
-    check("入道回包说明数值异火（不再写本宗异火）",
-          "数值异火" in txt and starter in txt and "本宗异火" not in txt, txt[:120])
+    check("入道回包不再说送火",
+          "数值异火" not in txt and "入道赐下" not in txt and "本宗异火" not in txt,
+          txt[:160])
     fed = await cmds.cmd_feed(store, qq3, "净莲妖火")
-    check("养火拒绝时按 S 线给门槛提示（不再写本宗异火）",
-          "尚未收服" in fed and "本宗异火" not in fed and "大后期" in fed, fed[:160])
+    check("空火养火给「先得火」指引",
+          ("先得一朵火" in fed or "九星突破" in fed) and "本宗异火" not in fed, fed[:160])
     p_after = await store.get_player(qq3)
-    check("命令回包写入后存档带 starter", owned(p_after).get(starter) == 1,
-          str(owned(p_after)))
+    check("入道后存档仍为空火", owned(p_after) == {}, str(owned(p_after)))
 
     # ---- 7. 最高声明：不加新玩家字段 ----
     base_keys = set(core.create_player("12002", "键", 900000077).keys())
@@ -153,17 +147,14 @@ async def main():
           "帝炎" not in owned(q4) and q4.get("diyan") is False, "")
 
     # ---- 9. 异火卡/文本底部「用法」必须指向玩家真能养的那一朵 ----
-    h_own = cmds.flame_usage_hint({"flames": {starter: 1}, "faction": "jianan"})
-    check("用法提示用玩家已收服的火", starter in h_own, h_own)
+    h_own = cmds.flame_usage_hint({"flames": {"火云水炎": 1}, "faction": "jianan"})
+    check("用法提示用玩家已收服的火", "火云水炎" in h_own, h_own)
     h_wait = cmds.flame_usage_hint({"flames": {}, "faction": "jianan"})
-    check("未收服时用法改提示先收服+starter 名",
-          "先收服" in h_wait and starter in h_wait, h_wait)
-    h_none = cmds.flame_usage_hint({"flames": {}, "faction": "xiaojia"})
-    check("未收服时用法仍指向 starter（全宗门统一）",
-          "先收服" in h_none and starter in h_none, h_none)
+    check("空火时用法指向真实获取路径（九星/兽火单方）",
+          ("九星突破" in h_wait or "兽火单方" in h_wait) and "养火" in h_wait, h_wait)
     h_card = card_mod.build_flames_data(
         {"faction": "jianan", "faction_name": "迦南学院",
-         "flames": {starter: 1}})["tip"]
+         "flames": {"火云水炎": 1}})["tip"]
     check("异火卡 tip 与文本同一口径", h_card == h_own, h_card)
 
     # ---- 10. 「收服 <异火名>」主动收服入口（三层投放补齐）----
@@ -180,7 +171,8 @@ async def main():
     qb = await _fresh_claim_qq("01")
     cb = await cmds.cmd_claim_flame(store, qb, "荒破灭焱")
     pb = await store.get_player(qb)
-    check("B 线火可主动收服", owned(pb).get("荒破灭焱") == 1 and "收服了" in cb, cb[:120])
+    check("B 线火可主动收服",
+          owned(pb).get("荒破灭焱") == 1 and ("认主" in cb or "收服了" in cb), cb[:120])
 
     # S 线低境界：拒绝且不写入
     qs = await _fresh_claim_qq("02", lv=1, main=0)

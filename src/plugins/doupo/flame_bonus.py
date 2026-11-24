@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
-"""B 线数值异火的加成聚合（2026-11-19 三层投放）。
+"""火焰加成聚合：异火（B 线数值火）+ 兽火 + 新生异火（2026-11-24 统一）。
+
+火焰身份只有两类——异火、兽火；本模块汇总所有"给数值"的火（B 线异火 /
+兽火 / 新生异火），供 core 炼药、六维、傀儡和卡面共用同一口径。
 
 为什么单独成模块：
-  * config 只放数据（BONUS_FLAMES 的 kind/value）；
+  * config 只放数据（BONUS_FLAMES / BEAST_FLAMES / FUSION_FLAMES 的 kind/value）；
   * core / puppet_core 各自读玩家已收服的火 → 汇总口径必须唯一，否则炼药卡说的
     加成和实际成功率两张皮（同「战斗终局只有一个数」的教训）。
   * 零 nonebot 依赖，纯函数，可直接单测。
@@ -10,8 +13,8 @@
 口径：
   * 已收服 = p["flames"][name] > 0；等级 lv 即加成级数（与喂养等级同源）。
   * alchemy → 炼药成功率加成（小数，如 0.06 = +6 个百分点），调用方封顶 CRAFT_RATE_CAP；
-  * puppet_atk / puppet_def → 傀儡攻防加成（小数）。
-  * 只统计 config.BONUS_FLAMES 里登记的火；S/A 火不参与（它们走招式/剧情特效）。
+  * atk/hp → 六维比例加成；puppet → 傀儡攻防加成。
+  * S/A 榜位火不参与（它们走招式/剧情特效）。
 """
 from __future__ import annotations
 
@@ -22,31 +25,41 @@ def _owned_level(p: dict, name: str) -> int:
     return max(0, int((p.get("flames") or {}).get(name, 0)))
 
 
-def alchemy_rate_bonus(p: dict) -> float:
-    """已收服 B 线炼药火的合成成功率加成（小数，未封顶）。
+def has_any_flame(p: dict) -> bool:
+    """玩家是否持有任意火焰（异火/兽火/新生异火）。入道空火开局为 False。
 
-    2026-11-19 其他火焰（兽火等）的 alchemy 型也并入：与 B 线同源聚合，
-    卡面与实战成功率永远一致。
+    2026-11-24 用户「没火不准炼药和养火」——craft / feed_flame 的单一前置。
+    """
+    return any(int(v or 0) > 0 for v in (p.get("flames") or {}).values())
+
+
+def _numeric_flames():
+    """所有给数值的火：B 线异火 + 新生异火 + 兽火（alchemy/atk/hp/puppet 四类）。"""
+    return list(cfg.BONUS_FLAMES) + list(cfg.FUSION_FLAMES) + list(cfg.BEAST_FLAMES)
+
+
+def alchemy_rate_bonus(p: dict) -> float:
+    """已收服火焰的炼药成功率加成（小数，未封顶；调用方封顶 CRAFT_RATE_CAP）。
+
+    异火（B 线）/ 兽火 / 新生异火的 alchemy 型同源聚合，卡面与实战成功率一致。
     """
     total = 0.0
-    for f in cfg.BONUS_FLAMES:
-        if f["kind"] == "alchemy":
-            total += float(f["value"]) * _owned_level(p, f["name"])
-    for f in getattr(cfg, "OTHER_FLAMES", []):
-        if f["bonus"] == "alchemy":
+    for f in _numeric_flames():
+        is_alchemy = (f.get("kind") == "alchemy") or (f.get("bonus") == "alchemy")
+        if is_alchemy:
             total += float(f["value"]) * _owned_level(p, f["name"])
     return total
 
 
 def other_flame_ratio(p: dict) -> dict:
-    """其他火焰（兽火/天然/人造/融合火）给六维的**比例**加成，供 stats() 单一源消费。
+    """兽火 + 新生异火给六维的**比例**加成，供 stats() 单一源消费。
 
     返回 ``{"atk": x, "hp": y}``（小数，如 0.05 = +5%）。atk 作用于力量（攻击主
     属性），hp 作用于体力上限。alchemy 型不在此（走 alchemy_rate_bonus）。
     只有已收服（flames[name]>0）才计；等级 = 加成级数。
     """
     out = {"atk": 0.0, "hp": 0.0}
-    for f in getattr(cfg, "OTHER_FLAMES", []):
+    for f in list(cfg.FUSION_FLAMES) + list(cfg.BEAST_FLAMES):
         lv = _owned_level(p, f["name"])
         if lv <= 0:
             continue

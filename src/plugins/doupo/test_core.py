@@ -56,10 +56,14 @@ _stub_nonebot()
 from doupo import core, config as cfg  # noqa: E402
 
 
-def _p(lv=1, **kw):
+def _p(lv=1, flame=False, **kw):
     p = core.create_player("10001", "测试", "20001")
     p["lv"] = lv
     p["exp"] = 0
+    # 2026-11-24 入道不送火：炼丹/养火前须持有任意火。
+    # 默认不加（紫火给力量 +3% 会污染面板锚点测试），炼丹类用例显式 flame=True。
+    if flame:
+        p["flames"]["紫火"] = 1
     p["hp"] = core.stats(p)["体力"]
     st = core.stats(p)
     p["hp"] = st["体力"]
@@ -197,14 +201,14 @@ def test_enhance_needs_stones():
 # 4. 炼药（失败得药渣 / 品阶影响成功率 / 冷却）
 # ---------------------------------------------------------------------------
 def test_craft_success_and_dross():
-    p = _p(1)
+    p = _p(1, flame=True)
     p["bag"] = {"血灵草": 10, "紫叶兰": 10}
     p["alch"] = 8            # 九品 -> 95%
     res = core.craft(p, "回灵丹", rng=lambda: 0.0)
     assert res["ok"] is True
     assert core.count_item(p, "回灵丹") == 1
 
-    p2 = _p(1)
+    p2 = _p(1, flame=True)
     p2["bag"] = {"血灵草": 10, "紫叶兰": 10}
     p2["alch"] = 0
     res2 = core.craft(p2, "回灵丹", rng=lambda: 0.999)   # 必失败
@@ -213,11 +217,11 @@ def test_craft_success_and_dross():
 
 
 def test_craft_missing_material_and_cd():
-    p = _p(1)
+    p = _p(1, flame=True)
     p["bag"] = {}
     assert core.craft(p, "回灵丹")["reason"] == "mat"
 
-    q = _p(1)
+    q = _p(1, flame=True)
     q["bag"] = {"血灵草": 99, "紫叶兰": 99}
     q["alch"] = 8
     core.craft(q, "回灵丹", rng=lambda: 0.0, now_ts=1000.0)
@@ -226,7 +230,7 @@ def test_craft_missing_material_and_cd():
 
 
 def test_alch_level_up():
-    p = _p(1)
+    p = _p(1, flame=True)
     p["alch"] = 0
     p["alch_exp"] = 0
     p["bag"] = {"血灵草": 99, "紫叶兰": 99}
@@ -268,6 +272,10 @@ def test_feed_flame():
     # 本用例原本直接喂 0 级，A 方案上线后一直是红的（基线红，2026-11-19 修正）。
     p = _p(1)
     p["bag"] = {"药渣": 10}
+    r = core.feed_flame(p, "青莲地心火")
+    # 2026-11-24 入道空火：先被 nofire 拦（提示先得火），再才是 unowned
+    assert not r["ok"] and r["reason"] == "nofire", r
+    p["flames"]["紫火"] = 1
     r = core.feed_flame(p, "青莲地心火")
     assert not r["ok"] and r["reason"] == "unowned", r
 

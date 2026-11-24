@@ -64,6 +64,8 @@ def _p(lv=1, alch=3):
     p["lv"] = lv
     p["exp"] = 0
     p["alch"] = alch
+    # 2026-11-24 入道不送火：炼丹前须持有任意火（紫火=atk 型，不污染 alchemy 加成）
+    p["flames"]["紫火"] = 1
     st = core.stats(p)
     p["hp"] = st["体力"]
     p["mp"] = core.mp_max(p)

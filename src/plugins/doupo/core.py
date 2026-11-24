@@ -19,6 +19,8 @@ import time
 from . import config as cfg
 from . import doupo_text as txt
 from . import flame_bonus as _flame_bonus, temp_buff as tb
+from . import flame_drop as _fdrop
+from .flame_drop import s_flame_gate  # noqa: E402  纯函数外迁，保持 core.s_flame_gate 入口
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
@@ -131,8 +133,8 @@ def create_player(qq, name, group) -> dict:
     except Exception:
         st.setdefault("faction", "")
         st.setdefault("faction_name", "")
-    # 入道发放「本宗所藏」异火（1 级）：原著有据的三处之一，无则不发放。
-    grant_faction_flame(st)
+    # 2026-11-24：入道不再送火（异火极稀有，用户口径）。空火开局，靠掉落/炼单方得火。
+    # grant_faction_flame 保留为兼容入口，但 STARTER_FLAME="" 时它不发任何火。
     # learned = 已领悟技名表。新号只有 1 门随机普通阶技；其余靠「学斗技」逐个领悟。
     try:
         low = [e["name"] for e in sk_mod.learnable(st) if e["tier"] == "普通"]
@@ -720,33 +722,20 @@ def nine_star_breakthrough(p, rng=random.random, locked=None,
 
 
 def roll_breakthrough_flame(p, rng=random.random) -> dict:
-    """九星 BOSS 战胜利后的火焰掉落。兽火/其他火焰概率高于异火（用户口径）。
+    """九星 BOSS 胜利掉火（2026-11-24 按境界分档；决策在 flame_drop，此处只落库）。
 
-    只掉 B 线数值异火与其他火焰；A 线隐藏彩蛋 / S 线门槛火 / 帝炎不进池
-    （保护已拍板的三层设计：它们的获取方式各自独立）。
-    写入 p["flames"][name] = 1（单一真值，与收服/支线同源）；已有则折算成药渣补偿。
+    低境界兽火档 50%、高境界异火档 100%。写入 p["flames"][name]=1（单一真值），
+    已持有折算药渣（防刷）。A/S/帝炎不进池。
     """
-    r = int(rng() * 1000)
-    kind, name = "", ""
-    if r < int(getattr(cfg, "BOSS_FLAME_DROP_OTHER", 0)):
-        # 其他火焰池：融合新生火权重更低（更稀有）
-        pool = []
-        for f in cfg.OTHER_FLAMES:
-            w = (cfg.BOSS_FUSION_RARE_WEIGHT if f["kind"] == "fusion"
-                 else cfg.BOSS_FUSION_WEIGHT)
-            pool.extend([f["name"]] * max(1, int(w * 100)))
-        name = rng_choice(pool, rng) if pool else ""
-        kind = "other"
-    elif r < int(getattr(cfg, "BOSS_FLAME_DROP_OTHER", 0)) + int(
-            getattr(cfg, "BOSS_FLAME_DROP_BONUS", 0)):
-        name = rng_choice(cfg.BONUS_FLAME_NAMES, rng) if cfg.BONUS_FLAME_NAMES else ""
-        kind = "bonus"
+    lv = int(p.get("lv", 1))
+    # 突破成功后调用方已 level_up？此函数在 level_up 之前调用（见 nine_star_breakthrough），
+    # 故用 lv+1 作为"突破后境界"决定掉落档（低境界掉兽火，斗宗以上掉异火）。
+    d = _fdrop.roll_flame_drop(lv + 1, rng=rng)
+    name, kind = d["name"], d["kind"]
     if not name:
         return {"ok": False, "name": "", "kind": ""}
-
     fl = p.setdefault("flames", {})
     if int(fl.get(name, 0)) > 0:
-        # 已持有 → 折算药渣（不重复给 1 级，避免刷数值）
         add_item(p, "药渣", 30)
         return {"ok": True, "name": name, "kind": kind, "duplicate": True, "dross": 30}
     fl[name] = 1
@@ -2135,6 +2124,8 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
             win = False
             break
     # 汇总掉落（同名合并）
+    # 野外对应魔兽掉火：只掉该魔兽对应的兽火（50%），已持有折算药渣
+    _bf = _fdrop.wild_flame_drops(p, [x["name"] for x in detail if x["win"]], rng, add_item)
     merged: dict[str, int] = {}
     for name, cnt in all_drops:
         merged[name] = merged.get(name, 0) + cnt
@@ -2147,6 +2138,7 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
         # 魂殿整场吞噬修为（已写 p，这里仅展示）。
         "devour": total_devour,
         "drops": list(merged.items()), "log": [d for x in detail for d in x["log"]],
+        "flame_drops": _bf,
         "detail": detail, "enemies": [x["name"] for x in detail],
         "enemy_count": len(detail), "hero_aid": hero_aid,
         "hp_end": _last.get("hp_end"), "mp_end": _last.get("mp_end"),
@@ -3092,6 +3084,9 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # 空火禁炼药；兽火单方是引火途径，例外
+    if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
+        return {"ok": False, "reason": "nofire"}
     # 2026-11-16：原著未载药方的丹药没有炼制路径，只能金币购买
     if not rec.get("need") and int(rec.get("buy", 0)) > 0:
         return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
@@ -3118,11 +3113,8 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     _is_high = (cfg.alch_grade_idx(rec.get("grade", ""))
                 >= cfg.alch_grade_idx(cfg.PUPPET_HIGH_GRADE_FROM))
 
-    # 2026-11-18 原著口径：成功率随「炼药师品阶 vs 丹药品阶」变化，不再所有丹药一个值。
-    # diff>0 越阶衰减（第495章四品勉强炼五品「成功率太小」），diff<=0 够格用基础率。
-    rate, diff = cfg.craft_rate_for(
-        p.get("alch", 0), rec.get("grade", ""),
-        flame_bonus=craft_rate_bonus(p))
+    # 成功率唯一入口：兽火单方走引火通道，其余按炼药师品阶判定（见 config）。
+    rate, diff = cfg.rate_for_recipe(p, rec, craft_rate_bonus(p))
     _danhui = danhui_bonus(p)  # 丹塔丹会：仅加成>0挂键，非丹塔字节不变
     if rng() < rate:
         add_item(p, name, 1)
@@ -3188,6 +3180,9 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # 兽火单方引火，例外
+    if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
+        return {"ok": False, "reason": "nofire"}
     if not rec.get("need") and int(rec.get("buy", 0)) > 0:
         return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     now_ts = time.time() if now_ts is None else now_ts
@@ -3197,9 +3192,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
 
     n = max(1, min(int(n), cfg.CRAFT_BATCH_MAX))
     grade_idx = cfg.alch_grade_idx(rec.get("grade", ""))
-    rate, diff = cfg.craft_rate_for(
-        p.get("alch", 0), rec.get("grade", ""),
-        flame_bonus=craft_rate_bonus(p))
+    rate, diff = cfg.rate_for_recipe(p, rec, craft_rate_bonus(p))
     exp_factor = cfg.low_grade_exp_factor(p.get("alch", 0), grade_idx)
     mp_per = max(1, int(mp_max(p) * cfg.CRAFT_MP_PER))
 
@@ -3291,6 +3284,16 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     # 在最前 —— 玩家白丢一枚。与养魂涎同理，必须拦在扣物前。
     if str(rec.get("effect") or "") == "skill":
         return {"ok": False, "reason": "notuse", "pill": name}
+    # 兽火单方：服后获得对应兽火（判定在 flame_drop，扣丹/写库在此，防吞丹）。
+    _bp = _fdrop.beast_pill_result(p, rec)
+    if _bp is not None:
+        if not _bp["ok"]:
+            return {"ok": False, "reason": _bp["reason"], "pill": name}
+        if not take_item(p, name, 1):
+            return {"ok": False, "reason": "none"}
+        p.setdefault("flames", {})[_bp["flame"]] = 1
+        return {"ok": True, "msg": "炼化【%s】，兽火【%s】已认你为主" % (name, _bp["flame"]),
+                "flame": _bp["flame"], "kind": "beast"}
     st = stats(p)
     # 2026-11-23：气血/斗气已满时不扣物（旧版先扣再算，白丢一枚只回「+0」）。
     eff = str(rec.get("effect") or "")
@@ -3567,21 +3570,6 @@ def grant_faction_flame(p) -> str:
     return name
 
 
-def s_flame_gate(p, name: str) -> tuple[bool, str]:
-    """S 线异火解锁判定：境界索引 + 主线进度双门槛。
-
-    返回 ``(可解锁, 未满足原因)``。帝炎不在此列（走 diyan 斗帝成就）。
-    """
-    gate = (getattr(cfg, "S_FLAME_GATE", {}) or {}).get(name)
-    if not gate:
-        return True, ""
-    if int(p.get("lv", 1)) < cfg.realm_lv(int(gate["realm"])):
-        return False, "境界未至（需斗尊以上）"
-    if int(p.get("main_idx", 0)) < int(gate["main"]):
-        return False, "主线剧情未推进到相应章节"
-    return True, ""
-
-
 def unlock_flame(p, name: str) -> dict:
     """统一收服入口：S 线校验门槛，A 线只认支线回调，B 线可直接收服。
 
@@ -3606,8 +3594,11 @@ def unlock_flame(p, name: str) -> dict:
 # 异火喂养
 # ---------------------------------------------------------------------------
 def feed_flame(p, name, amount=None) -> dict:
-    # B 线十一火也可喂养（数值火）：与可养五火合并查表，口径同源。
-    fl = cfg.FLAME_BY_NAME.get(name) or getattr(cfg, "BONUS_FLAME_BY_NAME", {}).get(name)
+    if not _flame_bonus.has_any_flame(p):
+        return {"ok": False, "reason": "nofire"}  # 空火无火可养
+    # 可养五火 + B 线异火 + 新生异火 + 兽火，共用一张查表口径。
+    fl = (cfg.FLAME_BY_NAME.get(name) or getattr(cfg, "BONUS_FLAME_BY_NAME", {}).get(name)
+          or getattr(cfg, "OTHER_FLAME_BY_NAME", {}).get(name))
     if not fl:
         return {"ok": False, "reason": "noflame"}
     if name == cfg.FLAME_DIYAN:

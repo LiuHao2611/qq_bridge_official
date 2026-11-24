@@ -785,19 +785,18 @@ def build_flames_data(p: dict) -> dict:
             note = "" if lv >= cfg.FLAME_MAX_LV else \
                 f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
             rows.append({"title": name, "right": state, "sub": sub, "note": note})
-    # 其他火焰（兽火等，九星突破 BOSS 掉落）：只列已收服，加成聚合与文本层同源。
+    # 兽火 + 新生异火（九星掉落 / 兽火单方）：只列已收服，加成聚合与文本层同源。
     o_owned = [f for f in getattr(cfg, "OTHER_FLAMES", [])
                if int(fl.get(f["name"], 0)) > 0]
     if o_owned:
-        rows.append({"title": "兽火 / 其他火焰", "right": "",
-                     "sub": "九星突破战胜强敌所得，按等级给加成；可喂药渣升级。", "note": ""})
+        rows.append({"title": "兽火 · 新生异火", "right": "",
+                     "sub": "九星突破或炼制单方所得，按等级给加成；可喂药渣升级。", "note": ""})
         for f in o_owned:
             name = f["name"]
             lv = int(fl.get(name, 0))
             state = f"{lv}/{cfg.FLAME_MAX_LV} 级（圆满）" if lv >= cfg.FLAME_MAX_LV \
                 else f"{lv}/{cfg.FLAME_MAX_LV} 级"
-            kind = {"beast": "兽火", "nature": "天然火", "art": "人造火",
-                    "fusion": "融合火"}.get(f["kind"], "火")
+            kind = "兽火" if f["name"] in cfg.BEAST_FLAME_NAMES else "异火"
             stat = {"alchemy": "炼药", "atk": "攻击", "hp": "气血"}.get(
                 f["bonus"], "数值")
             sub = f"{kind}·{stat}每级 +{int(round(float(f['value']) * 100))}%　{f['desc']}"
@@ -812,18 +811,36 @@ def build_flames_data(p: dict) -> dict:
     }
 
 
-def build_shop_data(p: dict) -> dict:
-    """宝库列表 → doupo_list 模板参数。"""
+def _shop_is_beast(name: str) -> bool:
+    """该商品是否「兽火单方材料」（2026-11-24 新增 28 种，单独一卡防爆高）。"""
+    from . import config as _cfg
+    return str((_cfg.HERB_BY_NAME.get(name) or {}).get("src") or "").startswith("兽火单方")
+
+
+def build_shop_data(p: dict, beast: bool = False) -> dict:
+    """宝库列表 → doupo_list 模板参数。
+
+    ``beast``（2026-11-24）：兽火单方材料 28 种单独成卡。93 种挤一卡时
+    w=560 高度 4744px 远超可读上限（3600），且玩家一次看不完。
+    """
     rows = []
     for it in core.shop_list():
+        if _shop_is_beast(it["name"]) != bool(beast):
+            continue
         rows.append({"title": it["name"], "right": f"{it['price']} 金", "sub": it["desc"]})
+    n_all = len(core.shop_list())
+    n_this = len(rows)
+    other = n_all - n_this
     return {
-        "icon": "cart", "title": "随身商店",
-        "subtitle": f"金币 {int(p.get('gold', 0))} · 药材 {len(rows)} 种",
+        "icon": "cart", "title": "随身商店·兽火材料" if beast else "随身商店",
+        "subtitle": (f"金币 {int(p.get('gold', 0))} · 兽火材料 {n_this} 种"
+                     if beast else
+                     f"金币 {int(p.get('gold', 0))} · 药材 {n_this} 种"),
         # 2026-11-16：原著药材补录后 50+ 种，单列会到 5000px 不可读；双列排版。
         "columns": 2,
         "rows": rows,
-        "tip": "用法：买 血灵草 2",
+        "tip": ("用法：买 蓝晶草 2　｜　发「宝库」看基础药材" if beast
+                else f"用法：买 血灵草 2　｜　兽火材料 {other} 种发「宝库 兽火」"),
     }
 
 
@@ -901,8 +918,8 @@ async def render_flames(p: dict) -> bytes | None:
     return await _render_list("doupo_list", build_flames_data(p), "斗破异火", qq=p.get("qq"))
 
 
-async def render_shop(p: dict) -> bytes | None:
-    return await _render_list("doupo_list", build_shop_data(p), "斗破宝库", qq=p.get("qq"))
+async def render_shop(p: dict, beast: bool = False) -> bytes | None:
+    return await _render_list("doupo_list", build_shop_data(p, beast), "斗破宝库", qq=p.get("qq"))
 
 
 

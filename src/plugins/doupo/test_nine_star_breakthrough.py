@@ -55,23 +55,23 @@ def nine_player(qq="99001", lv=9):
 
 
 def main():
-    # ---- 1. 其他火焰数据完整、原著有据 ----
-    check("其他火焰 10 朵", len(cfg.OTHER_FLAMES) == 10, str(len(cfg.OTHER_FLAMES)))
-    check("其他火焰名无重复且进存档表",
-          len(cfg.OTHER_FLAME_NAMES) == 10
-          and set(cfg.OTHER_FLAME_NAMES).issubset(set(cfg.OWNED_FLAME_NAMES)),
-          str(cfg.OTHER_FLAME_NAMES))
-    check("兽火 5 朵", sum(1 for f in cfg.OTHER_FLAMES if f["kind"] == "beast") == 5, "")
-    check("每朵都有原著出处（章）——存在内部台账，不印给玩家",
-          set(cfg.OTHER_FLAME_CITES) == set(cfg.OTHER_FLAME_NAMES)
-          and all("章「" in v for v in cfg.OTHER_FLAME_CITES.values()),
-          str([k for k, v in cfg.OTHER_FLAME_CITES.items() if "章「" not in v]))
-    check("其他火焰 desc 不印章节（玩家可见处零考据）",
-          not any("章「" in f["desc"] or "原著" in f["desc"] for f in cfg.OTHER_FLAMES),
-          str([f["name"] for f in cfg.OTHER_FLAMES
+    # ---- 1. 火焰数据完整（2026-11-24 兽火改造：系统只保留异火/兽火两种身份）----
+    check("兽火 8 朵", len(cfg.BEAST_FLAMES) == 8, str(len(cfg.BEAST_FLAMES)))
+    check("新生异火 2 朵（归异火身份）", len(cfg.FUSION_FLAMES) == 2, "")
+    check("兽火/新生异火都进可持有表",
+          set(cfg.BEAST_FLAME_NAMES) | set(cfg.FUSION_FLAME_NAMES)
+          <= set(cfg.OWNED_FLAME_NAMES), "")
+    check("每朵兽火有对应魔兽与丹方",
+          all(f["beast"] and f["pill"] in cfg.RECIPE_BY_NAME for f in cfg.BEAST_FLAMES),
+          str([f["name"] for f in cfg.BEAST_FLAMES if not f.get("beast")]))
+    check("每朵兽火有原著出处台账（原创两朵留空，不编章节）",
+          set(cfg.BEAST_FLAME_CITES) == set(cfg.BEAST_FLAME_NAMES), "")
+    check("兽火 desc 不印章节（玩家可见处零考据）",
+          not any("章「" in f["desc"] or "原著" in f["desc"] for f in cfg.BEAST_FLAMES),
+          str([f["name"] for f in cfg.BEAST_FLAMES
                if "章「" in f["desc"] or "原著" in f["desc"]]))
-    check("已知 23 异火不混进其他火焰",
-          not (set(cfg.OTHER_FLAME_NAMES) & set(cfg.FLAME_TIER.keys())), "")
+    check("兽火不混进异火榜",
+          not (set(cfg.BEAST_FLAME_NAMES) & set(cfg.FLAME_TIER.keys())), "")
 
     # ---- 2. 九星突破判定 ----
     p9 = nine_player()
@@ -140,27 +140,20 @@ def main():
           "%s vs %s" % (lose["exp"] if lose else None, exp0))
     check("战败不掉落", rl is not None and rl.get("flame") is None, "")
 
-    # ---- 6. 掉落概率分层：兽火/其他 > 异火 ----
+    # ---- 6. 掉落按境界分档（2026-11-24：兽火 50% / 异火 100%）----
     from collections import Counter
     cnt = Counter()
     for i in range(1000):
-        q = nine_player("98999")
+        q = nine_player("98999")          # lv9 → realm 0 → 兽火档
         fr = core.roll_breakthrough_flame(q, rng=lambda i=i: ((i * 0.6180339) % 1.0))
         cnt[fr["kind"] or "none"] += 1
-    check("其他火焰掉率 > 异火（用户口径）", cnt["other"] > cnt["bonus"],
-          "other=%d bonus=%d none=%d" % (cnt["other"], cnt["bonus"], cnt["none"]))
-    check("其他火焰掉率约 45%", 400 <= cnt["other"] <= 500, str(cnt["other"]))
-    check("异火掉率约 18%", 130 <= cnt["bonus"] <= 230, str(cnt["bonus"]))
-
-    # 融合新生火更稀有：在 other 池里占比低
-    fusion_names = {f["name"] for f in cfg.OTHER_FLAMES if f["kind"] == "fusion"}
-    got = Counter()
-    for i in range(400):
-        q = nine_player("98998")
-        fr = core.roll_breakthrough_flame(q, rng=lambda i=i: ((i * 0.314159) % 1.0))
-        if fr.get("name") in fusion_names:
-            got[fr["name"]] += 1
-    check("融合火在 other 池里更稀有", sum(got.values()) < 120, str(got))
+    check("低境界兽火档约 50%", 450 <= cnt["beast"] <= 550, str(cnt["beast"]))
+    check("低境界不掉异火", cnt["yihuo"] == 0, str(cnt["yihuo"]))
+    # 高境界（斗宗 realm 7）异火档必得
+    q72 = nine_player("98991")
+    q72["lv"] = 72
+    hit = core.roll_breakthrough_flame(q72, rng=lambda: 0.99)
+    check("高境界异火档必得", hit["ok"] and hit["kind"] == "yihuo", str(hit))
 
     # ---- 7. 掉落写单一真值 p["flames"][name]，不新增字段 ----
     q = nine_player("98997")

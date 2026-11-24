@@ -65,6 +65,8 @@ def _p(alch=3, mp=None, wins=0, losses=0):
     p["alch"] = alch
     p["alch_exp"] = 0
     p["last_craft"] = 0
+    # 2026-11-24 入道不送火：炼丹前须持有任意火（紫火=atk 型，不污染 alchemy 加成）
+    p["flames"]["紫火"] = 1
     p["wins"], p["losses"] = wins, losses
     if mp is not None:
         p["mp"] = mp
