@@ -123,7 +123,8 @@ def test_danta_bonus_absolute():
 def test_danta_rate_anchors_and_cap():
     """成功率锚点来自真跑探针：四品 0.70→0.82，七品触顶 0.95。
 
-    隔离入门异火火云水炎的 +0.02（create_player 会发），只验丹会加成本身。
+    2026-11-24 起入道不再送火（兽火改造），炼丹需手上有火——
+    「已收服的火云水炎 +0.02」改为测试显式授予，与玩家真实获取路径一致。
     """
     base4 = _mk(faction="danta", alch=3); base4["flames"] = {}
     base7 = _mk(faction="danta", alch=6); base7["flames"] = {}
@@ -131,8 +132,9 @@ def test_danta_rate_anchors_and_cap():
     r7, _ = cfg.craft_rate_for(6, cfg.ALCHEMIST[6][0], core.craft_rate_bonus(base7))
     assert abs(r4 - 0.82) < 0.001, r4
     assert abs(r7 - 0.95) < 0.001, r7       # CAP 截断，不会超过 0.95
-    # 真实场景：入门异火 +0.02 与丹会 +0.12 共用通道叠加 → 0.84（不各自封顶）
+    # 真实场景：火云水炎 +0.02 与丹会 +0.12 共用通道叠加 → 0.84（不各自封顶）
     real = _mk(faction="danta", alch=3)
+    real["flames"] = {"火云水炎": 1}
     rr, _ = cfg.craft_rate_for(3, cfg.ALCHEMIST[3][0], core.craft_rate_bonus(real))
     assert abs(rr - 0.84) < 0.001, rr
 
@@ -141,9 +143,11 @@ def test_danta_receipt_key_only_for_danta():
     """回执 danhui 键仅丹塔持有；非丹塔回执键集不含它（逐字节兼容）。"""
     t = int(cfg.CRAFT_CD_SEC) + 10
     bag = {"血灵草": 99, "紫叶兰": 99}
-    danta = core.craft(_mk(faction="danta", alch=3, bag=dict(bag)),
+    # 2026-11-24 入道不再送火：炼丹前须持有任意火（这里显式给一朵 atk 型紫火，
+    # 不给 alchemy 加成，保证 rate 锚点不被火焰加成污染）
+    danta = core.craft(_mk(faction="danta", alch=3, bag=dict(bag), flames={"紫火": 1}),
                        "回灵丹", rng=lambda: 0.0, now_ts=t)
-    plain = core.craft(_mk(faction="yunlanzong", alch=3, bag=dict(bag)),
+    plain = core.craft(_mk(faction="yunlanzong", alch=3, bag=dict(bag), flames={"紫火": 1}),
                        "回灵丹", rng=lambda: 0.0, now_ts=t)
     assert danta["ok"] is True and plain["ok"] is True
     assert "danhui" in danta and danta["danhui"] == 0.12
@@ -154,8 +158,8 @@ def test_craft_batch_uses_same_bonus():
     """批量炼丹入口也必须走同一加成（防'改一处漏一处'双真源坑）。"""
     t = int(cfg.CRAFT_CD_SEC) + 10
     bag = {"血灵草": 99, "紫叶兰": 99}
-    p = _mk(faction="danta", alch=3, bag=dict(bag))
-    p["flames"] = {}   # 隔离入门异火 +0.02，只验丹会 +0.12
+    # 紫火=atk 型，alchemy 加成为 0，只验丹会 +0.12（同时满足「有火才能炼」）
+    p = _mk(faction="danta", alch=3, bag=dict(bag), flames={"紫火": 1})
     r = core.craft_batch(p, "回灵丹", 3, rng=lambda: 0.0, now_ts=t)
     # 批量回执率与单发同源（都是 craft_rate_bonus 的结果）
     assert "rate" in r and abs(r["rate"] - 0.82) < 0.001, r.get("rate")

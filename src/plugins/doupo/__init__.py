@@ -693,13 +693,15 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, shop)
     qq = str(event.user_id)
+    # 2026-11-24 兽火材料 28 种单独一卡：「宝库 兽火」切到兽火材料页
+    _beast = "兽火" in (event.get_plaintext() or "")
     # 纯文本兜底（与图片同源）
-    msg = await commands.cmd_shop(store, qq)
+    msg = await commands.cmd_shop(store, qq, beast=_beast)
     png = None
     try:
         p = await store.get_player(qq)
         if p:
-            png = await card.render_shop(p)
+            png = await card.render_shop(p, beast=_beast)
     except Exception as e:  # noqa: BLE001
         logger.warning("斗破宝库卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:

@@ -61,6 +61,8 @@ os.environ["DOUPO_CHANCE_RATE"] = "0"
 def _p(lv: int = 40) -> dict:
     p = core.create_player("Q_DEAD", "测试", "群")
     p["lv"] = lv
+    # 2026-11-24 入道不送火：炼丹前须持有任意火（紫火=atk 型，不影响炼药率）
+    p["flames"]["紫火"] = 1
     p["hp"] = core.stats(p)["体力"]
     p["mp"] = core.mp_max(p)
     return p

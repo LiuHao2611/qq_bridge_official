@@ -212,16 +212,53 @@ def inspect_image(blob, kind):
     return errs, desc
 
 
+# 主标题墨色 vs 说明灰：实测标题主色 (38,33,58)=max 58，说明主色 (86,80,110)=max 110。
+# 2026-11-24 用这两个常量区分主/副，不再靠「墨迹高度」猜——说明换行后第二行
+# 也是 16px 高，旧高度判据会把「说明第一行→说明第二行」误配成「标题→说明」，
+# 量出 4~8px 的假失败（HEAD f0c104a 上既已如此，非本轮改动引入）。
+TITLE_INK_MAX = 60      # <= 此值视为主标题块（深墨）
+DESC_INK_MAX = 150      # 说明块判定阈值，与逐行墨迹统计保持一致
+
+
+def _block_ink(px, x_range, h):
+    """按行切出文字块，返回 (起y, 止y, 高, 块内最深墨值)。"""
+    ink = [sum(1 for x in range(*x_range) if max(px[x, y]) < DESC_INK_MAX)
+           for y in range(h)]
+    spans = []
+    y = 0
+    while y < h:
+        if ink[y] > 2:
+            s = y
+            while y < h and ink[y] > 2:
+                y += 1
+            if y - s >= 8 and s > 105:  # 只看内容区，过滤 1~2px 的分割线
+                spans.append((s, y))
+        else:
+            y += 1
+    blocks = []
+    for s, e in spans:
+        deep = DESC_INK_MAX
+        for yy in range(s, e):
+            for x in range(*x_range):
+                v = max(px[x, yy])
+                if v < deep:
+                    deep = v
+        blocks.append((s, e, e - s, deep))
+    return blocks
+
+
 def _pair_gaps(blocks):
-    """从文字行块里挑出「主标题块 + 紧随其后的说明块」，返回两者间的空白行数。"""
+    """挑出「主标题块(深墨) + 紧随其后的说明块(灰)」，返回两者间的空白行数。
+
+    颜色判据取代旧的高度判据（后者分不清「说明换行」与「标题+说明」）；
+    相邻块必须一深一灰才算一对，因此换行说明不会再制造假配对。
+    """
     gaps = []
     for a, b in zip(blocks, blocks[1:]):
-        # 主标题 FS_ITEM=20（约 18~20 行墨迹），说明 FS_SMALL=15（约 13~15 行）
-        if a[2] >= 16 and 10 <= b[2] <= 16:
+        if a[3] <= TITLE_INK_MAX < b[3]:
             gap = b[0] - a[1]
-            # 2026-11-16 宝库改双列后，左列会有「无说明的药材 → 下一行说明」
-            # 被误配成一对（实测 gap=89）。标题/说明的正常空白只有 8~11 行，
-            # 超过 40 行的必然不是同一行，纳入会把 min 之外的数据污染成假失败。
+            # 无说明的行会让下一行说明被配到隔行（实测 gap=89）。标题/说明的
+            # 正常空白只有 8~11 行，超过 40 行的必然不是同一行。
             if gap <= 40:
                 gaps.append(gap)
     return gaps
@@ -236,19 +273,7 @@ def check_list_spacing(png_path, x_range=(40, 320)):
     im = Image.open(png_path).convert("RGB")
     px = im.load()
     w, h = im.size
-    ink = [sum(1 for x in range(*x_range) if max(px[x, y]) < 150) for y in range(h)]
-    blocks = []
-    y = 0
-    while y < h:
-        if ink[y] > 2:
-            s = y
-            while y < h and ink[y] > 2:
-                y += 1
-            if y - s >= 8 and s > 105:  # 只看内容区，过滤 1~2px 的分割线
-                blocks.append((s, y, y - s))
-        else:
-            y += 1
-    gaps = _pair_gaps(blocks)
+    gaps = _pair_gaps(_block_ink(px, x_range, h))
     ok = len(gaps) >= 4 and min(gaps) >= 6
     return ok, f"配对数={len(gaps)} 标题/说明空白行={gaps}"
 
@@ -651,21 +676,26 @@ async def main():
 
     # 列表卡排版：像素级机器证据（与人工视觉确认互为双验收）
     # 2026-11-16 宝库改双列后，左列部分行名较短，像素块的墨迹高度会和说明块
-    # 同档（16px），单靠高度分不出主/副。右列样本足够干净；背包卡保持单列，
-    # 两处一起验，既守住原有语义也覆盖新版布局。精确盒模型由 test_card 守门。
+    # 同档（16px），单靠高度分不出主/副 → 2026-11-24 改按墨色分（见 _pair_gaps）。
+    # 双列样本取宝库右列；单列样本原为背包，但背包 2026-11-23 已改 4 列网格
+    # （build_bag_data 的 "grid": True，每格只有名称+数量），没有「标题+说明」结构，
+    # 配对数恒为 1 —— 故单列样本换成仍走 doupo_list 单列的异火卡。
+    # 精确盒模型由 test_card 守门。
     shop_png = os.path.join(OUT_DIR, "13_shop.png")
-    bag_png = os.path.join(OUT_DIR, "17_bag.png")
-    if os.path.isfile(shop_png) and os.path.isfile(bag_png):
+    flames_png = os.path.join(OUT_DIR, "11_flames.png")
+    if os.path.isfile(shop_png) and os.path.isfile(flames_png):
         ok_shop, d_shop = check_list_spacing(shop_png, x_range=(390, 680))
-        ok_bag, d_bag = check_list_spacing(bag_png, x_range=(40, 320))
-        record("PIXEL 列表卡标题与说明间距", ok_shop and ok_bag,
-               "宝库右列 %s / 背包单列 %s" % (d_shop, d_bag))
+        ok_fl, d_fl = check_list_spacing(flames_png, x_range=(40, 320))
+        record("PIXEL 列表卡标题与说明间距", ok_shop and ok_fl,
+               "宝库右列 %s / 异火单列 %s" % (d_shop, d_fl))
     else:
-        record("PIXEL 列表卡标题与说明间距", False, "缺少商店/背包卡产物")
+        record("PIXEL 列表卡标题与说明间距", False, "缺少商店/异火卡产物")
     # prove-it 自举：把间隔压回 1 行，检测器必须判不合格，防止断言恒真。
-    fake = [(117, 136, 19), (137, 151, 14)]
-    record("SELF 间距检测能拒绝粘连", min(_pair_gaps(fake)) < 6,
-           f"模拟粘连 gap={_pair_gaps(fake)}（应 <6）")
+    fake = [(117, 136, 19, 40), (137, 151, 14, 110)]
+    fake_ok = [(117, 136, 19, 40), (145, 159, 14, 110)]
+    record("SELF 间距检测能拒绝粘连",
+           _pair_gaps(fake) == [1] and _pair_gaps(fake_ok) == [9],
+           f"模拟粘连 gap={_pair_gaps(fake)}（应=[1]）/ 正常 gap={_pair_gaps(fake_ok)}（应=[9]）")
 
     await realm_cards()
 

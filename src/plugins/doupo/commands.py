@@ -24,6 +24,7 @@ from . import doupo_text as txt
 from . import temp_buff as tb
 from . import duel_challenge as dc
 from . import factions as fac
+from . import flame_drop as _fdrop
 from . import flame_skills as fs
 from . import skill_book as book
 from . import tower_data as td
@@ -50,7 +51,11 @@ from .store import REGEN_NOTICE as _LAST_REGEN  # noqa: E402
 
 async def _player(store, qq):
     # 调息已在 Store.get_player() 里统一结算，本函数不再重复（重复会吞掉余数）。
-    return await store.get_player(str(qq))
+    p = await store.get_player(str(qq))
+    # 老档火焰迁移（2026-11-24）：阳火/化生火已下线，惰性折算药渣后移除（一次性）
+    if p and _fdrop.migrate_legacy_flames(p, core.add_item):
+        await store.put_player(p)
+    return p
 
 
 async def _puppet_ctx(qq, p):
@@ -371,7 +376,7 @@ MENU_GROUPS = (
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
         ("异火", "看 5 种异火的主动技 / 被动、来历与喂养进度"),
         ("收服 火云水炎", "主动收服异火：数值火可直接收，大后期火须境界+主线达标；隐藏彩蛋火不在此列"),
-        ("养火 青莲地心火", "用药渣喂养异火（炼药失败会出药渣）"),
+        ("养火 <火名>", "用药渣喂养已收服的异火/兽火（炼药失败会出药渣）；先得火才行"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
         ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯/养魂"),
@@ -583,15 +588,13 @@ async def cmd_enter(store, qq, name, gid) -> str:
     if not str(gid).startswith("pv:"):
         await store.enable_group(str(gid))
     first = "、".join((p.get("learned") or [])[:1]) or "本宗基础技"
-    owned = [n for n, v in (p.get("flames") or {}).items() if int(v or 0) > 0]
-    flame_line = ("随身数值异火【%s】已认你为主（入道赐下）——「异火」可看，「养火」可养。\n"
-                  % owned[0]) if owned else ""
     return (
         "🔥 你自云岚山下睁眼，斗气绕体三周——\n"
         f"【{cfg.full_realm(1)}】\n"
         "手中握着那柄黑黝黝的巨尺「玄重尺」。\n"
         f"初入门径，只领悟了一门【{first}】——斗技要一门门学，不可贪多。\n"
-        + flame_line + "\n"
+        "异火举世罕见，不会凭空而来——九星突破战胜强敌，或炼制兽火单方，方得一火。\n"
+        "\n"
         "发送「人物」看面板，「战斗」试刀，「学斗技」领悟新斗技，「帮助」看全部规则。"
     )
 
@@ -736,7 +739,7 @@ async def cmd_break(store, qq, rng=None) -> str:
             lines.append(_end_quote)
         fl = br.get("flame") or {}
         if fl.get("ok"):
-            _kind = "兽火/其他火焰" if fl.get("kind") == "other" else "异火"
+            _kind = "兽火" if fl.get("kind") == "beast" else "异火"
             lines.append(txt.flame_drop(fl["name"], _kind, bool(fl.get("duplicate")),
                                         fl.get("dross", 30)))
         if br.get("tiandi"):
@@ -881,6 +884,10 @@ async def cmd_fight(store, qq) -> str:
         lines.append("🧩 傀儡料 " + "、".join("%s×%d" % (n, int(c)) for n, c in pup))
     if pup_fail:
         lines.append("⚠️ 傀儡料未入傀儡库：" + "、".join(pup_fail))
+    # 对应魔兽掉火（用户 2026-11-24）：只有真正新得的才列出，重复已折算药渣
+    _bf = list(res.get("flame_drops") or [])
+    if _bf:
+        lines.append("🔥 收服兽火 " + "、".join(_bf))
     # ② 代价（「防御」字样固定出现：属性↔战斗强关联的稳定锚点）
     auto = res.get("auto_pills") or {}
     _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
@@ -1158,8 +1165,7 @@ async def cmd_faction(store, qq, args) -> str:
                         + "、".join(res.get("options") or ["（无）"]))
             return "转宗失败，请检查宗门名。"
         await store.put_player(p)
-        flame_line = ("\n　随身数值异火【%s】（入道赐下）——「养火」可养。" % res["flame"]) \
-            if res.get("flame") else ""
+        flame_line = ""  # 2026-11-24：转宗不再补发异火（异火稀有）
         # 2026-11-24 魂殿邪修：转入魂殿是不可逆邪道，明确告知吞噬被动与锁死。
         devour_line = ""
         if str(res.get("faction") or "") == cfg.DEVOUR_SECT:
@@ -1412,9 +1418,9 @@ def _unflame_hint(name: str) -> str:
         return "此火为大后期之火，须修至%s、主线推进到位方可收服。" % realm_txt
     if tier == "A":
         return "此火隐于某段机缘，了结相应之事自会现身，事前不会言明。"
-    if name == getattr(cfg, "STARTER_FLAME", ""):
-        return "入道或转宗时会随身一朵数值异火，可养。"
-    return "游历机缘或弃火可得，先收服再喂养。"
+    if name in cfg.BEAST_FLAME_NAMES:
+        return "此火为兽火，九星突破战胜强敌或炼制对应兽火单方可得。"
+    return "游历机缘或九星突破可得，先收服再喂养。"
 
 
 def flame_usage_hint(p: dict) -> str:
@@ -1426,10 +1432,7 @@ def flame_usage_hint(p: dict) -> str:
     owned = [n for n, v in (p.get("flames") or {}).items() if int(v or 0) > 0]
     if owned:
         return "用法：养火 %s（一次喂光现有药渣）" % owned[0]
-    own = core.faction_flame(p.get("faction"))
-    if own:
-        return "用法：先收服再养——入道/转宗补发的数值异火【%s】会随身，养火可升级" % own
-    return "用法：先收服一朵异火，再「养火 <火名>」"
+    return "用法：先得一朵火——九星突破掉落兽火/异火，或炼制兽火单方；再「养火 <火名>」"
 
 
 async def cmd_flames(store, qq) -> str:
@@ -1479,16 +1482,15 @@ async def cmd_flames(store, qq) -> str:
             kind = "炼药" if f["kind"] == "alchemy" else "傀儡"
             out.append(f"　　{f['icon']} {name}　{lv}/{cfg.FLAME_MAX_LV} 级"
                        f"　{kind}+{int(round(float(f['value']) * 100))}%/级")
-    # 其他火焰（兽火/天然/人造/融合火）：九星突破 BOSS 掉落，只列已收服。
+    # 兽火 + 新生异火（九星掉落 / 兽火单方）：只列已收服。
     o_owned = [f for f in getattr(cfg, "OTHER_FLAMES", [])
                if int(fl.get(f["name"], 0)) > 0]
     if o_owned:
-        out.append("　兽火 / 其他火焰（九星突破劫影掉落，按等级给加成）：")
+        out.append("　兽火 · 新生异火（九星突破或炼制单方所得，按等级给加成）：")
         for f in o_owned:
             name = f["name"]
             lv = int(fl.get(name, 0))
-            kind = {"beast": "兽火", "nature": "天然火", "art": "人造火",
-                    "fusion": "融合火"}.get(f["kind"], "火")
+            kind = "兽火" if name in cfg.BEAST_FLAME_NAMES else "异火"
             stat = {"alchemy": "炼药", "atk": "攻击", "hp": "气血"}.get(
                 f["bonus"], "数值")
             out.append(f"　　{f['icon']} {name}（{kind}）　{lv}/{cfg.FLAME_MAX_LV} 级"
@@ -1514,6 +1516,8 @@ async def cmd_feed(store, qq, name) -> str:
     chance = core.advance_task(p, "flame", 1) if res.get("ok") else None
     await store.put_player(p)
     if not res.get("ok"):
+        if res.get("reason") == "nofire":
+            return "🔥 你尚未拥有火焰，无从养起——九星突破得火或炼制兽火单方后再来。"
         if res.get("reason") == "nodross":
             return "你没有药渣。炼药失败会产药渣——去「炼制」试试。"
         if res.get("reason") == "diyan":
@@ -1576,16 +1580,20 @@ async def cmd_claim_flame(store, qq, name) -> str:
 # ---------------------------------------------------------------------------
 # 宝库 / 炼药 / 背包
 # ---------------------------------------------------------------------------
-async def cmd_shop(store, qq) -> str:
+async def cmd_shop(store, qq, beast: bool = False) -> str:
+    """宝库文本。``beast``（2026-11-24）：只列兽火单方材料（卡面同源分卡）。"""
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    out = [f"🏦 随身商店　💰 {p['gold']}"]
-    for it in core.shop_list():
+    from . import card as _card
+    items = [it for it in core.shop_list()
+             if _card._shop_is_beast(it["name"]) == bool(beast)]
+    out = [("🏦 随身商店·兽火材料" if beast else "🏦 随身商店") + f"　💰 {p['gold']}"]
+    for it in items:
         out.append(f"　{it['name']}　{it['price']} 金")
         out.append(f"　　{it['desc']}")
     out.append("")
-    out.append("　用法：买 血灵草 2")
+    out.append("　用法：买 蓝晶草 2" if beast else "　用法：买 血灵草 2　（兽火材料发「宝库 兽火」）")
     return "\n".join(out)
 
 
@@ -1715,6 +1723,8 @@ async def cmd_craft(store, qq, name) -> str:
     if not hit:
         return "无此丹方。发「炼药」看全部。"
     res = core.craft(p, hit)
+    if res.get("reason") == "nofire":
+        return "🔥 你尚未拥有火焰，无法开炉炼药——异火举世罕见，可于九星突破战胜强敌，或炼制兽火单方获得。"
     if res.get("reason") == "buyonly":
         return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」（{res['buy']} 金），或先寻得丹方。"
     if res.get("reason") == "cd":
@@ -1756,13 +1766,15 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
     if not hit:
         return "无此丹方。发「炼药」看全部。"
     res = core.craft_batch(p, hit, n)
+    if res.get("reason") == "nofire":
+        return "🔥 你尚未拥有火焰，无法开炉炼药——可于九星突破得火，或炼制兽火单方。"
     if res.get("reason") == "buyonly":
         return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」。"
     if res.get("reason") == "cd":
         await store.put_player(p)
         return txt.craft_cd(res["left"])
     if not res.get("ok"):
-        # craft_batch 的 not-ok 只有 nodrug / buyonly / cd；mat/mp 是 limited，走正常回包。
+        # craft_batch 的 not-ok 只有 nodrug / buyonly / cd / nofire；mat/mp 是 limited。
         if res.get("reason") == "mat" and res.get("missing"):
             return txt.craft_mat("、".join(res["missing"]))
         return txt.craft_generic_fail()

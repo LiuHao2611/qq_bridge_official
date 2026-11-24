@@ -71,16 +71,14 @@ def main() -> int:
     check("异火 desc 非空且带数值口径",
           all(f.get("desc") and ("+" in f["desc"] or "每级" in f["desc"]) for f in _all_flames), "")
 
-    # ---- 2. 入道 starter：任何宗门都发 B 线火，且无 S/A ----
+    # ---- 2. 入道空火（2026-11-24 用户「异火极其稀有，直接送不符合原著」）----
     p = core.create_player("30001", "新号", 900000077)
     owned = {n: v for n, v in p["flames"].items() if v > 0}
-    check("入道只发一朵", len(owned) == 1, str(owned))
-    starter = cfg.STARTER_FLAME
-    check("starter 是 B 线火", cfg.FLAME_TIER.get(starter) == "B", starter)
-    check("发的是 starter", owned.get(starter) == 1, str(owned))
+    check("入道不送任何火", len(owned) == 0, str(owned))
+    check("STARTER_FLAME 已清空", cfg.STARTER_FLAME == "", cfg.STARTER_FLAME)
     check("入道不发任何 S/A 超标火",
           not any(cfg.FLAME_TIER.get(n) in ("S", "A") for n in owned), str(owned))
-    check("所有火名都占位（可养五火+B十一火）",
+    check("所有火名都占位（可养五火+B十一火+新生异火+兽火）",
           all(n in p["flames"] for n in cfg.OWNED_FLAME_NAMES), "")
 
     # ---- 3. S 线双门槛 ----

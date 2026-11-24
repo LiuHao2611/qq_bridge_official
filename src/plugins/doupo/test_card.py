@@ -143,8 +143,11 @@ def test_build_and_render_list_cards():
     assert d_fl["title"] == "异火" and len(d_fl["rows"]) >= len(cfg.FLAMES)
     assert any("本宗传承" in str(r.get("title", "")) for r in d_fl["rows"]), \
         "异火卡缺本宗传承行"
-    # 宝库卡片直接消费 core.shop_list()（与纯文本兜底同源），以它为准而非 cfg.HERBS 字面量
-    assert d_sh["title"] == "随身商店" and len(d_sh["rows"]) == len(core.shop_list())
+    # 宝库卡片直接消费 core.shop_list()（与纯文本兜底同源）；
+    # 2026-11-24 起分两卡（基础/兽火），两卡行数之和必须等于商品总数
+    d_sh_beast = card.build_shop_data(p, beast=True)
+    assert d_sh["title"] == "随身商店"
+    assert len(d_sh["rows"]) + len(d_sh_beast["rows"]) == len(core.shop_list())
     assert d_bg["title"] == "包裹" and "24 格" in d_bg["subtitle"] \
         and "/" not in d_bg["subtitle"], "背包副标题不应出现 N/24 这种像超容量的写法"
 
@@ -298,19 +301,23 @@ def test_shop_two_column_boxes_no_overlap():
     from pic import theme as pic_theme
     from pic.templates import doupo_list as L
 
-    d = card.build_shop_data(_player(1))
-    assert d.get("columns") == 2
-    assert len(d["rows"]) == len(core.shop_list())
+    # 2026-11-24：兽火单方材料 28 种单独成卡（93 种一卡时 4744px 超可读上限）
+    d_base = card.build_shop_data(_player(1))
+    d_beast = card.build_shop_data(_player(1), beast=True)
+    assert d_base.get("columns") == 2 and d_beast.get("columns") == 2
+    assert len(d_base["rows"]) + len(d_beast["rows"]) == len(core.shop_list())
+    assert len(d_beast["rows"]) > 0 and len(d_base["rows"]) > 0
     t = pic_theme.get("light")
-    for w in (560, 720, 900):
-        boxes: list = []
-        c = L.build(t, d, width=w, boxes=boxes)
-        content_w = w - L.PAD * 2
-        h = L._measure(d, content_w)
-        assert c.height == h, "w=%d 实测高度与度量不一致：%d != %d" % (w, c.height, h)
-        assert h < 3600, "w=%d 宝库卡过高：%d" % (w, h)
-        probs = tc.check_boxes((L.PAD, L.PAD, w - L.PAD, h - L.PAD), boxes, min_gap=2)
-        assert not probs, "宝库卡 w=%d 排版越界/重叠：%s" % (w, probs[:5])
+    for tag, d in (("基础", d_base), ("兽火", d_beast)):
+        for w in (560, 720, 900):
+            boxes: list = []
+            c = L.build(t, d, width=w, boxes=boxes)
+            content_w = w - L.PAD * 2
+            h = L._measure(d, content_w)
+            assert c.height == h, "%s w=%d 实测高度与度量不一致：%d != %d" % (tag, w, c.height, h)
+            assert h < 3600, "%s w=%d 宝库卡过高：%d" % (tag, w, h)
+            probs = tc.check_boxes((L.PAD, L.PAD, w - L.PAD, h - L.PAD), boxes, min_gap=2)
+            assert not probs, "%s 宝库卡 w=%d 排版越界/重叠：%s" % (tag, w, probs[:5])
 
 
 def test_build_and_render_help_card():
