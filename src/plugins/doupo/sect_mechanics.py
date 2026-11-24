@@ -130,6 +130,98 @@ def apply_seal(m_fx: dict, p) -> float:
 
 
 # ---------------------------------------------------------------------------
+# 太虚古龙 · 空间穿梭（P1）
+# ---------------------------------------------------------------------------
+def is_taixu_sect(p) -> bool:
+    """玩家是否已入太虚古龙族（空间穿梭被动持有者）。"""
+    return str((p or {}).get("faction") or "") == cfg.TAIXU_SECT
+
+
+def taixu_evade_pts(p) -> float:
+    """太虚空间穿梭的自然闪避加成百分点，按等级取 TAIXU_EVADE_TIERS 最高达标档。
+
+    单一真源 cfg.TAIXU_EVADE_TIERS；非太虚恒 0.0。设计文档 §10 P04：
+    加点进 dodge_rate 的**自然 base**（像净莲妖火），被自然 80 硬顶收口。
+    """
+    if not is_taixu_sect(p):
+        return 0.0
+    lv = int((p or {}).get("lv", 1))
+    pts = 0.0
+    for gate, value in cfg.TAIXU_EVADE_TIERS:
+        if lv >= int(gate):
+            pts = float(value)
+    return pts
+
+
+def taixu_natural_dodge(p) -> float:
+    """太虚玩家「未加本被动、未加丹药」的自然闪避 base（等级 + 净莲妖火）。
+
+    与 core.dodge_rate 的自然部分同构（``HERO_DODGE + (敏捷+20)//200 + 净莲妖火×10``），
+    但这里用 sect_mechanics 自己的 c_stat 重算，避免 import core 循环。
+    """
+    agi = c_stat(cfg.HERO_BASE["敏捷"], int((p or {}).get("lv", 1)))
+    lotus = 10 * int(((p or {}).get("flames") or {}).get("净莲妖火", 0))
+    return float(cfg.HERO_DODGE + (agi + 20) // 200 + lotus)
+
+
+def taixu_overflow_hit(p, dodge_cap: float = 80.0) -> float:
+    """闪避触顶后溢出点数转命中百分点（满级替代收益，防空转假机制）。
+
+    太虚加点 ``pts`` 里有 ``min(cap, base+pts) - min(cap, base)`` 被自然闪避吃到，
+    剩余 ``pts - 吃到`` 即溢出，转为命中百分点（core.hit_rate 里 min HIT_CAP 收口）。
+    自然 base 用 taixu_natural_dodge 自算（不 import core）。非太虚 / 未触顶恒 0.0。
+    """
+    pts = taixu_evade_pts(p)
+    if pts <= 0:
+        return 0.0
+    base = taixu_natural_dodge(p)
+    eaten = min(dodge_cap, base + pts) - min(dodge_cap, base)
+    return max(0.0, pts - max(0.0, eaten))
+
+
+# ---------------------------------------------------------------------------
+# 毒宗 · 仿毒体（P1）
+# ---------------------------------------------------------------------------
+def is_duzong_sect(p) -> bool:
+    """玩家是否已入毒宗（仿毒体被动持有者）。"""
+    return str((p or {}).get("faction") or "") == cfg.VENOM_SECT
+
+
+def venom_lifesteal(p, root_fn=None) -> float:
+    """毒宗仿毒体吸血比例 = VENOM_LIFESTEAL × 根基系数（丹药修为越多吸血越低）。
+
+    非毒宗恒 0.0。root_fn 默认 config.root_factor，可注入便于测试。系数 0 合法关闭。
+    """
+    if not is_duzong_sect(p):
+        return 0.0
+    rf = root_fn if root_fn is not None else cfg.root_factor
+    return float(cfg.VENOM_LIFESTEAL) * float(rf(p))
+
+
+# ---------------------------------------------------------------------------
+# 天府联盟 · 全属性（P1）
+# ---------------------------------------------------------------------------
+def is_tianfu_sect(p) -> bool:
+    """玩家是否已入天府联盟（全属性 +4% 被动持有者，不锁宗）。"""
+    return str((p or {}).get("faction") or "") == cfg.TIANFU_SECT
+
+
+def tianfu_allstat_pct(p) -> float:
+    """天府全属性比例加成（0.04=+4%）；非天府恒 0.0。系数 0 合法关闭。"""
+    if not is_tianfu_sect(p):
+        return 0.0
+    return float(cfg.TIANFU_ALLSTAT)
+
+
+def sect_allstat_pct(p) -> float:
+    """六维比例加成的宗门汇总（古族族纹 + 天府全属性），供 core.stats 单点读。
+
+    一玩家只属一派，两派不会同时生效；合并成一个入口让 core 只改一个 token。
+    """
+    return clan_tier_pct(p) + tianfu_allstat_pct(p)
+
+
+# ---------------------------------------------------------------------------
 # 怪物战斗档位（从 core.py 外迁；core re-export 保持 core.mon_tier 入口）
 # ---------------------------------------------------------------------------
 def mon_tier(kind) -> str:
@@ -159,18 +251,13 @@ def mon_tier(kind) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 宗门特色机制（魂殿 + P0 古族/丹塔/蛇人）· 纯函数层已抽到 sect_mechanics.py
+# 战斗减伤（从 core.py 外迁，仅为解 core.py 200KB 体积；core re-export 保持入口）
 # ---------------------------------------------------------------------------
-# re-export 保持 core.xxx 既有入口不变（测试/外部调用逐字节兼容）。
-# 唯一例外 devour_of 依赖本模块 mon_tier：用薄包装注入，避免新模块 import core 循环。
-from .sect_mechanics import (  # noqa: E402
-    is_devour_sect, devour_amount,
-    is_guzu_sect, clan_tier_pct,
-    is_danta_sect, danhui_bonus, craft_rate_bonus,
-    is_sheren_sect, seal_atk_rate,
-)
-
-
+def mitigation(defence: int) -> float:
+    """减伤系数：防御 = ``cfg.MITIGATION_W`` 时减半。半值点必须与反解护甲同源。"""
+    w = float(cfg.MITIGATION_W)
+    d = max(0, int(defence))
+    return w / (w + d)
 
 
 # ---------------------------------------------------------------------------

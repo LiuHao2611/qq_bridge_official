@@ -27,9 +27,9 @@ from . import weapon_data as wd
 
 # 纯函数 re-export（实现见 sect_mechanics.py）
 from .sect_mechanics import (  # noqa: E402
-    c_stat, level_dodge, mon_tier, is_devour_sect, devour_amount, devour_of,
+    c_stat, level_dodge, mon_tier, mitigation, is_devour_sect, devour_amount, devour_of,
     is_guzu_sect, clan_tier_pct, is_danta_sect, danhui_bonus, craft_rate_bonus,
-    is_sheren_sect, seal_atk_rate,
+    is_sheren_sect, seal_atk_rate, sect_allstat_pct,
 )
 from . import tower_data as td
 
@@ -188,7 +188,7 @@ def stats(p) -> dict:
         for k in out:
             out[k] = int(out[k] * 1.2)
 
-    _clan_pct = clan_tier_pct(p)
+    _clan_pct = sect_allstat_pct(p)  # 古族/天府 六维比例
     if _clan_pct:
         for k in ("力量", "敏捷", "斗气", "防御", "体力"):
             out[k] = int(out[k] * (1.0 + _clan_pct))
@@ -212,6 +212,7 @@ def dodge_rate(p) -> float:
     st = stats(p)
     base = cfg.HERO_DODGE + (st["敏捷"] + 20) // 200
     base += 10 * int((p.get("flames") or {}).get("净莲妖火", 0))
+    base += sm.taixu_evade_pts(p)   # 太虚闪避（自然 base）
     base += int((p.get("bonus") or {}).get("闪避", 0))
     return cfg.dodge_final(base, p)
 
@@ -238,6 +239,7 @@ def hit_rate(p) -> float:
     lv = int(p.get("lv", 1))
     base = cfg.HERO_HIT + cfg.HERO_HIT_PER_REALM * cfg.realm_index(lv)
     base += int((p.get("bonus") or {}).get("命中", 0))
+    base += sm.taixu_overflow_hit(p)  # 太虚闪避溢出→命中
     return float(min(cfg.HIT_CAP, base))
 
 
@@ -760,17 +762,6 @@ def _refill(p) -> None:
 # ---------------------------------------------------------------------------
 # 战斗
 # ---------------------------------------------------------------------------
-def mitigation(defence: int) -> float:
-    """减伤系数：防御 = ``cfg.MITIGATION_W`` 时减半。
-
-    2026-11-20：把魔法数 800 提到 config（值未变，逐字节相同），因为傀儡护主
-    要「反解护甲」—— 反解用的半值点必须与这里同一个常量，不能各写一个 800。
-    """
-    w = float(cfg.MITIGATION_W)
-    d = max(0, int(defence))
-    return w / (w + d)
-
-
 def pick_monster(p, rng=random.random) -> dict:
     """按玩家等级挑选一个"够得着但不算白给"的怪。
 
@@ -1435,6 +1426,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
 
     crit_add = float(tm.get("crit_add", 0))
     lifesteal = 0.02 * int((p.get("flames") or {}).get("三千焱炎火", 0))
+    lifesteal += sm.venom_lifesteal(p)  # 毒宗吸血×根基
     heal_mult = float(tm.get("heal_mult", 1.0))
     self_effects = list(tm.get("self_effects") or [])
     reflect = float(tm.get("reflect", 0))
