@@ -184,6 +184,70 @@ def equippable_names(p) -> set[str]:
     return out
 
 
+def _origin_of(name: str, fid: str) -> str:
+    """已学技的来源标记：本宗 / 他宗 / 通用 / 异火。
+
+    转宗保留全部已学技（2026-11-24 BUG 修复）后，玩家的 learned 里可能混着
+    多个宗门的专属技——这里按 skill_book 归属判定，供「斗技」口令区分展示。
+    """
+    if any(str((rec.get("active") or {}).get("name") or "") == name
+           for rec in fs.FLAME_SKILLS.values()):
+        return "异火"
+    if name in set(book.COMMON_SKILLS):
+        return "通用"
+    for f, names in book.FACTION_SKILLS.items():
+        if name in names:
+            return "本宗" if f == fid else "他宗"
+    return "本宗"
+
+
+def learned_entries(p) -> list[dict]:
+    """玩家**所有已领悟斗技**的完整条目（跨宗），供「斗技」口令展示。
+
+    与 ``entries_for(p)``（本宗池 + 异火技）不同：本函数严格按 ``p["learned"]``
+    逐名还原，因此转宗后保留的老宗门专属技也能看到——这是 2026-11-24 用户
+    「学习的斗技转宗不该被舍弃」的展示侧配套。每条带 origin（本宗/他宗/
+    通用/异火）、unlocked/equipped 标记，字段与 skill_pool 的条目同形，
+    卡片/文本共用同一口径。老档（无 learned）= 全部可学技，保持兼容。
+    """
+    lo = set(ensure_loadout(p))
+    fid = str(p.get("faction") or "")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for name in learned_names(p):
+        if name in seen:
+            continue
+        seen.add(name)
+        rec = book.get(name)
+        if rec is not None:
+            e = _to_entry(rec, fid, _origin_of(name, fid))
+            e["unlocked"] = True          # 已领悟必然已解锁
+            e["equipped"] = name in lo
+            out.append(e)
+            continue
+        # 不在 SKILL_BOOK：可能是异火主动技或老档派生技，从异火池找同形条目
+        hit = next((x for x in fs.entries_for(p) if x["name"] == name), None)
+        if hit:
+            e = dict(hit)
+            e["origin"] = "异火"      # 同口径：展示层按 origin 分组，缺了会重复
+            e["unlocked"] = True
+            e["equipped"] = name in lo
+            out.append(e)
+    # 已收服异火的主动技：收服即会，即使不在 learned 列表也要展示（与旧 cmd_skills 一致）
+    for e in fs.entries_for(p):
+        if e["name"] not in seen:
+            d = dict(e)
+            # 统一来源口径：flame_skills.entries_for 的 entry 只带 faction="异火"，
+            # 没有 origin 字段。不补的话展示层按 origin 分组会漏判，同一门异火技
+            # 既进「特殊」又进「异火技」两次（test_flame_skills 抓到的重复）。
+            d["origin"] = "异火"
+            d["unlocked"] = True
+            d["equipped"] = e["name"] in lo
+            out.append(d)
+            seen.add(e["name"])
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 四槽
 # ---------------------------------------------------------------------------

@@ -282,6 +282,10 @@ async def main():
     await fire("战斗（CD 中）", mk_group(A, "战斗"), "调息")
     await fire("强化", mk_group(A, "强化"), "炎星石")
     await fire("斗技", mk_group(A, "斗技"), None, expect_image=True)
+    # 2026-11-24 新增「宗门斗技」：本门技能池名录卡。它同时含「宗门」「斗技」，
+    # 必须被 PRI-1 的专属 matcher 抢答，不能被 sect（宗门卡）或 skills_cmd（已学列表）
+    # 截走。PRI-1+matcher 数已在上方 STATIC 门禁覆盖，这里验真实链路出图不串味。
+    await fire("宗门斗技", mk_group(A, "宗门斗技"), None, expect_image=True)
     # 新契约（2026-11-16「逐一学习」）：入道只领悟 1 门（A=裂爪击），升级未领悟技
     # 必须提示先学斗技，而不是当作全会直接走材料不足分支。
     await fire("升级 未领悟斗技（提示先学）", mk_group(A, "升级 龙吟碎"), "还没领悟")

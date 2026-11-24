@@ -160,6 +160,31 @@ def test_switch_works_at_pool_level():
     assert all(n in names for n in p["loadout"]), "四槽混进了外派技能"
 
 
+def test_switch_keeps_all_learned_skills():
+    """2026-11-24 BUG 修复：转宗不得舍弃已学斗技（原著「技艺已学不会忘」）。
+
+    反证：旧实现 kept 只留新宗通用技，老宗专属技在 p["learned"] 被覆盖删除。
+    守的是玩家可感知行为——转宗前后「学过的技」一个都不少，而不是内部变量名。
+    """
+    p = core.create_player("9310", "保留", "g1")
+    p["lv"] = 45
+    p["gold"] = 500000
+    # 人为塞入跨宗专属技 + 通用技，模拟玩家一路学来的积累。
+    import doupo.skill_book as book
+    before = list(p.get("learned") or [])
+    real_extra = [n for n in ("黄泉掌", "碎石掌") if n in set(book.all_names())]
+    assert real_extra, "探针需至少一个真实跨宗技"
+    p["learned"] = list(dict.fromkeys(before + real_extra))
+    before_set = set(p["learned"])
+    res = core.change_faction(p, "迦南学院")
+    assert res["ok"], res
+    after_set = set(p.get("learned") or [])
+    lost = before_set - after_set
+    assert not lost, "转宗不该丢弃已学斗技，丢失=%s" % sorted(lost)
+    for n in real_extra:
+        assert n in after_set, "跨宗已学技 %s 被舍弃" % n
+
+
 def test_switch_does_not_grant_starter_items():
     """转宗只换师门，不重发入道物品 —— 否则转一次刷一次。"""
     p = core.create_player("9303", "甲", "g1")
@@ -212,6 +237,102 @@ def test_legacy_save_gets_stable_faction():
     assert len(set(got)) == 1, "老档分宗不稳定：%s" % (got,)
     assert got[0][0] in fac.FACTIONS, "老档没补上宗门"
     assert got[0][1], "老档补宗后四槽不能为空"
+
+
+# ---------------------------------------------------------------------------
+# 魂殿邪修 v2（2026-11-24 用户定案）
+# ---------------------------------------------------------------------------
+def _hundian_player(qq="94001"):
+    """造一个已入魂殿、可稳定打赢的玩家（只用于核心逻辑单测）。"""
+    p = core.create_player(qq, "邪修", "g1")
+    p["lv"] = 60
+    p["faction"] = cfg.DEVOUR_SECT
+    p["faction_name"] = fac.FACTIONS[cfg.DEVOUR_SECT]["name"]
+    p["hp"] = 10 ** 9
+    p["mp"] = 10 ** 9
+    p["exp"] = 0
+    p["pill_exp"] = 0
+    return p
+
+
+def _weak_mon(kind="魂殿", exp=1000):
+    """一血怪，保证玩家一击必杀；kind 决定 mon_tier 档位。"""
+    return {"name": "探针怪", "kind": kind, "lv": 1,
+            "hp": 1, "atk": 1, "def": 0, "exp": exp, "gold": 0}
+
+
+def test_devour_formula_and_tier():
+    """吞噬量 = 怪 exp × DEVOUR_RATE；只 boss/elite 触发，normal 不触发。"""
+    assert cfg.DEVOUR_RATE == 0.5, cfg.DEVOUR_RATE
+    assert core.devour_amount(1000) == 500
+    assert core.devour_amount(0) == 0
+    p = _hundian_player()
+    assert core.mon_tier("魂殿") == "boss"
+    assert core.mon_tier("塔·elite") == "elite"
+    assert core.mon_tier("魔兽") == "normal"
+    assert core.devour_of(p, _weak_mon("魂殿", 1000)) == 500, "boss 应吞"
+    assert core.devour_of(p, _weak_mon("塔·elite", 1000)) == 500, "elite 应吞"
+    assert core.devour_of(p, _weak_mon("魔兽", 1000)) == 0, "normal 不该吞"
+
+
+def test_devour_writes_exp_and_pill_exp():
+    """斩 boss 后：p['exp'] 增战斗所得+吞噬；pill_exp 恰好等于吞噬，受根基罚。"""
+    p = _hundian_player()
+    res = core.fight(p, _weak_mon("魂殿", exp=1000), rng=lambda: 0.5,
+                     roll_aid=False, auto_pill=False)
+    assert res["win"], "探针怪应被一击必杀"
+    assert res.get("devour") == 500, "战报吞噬值应=500，实际=%s" % res.get("devour")
+    assert int(p["pill_exp"]) == 500, "pill_exp 应记吞噬量，实际=%s" % p["pill_exp"]
+    fight_exp = int(res["exp"])        # 战斗本身所得（不含吞噬）
+    assert int(p["exp"]) == fight_exp + 500, (
+        "总修为=战斗所得+吞噬：%s vs %s+500" % (p["exp"], fight_exp))
+    # 根基罚：吞噬占比越高系数越低（此处占比小，仍为 1.0，只验字段联动方向）
+    assert 0.55 <= cfg.root_factor(p) <= 1.0
+
+
+def test_normal_sect_no_devour():
+    """非魂殿弟子斩 boss 不吞——老玩法逐字节不变。"""
+    p = core.create_player("94002", "常规", "g1")
+    p["lv"] = 60
+    p["hp"] = 10 ** 9
+    p["mp"] = 10 ** 9
+    p["exp"] = 0
+    p["pill_exp"] = 0
+    res = core.fight(p, _weak_mon("魂殿", exp=1000), rng=lambda: 0.5,
+                     roll_aid=False, auto_pill=False)
+    assert res["win"]
+    assert "devour" not in res, "非魂殿不该挂 devour 键"
+    assert int(p["pill_exp"]) == 0, "非魂殿 pill_exp 不该变"
+
+
+def test_devour_sect_locks_faction():
+    """入魂殿后不能再转宗；转回本宗走 same 分支（不算锁死失败）。"""
+    p = _hundian_player()
+    p["lv"] = 90
+    p["gold"] = 10 ** 9
+    # 找一个当前开放的别宗
+    cands = core.faction_candidates(p)
+    other = next((c for c in cands if c["faction"] != cfg.DEVOUR_SECT), None)
+    assert other, "探针需至少一个可转的别宗"
+    res = core.change_faction(p, other["faction"])
+    assert not res.get("ok") and res.get("reason") == "devour_locked", (
+        "魂殿应锁死转宗，实际=%s" % res)
+    assert p["faction"] == cfg.DEVOUR_SECT, "锁死后宗门不该变"
+    # 转回本宗：same 分支（不是 devour_locked）
+    same = core.change_faction(p, cfg.DEVOUR_SECT)
+    assert same.get("reason") == "same", same
+
+
+def test_devour_rate_zero_disables():
+    """DEVOUR_RATE=0 是合法值（关闭吞噬），显式判 0 不用 or。"""
+    saved = cfg.DEVOUR_RATE
+    try:
+        cfg.DEVOUR_RATE = 0
+        assert core.devour_amount(1000) == 0
+        p = _hundian_player()
+        assert core.devour_of(p, _weak_mon("魂殿", 1000)) == 0
+    finally:
+        cfg.DEVOUR_RATE = saved
 
 
 # ---------------------------------------------------------------------------
