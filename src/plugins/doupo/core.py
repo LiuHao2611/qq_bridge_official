@@ -22,7 +22,15 @@ from . import flame_bonus as _flame_bonus, temp_buff as tb
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
+from . import sect_mechanics as sm
 from . import weapon_data as wd
+
+# 纯函数 re-export（实现见 sect_mechanics.py）
+from .sect_mechanics import (  # noqa: E402
+    c_stat, level_dodge, mon_tier, is_devour_sect, devour_amount, devour_of,
+    is_guzu_sect, clan_tier_pct, is_danta_sect, danhui_bonus, craft_rate_bonus,
+    is_sheren_sect, seal_atk_rate,
+)
 from . import tower_data as td
 
 #: 装备默认武器名（老档没有 equipped_weapon 字段时兜底）
@@ -85,23 +93,6 @@ def weapon_panel(p) -> dict:
 
 # ---------------------------------------------------------------------------
 # 等级成长  [源码 ah.java:165]
-# ---------------------------------------------------------------------------
-def c_stat(base: int, lv: int) -> int:
-    """原版成长公式：base*10 + 阶²*base*10 + base*lv。
-
-    2026-11-14：阶改成按**大境界下标**取（cfg.realm_index），
-    不再写死 (lv-1)//9 —— 原著补全 斗之气/斗尊巅峰/半圣 后各境界小段数不同
-    （半圣 3 段、斗帝 1 级），用除法会把斗圣前五星算成半圣阶。
-    实机校验（形象 0 / 玄重尺 +0 / 等级 1）：
-      体力 880  力量 275  斗气 165  敏捷 220  防御 132
-    与人物面板显示逐格吻合。
-    """
-    k = cfg.realm_index(lv)
-    return int(base) * 10 + k * k * int(base) * 10 + int(base) * int(lv)
-
-
-# ---------------------------------------------------------------------------
-# 角色创建
 # ---------------------------------------------------------------------------
 def create_player(qq, name, group) -> dict:
     now = time.time()
@@ -197,6 +188,11 @@ def stats(p) -> dict:
         for k in out:
             out[k] = int(out[k] * 1.2)
 
+    _clan_pct = clan_tier_pct(p)
+    if _clan_pct:
+        for k in ("力量", "敏捷", "斗气", "防御", "体力"):
+            out[k] = int(out[k] * (1.0 + _clan_pct))
+
     out["机缘"] = int(p.get("luck", 0))
     return out
 
@@ -227,17 +223,6 @@ def crit_rate(p) -> float:
     base += 10 * int((p.get("flames") or {}).get("净莲妖火", 0))
     base += int((p.get("bonus") or {}).get("暴击", 0))
     return float(min(80, base))
-
-
-def level_dodge(lv: int) -> float:
-    """**不靠任何装备/异火/丹药**、纯等级带来的闪避百分点（上限同 dodge_rate）。
-
-    两个用途，同一条曲线，保证「同等级同身法」：
-      * 怪物眼力的基准（``monster_panel`` 用它抵掉玩家白拿的身法）；
-      * 让「等级涨上去自然就闪」这件事可被度量，而不是散在 dodge_rate 里。
-    """
-    agi = c_stat(cfg.HERO_BASE["敏捷"], int(lv))
-    return float(min(80, cfg.HERO_DODGE + (agi + 20) // 200))
 
 
 def hit_rate(p) -> float:
@@ -860,32 +845,6 @@ def cum_damage(p, rounds: int, puppet_bonus: float = 0.0) -> float:
     return total
 
 
-def mon_tier(kind) -> str:
-    """怪物战斗档位：``"boss"`` / ``"elite"`` / ``"normal"``。**唯一判定入口**。
-
-    三处来源的 ``kind`` 字面并不统一，别再各自写字符串包含：
-      * 野外 —— 势力名：``"魔兽"`` / ``"悍匪"`` / ``"魂殿"`` / ``"黑盟"`` / ``"魔炎谷"``
-      * 爬塔 —— ``"塔·normal"`` / ``"塔·elite"`` / ``"塔·boss"``
-      * 周本 —— ``"周本·normal"`` / ``"周本·elite"`` / ``"周本·boss"``
-
-    2026-11-20 修的真 bug：旧版面板、怪失误率、怪技能概率、精英保底掉落四处都写
-    ``"精英" in kind``，而塔/周本传的是 ``"塔·elite"`` / ``"周本·elite"`` ——
-    **不含「精英」二字**（那两个字只在怪名「精英·嗜血鼠」里）。于是精英层全程按
-    小怪结算：``MON_PANEL_ELITE`` 是死常量、技能概率少 ×1.5、失误率少减半、
-    硬仗必掉的两件疗伤丹也没了。
-
-    BOSS 档沿用 ``cfg.BOSS_KIND_TOKENS``：野外魂殿/黑盟/魔炎谷的反派本来就是
-    BOSS 档（``recipes_data`` 里那句注释写明了「普通遭遇战的反派…都覆盖」，
-    并据此解锁 tier4 天材地宝），这条口径不动。
-    """
-    k = str(kind or "")
-    if any(t in k for t in cfg.BOSS_KIND_TOKENS):
-        return "boss"
-    if any(t in k for t in cfg.MON_TIER_ELITE_TOKENS):
-        return "elite"
-    return "normal"
-
-
 def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
     """怪物隐藏面板：与玩家同构的**命中 / 暴击 / 闪避**（单位都是 %）。
 
@@ -1194,6 +1153,10 @@ def change_faction(p, key: str) -> dict:
             return {"ok": False, "reason": "same", "name": same["name"]}
         return {"ok": False, "reason": "notfound", "options": [c["name"] for c in cands]}
 
+    # 魂殿邪修入教即锁宗（扣款前拦截；转回本宗仍走 same 分支）
+    if is_devour_sect(p) and hit["faction"] != str(p.get("faction") or ""):
+        return {"ok": False, "reason": "devour_locked", "name": hit["name"]}
+
     cost = faction_switch_cost(p)
     if int(p.get("gold", 0)) < cost:
         return {"ok": False, "reason": "gold", "need": cost,
@@ -1207,18 +1170,22 @@ def change_faction(p, key: str) -> dict:
     # 既解决老档无火，也让「转去迦南/丹塔」成为一条真实的得火路径。
     flame = grant_faction_flame(p)
     if isinstance(p.get("learned"), list):
-        # 新模型：保留已领悟的通用技（跨宗仍会用）；新宗门专属技未领悟不能凭空上阵。
+        # 2026-11-24 BUG 修复（用户裁定「转宗不应舍弃已学斗技，不符合原著」）：
+        # 已学斗技一律全保留（含老宗门专属技）——玩家辛苦领悟的技不因改换门庭而永久消失，
+        # 「斗技」口令能看到全部已学，「宗门斗技」口令单独看本宗。
         # 赠 1 门新派低阶入门技作为「改换门庭的传承」，其余靠「学斗技」逐个领悟。
-        common = {e["name"] for e in sk_mod.catalog(hit["faction"])
-                  if e.get("origin") == "通用"}
-        kept = [n for n in p["learned"] if n in common]
+        kept = [n for n in p["learned"]]
         starters = [e["name"] for e in sk_mod.learnable(p)
                     if e.get("origin") != "异火" and e["name"] not in kept]
         if starters:
             kept.append(random.Random(
                 "faction-gift:" + str(p.get("qq")) + hit["faction"]).choice(starters))
         p["learned"] = list(dict.fromkeys(kept))
-        p["loadout"] = list(p["learned"])[:cfg.LOADOUT_SIZE]
+        # 四槽仍按新宗可用技重配（test_switch_works_at_pool_level 约束：四槽全属新派），
+        # 但候选只从「已领悟」里选，不凭空上阵未学的技。
+        new_names = {e["name"] for e in sk_mod.catalog(hit["faction"])}
+        new_loadout = [n for n in p["learned"] if n in new_names][:cfg.LOADOUT_SIZE]
+        p["loadout"] = new_loadout or list(p["learned"])[:cfg.LOADOUT_SIZE]
     else:
         p["loadout"] = []                  # 老档保持原行为：清空后按新派补满
         sk_mod.ensure_loadout(p)
@@ -1253,6 +1220,18 @@ def skill_pool(p) -> list[dict]:
         d["equipped"] = d["name"] in lo
         out.append(d)
     return out
+
+
+def learned_skill_pool(p) -> list[dict]:
+    """**所有已领悟斗技**（跨宗），供「斗技」口令展示（2026-11-24）。
+
+    与 ``skill_pool``（本宗池 + 异火）不同：转宗保留全部已学技后，玩家会持有
+    老宗门专属技，这些不在本宗池里，必须按 ``p["learned"]`` 逐名还原。
+    条目与 skill_pool 同形（含 tier/unlocked/equipped/origin），排序也一致。
+    """
+    entries = sk_mod.learned_entries(p)
+    tier_order = {t: i for i, t in enumerate(cfg.SKILL_TIERS)}
+    return sorted(entries, key=lambda e: tier_order.get(e.get("tier"), 9))
 
 
 def skill_pool_sorted(p) -> list[dict]:
@@ -1478,6 +1457,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     else:
         m_dodge_frac = max(0.0, min(0.9, float(_panel.get("dodge") or 0.0) / 100.0))
     m_fx["evade"] = m_dodge_frac
+    _seal = sm.apply_seal(m_fx, p)
+    _seal_noted = False
     # 命中对冲（玩家防守侧）：怪物的命中直接减在玩家闪避上，与 _hit 里
     # 「玩家命中减怪闪避」是同一条公式的另一半。m_hit=0（手搓怪）时不变。
     p_hit = hit_rate(p)
@@ -1636,6 +1617,9 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 吸血/反伤都发生在本次出手之后，回头把第一条的 hp_after 改成最终值
         hit["hp_after"] = int(hp)
         # 逐维文案并入主 hit 的 notes（主日志 kind/dmg/skill 字段一律不动）
+        if _seal > 0 and not _seal_noted:  # 封印咒首击可见，只插一次
+            hit["notes"] = ["蛇之封印咒，敌攻 -%.0f%%" % (_seal * 100)] + list(hit.get("notes") or [])
+            _seal_noted = True
 
         if m_hp <= 0:
             break
@@ -1976,7 +1960,7 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         }
     if win:
         p["wins"] = int(p.get("wins", 0)) + 1
-        # 2026-11-22 经验平衡 v0.2：遭遇战传 exp_override=整场预算的单敌份额，
+        # 经验平衡：遭遇战传 exp_override=整场预算的单敌份额，
         # 由 encounter_exp_share 算出（已含异火，不再二次乘）。None 时走原单敌口径
         # （遗迹连段 / PVP / 直接单敌调用），逐字节不变。
         if exp_override is None:
@@ -1986,11 +1970,18 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         p["exp"] = int(p.get("exp", 0)) + exp
         gold = int(mon["gold"] * (cfg.DROP_GOLD_MULT[0] + rng()))
         p["gold"] = int(p.get("gold", 0)) + gold
+        # 魂殿吞噬：仅触发时挂 res 键，非魂殿字节不变
+        _devour = devour_of(p, mon)
+        if _devour > 0:
+            p["exp"] = int(p.get("exp", 0)) + _devour
+            p["pill_exp"] = int(p.get("pill_exp", 0)) + _devour
         # 傀儡专用材料单独收集（真实列 puppet_materials，不进 bag）：
         # rng 调用全部追加在既有判定之后，老路径掉落序列逐字节不变。
         _pup_drops: list = []
         res.update(exp=exp, gold=gold,
                    drops=_roll_drops(p, rng, mon, _pup_drops))
+        if _devour > 0:
+            res["devour"] = _devour
         if _pup_drops:
             res["puppet_drops"] = _pup_drops
     else:
@@ -2107,6 +2098,7 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
 
     detail: list[dict] = []
     total_rounds = total_taken = total_exp = total_gold = 0
+    total_devour = 0   # 魂殿整场吞噬修为（汇总供战报展示）
     fire_gain = 0
     all_drops: list[tuple[str, int]] = []
     win = True
@@ -2136,6 +2128,7 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
         total_taken += int(r["taken"])
         total_exp += int(r.get("exp") or 0)
         total_gold += int(r.get("gold") or 0)
+        total_devour += int(r.get("devour") or 0)
         if r["win"]:
             fire_gain += int(r.get("fire_energy_gain") or 0)
         for name, cnt in (r.get("drops") or []):
@@ -2159,6 +2152,8 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     return {
         "win": win, "rounds": total_rounds, "taken": total_taken,
         "exp": total_exp, "gold": total_gold,
+        # 魂殿整场吞噬修为（已写 p，这里仅展示）。
+        "devour": total_devour,
         "drops": list(merged.items()), "log": [d for x in detail for d in x["log"]],
         "detail": detail, "enemies": [x["name"] for x in detail],
         "enemy_count": len(detail), "hero_aid": hero_aid,
@@ -3135,19 +3130,26 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     # diff>0 越阶衰减（第495章四品勉强炼五品「成功率太小」），diff<=0 够格用基础率。
     rate, diff = cfg.craft_rate_for(
         p.get("alch", 0), rec.get("grade", ""),
-        flame_bonus=_flame_bonus.alchemy_rate_bonus(p))
+        flame_bonus=craft_rate_bonus(p))
+    _danhui = danhui_bonus(p)  # 丹塔丹会：仅加成>0挂键，非丹塔字节不变
     if rng() < rate:
         add_item(p, name, 1)
         if _is_high:
             p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
         up = _alch_level_up(p)
-        return {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
+        res = {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
+        if _danhui > 0:
+            res["danhui"] = round(_danhui, 4)
+        return res
     add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
     p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP // 2
     up = _alch_level_up(p)
-    return {"ok": False, "reason": "fail", "rate": rate, "diff": diff,
-            "dross": cfg.CRAFT_FAIL_DROSS, "alch_up": up}
+    res = {"ok": False, "reason": "fail", "rate": rate, "diff": diff,
+           "dross": cfg.CRAFT_FAIL_DROSS, "alch_up": up}
+    if _danhui > 0:
+        res["danhui"] = round(_danhui, 4)
+    return res
 
 
 def _alch_level_up(p) -> str:
@@ -3205,7 +3207,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     grade_idx = cfg.alch_grade_idx(rec.get("grade", ""))
     rate, diff = cfg.craft_rate_for(
         p.get("alch", 0), rec.get("grade", ""),
-        flame_bonus=_flame_bonus.alchemy_rate_bonus(p))
+        flame_bonus=craft_rate_bonus(p))
     exp_factor = cfg.low_grade_exp_factor(p.get("alch", 0), grade_idx)
     mp_per = max(1, int(mp_max(p) * cfg.CRAFT_MP_PER))
 

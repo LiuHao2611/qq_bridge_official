@@ -236,7 +236,7 @@ _DEMO = {
              "gate": "隐身/龟息目标抓空，自受空间割伤"},
         ]},
     ],
-    "tip": "用法：斗技 全部 ｜ 斗技详情 <技名> 看招式来历",
+    "tip": "用法：宗门斗技 ｜ 斗技 ｜ 斗技详情 <技名> 看招式来历",
 }
 
 
@@ -487,7 +487,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             sy = ent["y"]
             icons.draw(c, sicon, x0 + ICON // 2, sy + FS_SECTION // 2, ICON,
                        p["accent_color"], style=ICON_STYLE)
-            label = ("%s斗技" % tier) if tier else "斗技"
+            label = str(g.get("label") or (("%s斗技" % tier) if tier else "斗技"))
             cnt = int(g.get("count") if g.get("count") is not None
                       else len(g.get("rows") or []))
             sec_txt = "%s · %d 门" % (label, cnt)

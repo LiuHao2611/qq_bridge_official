@@ -240,9 +240,9 @@ def test_panel_and_menu_expose_duel():
     check("菜单列出切磋", "切磋 @某人" in commands.menu_text())
     check("菜单列出应战", "应战" in commands.menu_text())
     check("菜单列出拒战", "拒战" in commands.menu_text())
-    # 2026-11-20：菜单已扩到 52 条（新增「应战」「拒战」入口后固定在这个数）。
+    # 2026-11-20：菜单扩到 52 条；2026-11-24 新增「宗门斗技」→ 53 条。
     # 改口令务必同步 commands.MENU_GROUPS 与本处。
-    check("菜单条数 52", commands.menu_total() == 52, str(commands.menu_total()))
+    check("菜单条数 53", commands.menu_total() == 53, str(commands.menu_total()))
 
 
 def _run():

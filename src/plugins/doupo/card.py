@@ -431,11 +431,93 @@ def _origin_mark(e: dict) -> str:
         origin, f"〔{origin}〕")
 
 
+def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
+                show_lv: bool = False, dmg_now: int | None = None) -> dict:
+    """把一条斗技 entry 转成 doupo_roster 的行数据（唯一定义，两卡共用）。
+
+    ``build_roster_data``（宗门斗技·本宗池）与 ``build_learned_data``（斗技·我的）
+    必须同构，否则同一门技在两张卡上会长得不一样（对齐/字段漂移）。
+    ``show_lv=True`` 时副行追加 Lv，用于「我的斗技」——玩家关心自己练到几级；
+    宗门卡列的是"宗门有什么"，等级无意义，保持原样不动。
+    """
+    name = e["name"]
+    unlocked = bool(e.get("unlocked"))
+    frac = int(cfg.SKILL_TIER_MP_FRAC.get(e["tier"], 0.2) * 100)
+    role = fx.role_label(e.get("role", ""))
+
+    # 副行：来源 + 阶位 + 类型 + 斗气消耗（不再把主定位塞进这行，它单独成胶囊）
+    # 注意 rank 与 kind 可能同名（如「秘法」阶 + 「秘法」类型），去重后再拼，
+    # 否则会画出「秘法 · 秘法」这种重复。
+    rank = str(e.get("rank") or "")
+    kind = str(e.get("kind") or "")
+    parts = [f"{_origin_mark(e)}{rank}"]
+    if kind and kind != rank:
+        parts.append(kind)
+    parts.append(f"斗气 {frac}%")
+    if show_lv:
+        parts.append("Lv%d" % max(1, min(5, int(sk.get(name, 1)))))
+    if not unlocked:
+        parts.append("lv%s 解锁" % e.get("unlock", "?"))
+    meta = " · ".join(x for x in parts if x)
+    if e.get("flame"):
+        meta = f"异火技〔{e['flame']}〕 · " + meta
+
+    # chip 序列：伤害倍率打头（数值可比），其后每个维度一枚胶囊
+    chips = [{"label": "伤害", "value": "×%.2f" % float(e.get("dmg") or 0)}]
+    if dmg_now is not None:
+        # 「斗技」合并卡专用：当前等级的期望单击（未计目标防御），
+        # 与 core.damage_schedule / _player_hit 同源，避免只有倍率没有实数。
+        chips.append({"label": "当前", "value": str(int(dmg_now))})
+    chips += fx.effect_chips(e.get("effects") or [])
+
+    # 2026-11-15 用户纠正：「不要写原著多少章这种描述，你见过哪个游戏的
+    # 技能描述这样写的？」——来源只取 skill_book.source（谁所使 / 怎么得到），
+    # 由 desc_with_source 用逗号并进描述第一句，像游戏技能说明而不是小说注脚；
+    # novel 章节引文只用于离线核验，绝不进卡片。有来源就加、没有就不加。
+    phrase = fx.source_phrase(e)
+    lv = max(1, min(5, int(sk.get(name, 1))))
+    return {
+        # 全局序号（1-based，按卡片显示顺序 = core.skill_pool_sorted）。
+        # 玩家可直接发「上阵 1 3 5 7」按序号上阵，无需手打技名。
+        # 合并卡里他宗技不在本宗池、无序号，传 None 即不画圆。
+        "no": no,
+        "name": name,
+        "badge": e["tier"][0],
+        "tier": e["tier"],
+        "role": role,
+        "state": state,
+        "state_kind": state_kind,
+        "meta": meta,
+        # 完整技能描述（用户 2026-11-15：「技能描述加上，别偷懒」）：
+        # 名片卡只放 brief 是偷懒，玩家看不到机制就会退回比数字。
+        # 完整描述去掉末尾「限制：…」段——代价由 gate 行单独展示，
+        # 否则同一件事在图里说两遍（用户实测指出重复）。
+        # 首句并入技能来源状语（``desc_with_source``），无来源时原样不动。
+        "desc": fx.desc_with_source(
+            e, (fx.desc_without_gate(str(e.get("desc") or ""))
+                or str(e.get("desc") or e.get("brief") or ""))),
+        # 结构化透出来源，供交付闸门断言「有来源必加、无来源不编、不写章节号」
+        "source_phrase": phrase,
+        "has_source": bool(phrase),
+        "chips": chips,
+        "gate": str(e.get("gate") or ""),
+        # ---- 兼容通用列表卡 / 既有测试的扁平字段 ----
+        "title": name,
+        "right": state,
+        "sub": ((f"异火技〔{e['flame']}〕 · " if e.get("flame") else "")
+                + (f"〔{role}〕" if role else "") + meta),
+        "note": " · ".join(f"{c['label']}{c['value']}" for c in chips[1:])
+                + ((" ｜ 限：" + str(e.get("gate"))) if e.get("gate") else ""),
+        "bar": {"cur": lv, "max": 5},
+    }
+
+
 def build_roster_data(p: dict) -> dict:
     """本宗斗技名录 → doupo_roster 专用名录卡参数。
 
-    与 render_skills 的区别：那张是「四槽上阵专用卡」，只画已上阵项；
-    这张画**本宗全部斗技**（含未解锁、已收服异火的主动技），用于「斗技 全部」。
+    与 build_learned_data（「斗技」合并卡）的区别：这张画**本宗全部斗技**
+    （含未解锁、已收服异火的主动技），用于「宗门斗技」口令；合并卡只画已上阵
+    + 已领悟，不含"本宗还没学的"。
     基本固定的名录内容必须出卡片，不能拿纯文本糊弄。
 
     2026-11-15 第二次视觉重做（用户：「优化这个卡片，怎么没优化」）
@@ -459,7 +541,6 @@ def build_roster_data(p: dict) -> dict:
     rows: list[dict] = []
     by_tier: dict[str, list[dict]] = {}
     for no, e in enumerate(pool_sorted, 1):
-        name = e["name"]
         unlocked = bool(e.get("unlocked"))
         equipped = bool(e.get("equipped"))
         # 两列版的状态 pill 只有 ~52px 宽，「未解锁 lv50」会撑爆块宽，
@@ -470,68 +551,7 @@ def build_roster_data(p: dict) -> dict:
             state, state_kind = "可学", "learn"
         else:
             state, state_kind = "未解锁", "lock"
-        lv = max(1, min(5, int(sk.get(name, 1))))
-        frac = int(cfg.SKILL_TIER_MP_FRAC.get(e["tier"], 0.2) * 100)
-        role = fx.role_label(e.get("role", ""))
-
-        # 副行：来源 + 阶位 + 类型 + 斗气消耗（不再把主定位塞进这行，它单独成胶囊）
-        # 注意 rank 与 kind 可能同名（如「秘法」阶 + 「秘法」类型），去重后再拼，
-        # 否则会画出「秘法 · 秘法」这种重复。
-        rank = str(e.get("rank") or "")
-        kind = str(e.get("kind") or "")
-        parts = [f"{_origin_mark(e)}{rank}"]
-        if kind and kind != rank:
-            parts.append(kind)
-        parts.append(f"斗气 {frac}%")
-        if not unlocked:
-            parts.append("lv%s 解锁" % e.get("unlock", "?"))
-        meta = " · ".join(x for x in parts if x)
-        if e.get("flame"):
-            meta = f"异火技〔{e['flame']}〕 · " + meta
-
-        # chip 序列：伤害倍率打头（数值可比），其后每个维度一枚胶囊
-        chips = [{"label": "伤害", "value": "×%.2f" % float(e.get("dmg") or 0)}]
-        chips += fx.effect_chips(e.get("effects") or [])
-
-        # 2026-11-15 用户纠正：「不要写原著多少章这种描述，你见过哪个游戏的
-        # 技能描述这样写的？」——来源只取 skill_book.source（谁所使 / 怎么得到），
-        # 由 desc_with_source 用逗号并进描述第一句，像游戏技能说明而不是小说注脚；
-        # novel 章节引文只用于离线核验，绝不进卡片。有来源就加、没有就不加。
-        phrase = fx.source_phrase(e)
-
-        row = {
-            # 全局序号（1-based，按卡片显示顺序 = core.skill_pool_sorted）。
-            # 玩家可直接发「上阵 1 3 5 7」按序号上阵，无需手打技名。
-            "no": no,
-            "name": name,
-            "badge": e["tier"][0],
-            "tier": e["tier"],
-            "role": role,
-            "state": state,
-            "state_kind": state_kind,
-            "meta": meta,
-            # 完整技能描述（用户 2026-11-15：「技能描述加上，别偷懒」）：
-            # 名片卡只放 brief 是偷懒，玩家看不到机制就会退回比数字。
-            # 完整描述去掉末尾「限制：…」段——代价由 gate 行单独展示，
-            # 否则同一件事在图里说两遍（用户实测指出重复）。
-            # 首句并入技能来源状语（``desc_with_source``），无来源时原样不动。
-            "desc": fx.desc_with_source(
-                e, (fx.desc_without_gate(str(e.get("desc") or ""))
-                    or str(e.get("desc") or e.get("brief") or ""))),
-            # 结构化透出来源，供交付闸门断言「有来源必加、无来源不编、不写章节号」
-            "source_phrase": phrase,
-            "has_source": bool(phrase),
-            "chips": chips,
-            "gate": str(e.get("gate") or ""),
-            # ---- 兼容通用列表卡 / 既有测试的扁平字段 ----
-            "title": name,
-            "right": state,
-            "sub": ((f"异火技〔{e['flame']}〕 · " if e.get("flame") else "")
-                    + (f"〔{role}〕" if role else "") + meta),
-            "note": " · ".join(f"{c['label']}{c['value']}" for c in chips[1:])
-                    + ((" ｜ 限：" + str(e.get("gate"))) if e.get("gate") else ""),
-            "bar": {"cur": lv, "max": 5},
-        }
+        row = _roster_row(e, no, sk, state, state_kind, show_lv=False)
         rows.append(row)
         by_tier.setdefault(e["tier"], []).append(row)
 
@@ -562,8 +582,86 @@ def build_roster_data(p: dict) -> dict:
 
 
 async def render_roster(p: dict) -> bytes | None:
-    """「斗技 全部」出图：本宗全部斗技名录卡（按阶位分组 + 卡片块）。"""
+    """「宗门斗技」出图：本宗全部斗技名录卡（按阶位分组 + 上阵序号）。"""
     return await _render_list("doupo_roster", build_roster_data(p), "斗破本宗斗技", qq=p.get("qq"))
+
+
+def build_learned_data(p: dict) -> dict:
+    """「斗技」合并卡 → doupo_roster 参数：已上阵 + 已领悟（跨宗）。
+
+    2026-11-24 用户口径：原来的「斗技」（四槽上阵卡）与「斗技 全部」（已学习名录）
+    合并为**一张卡**——玩家要看的是"我现在用什么 / 我学到了什么"，分两张卡反而
+    要发两次口令。故本卡两个区块：
+      ① 已上阵（state=上阵/on）：四槽真实出战技，含等级与完整数值；
+      ② 已领悟（state=已领悟/learn）：其余已学技，按阶位分组，含转宗保留的他宗技。
+    「宗门斗技」仍单独一张（本宗池 + 上阵序号），两者职责不重叠。
+    """
+    sk = p.get("skills") or {}
+    # 本宗池序号（「上阵 1 3 5」的唯一编号源）；他宗技不在池里 → None，不画圆。
+    no_by_name = {name: no for no, name in core.roster_no_map(p).items()}
+    # 四槽 entry 不带 unlocked 字段（loadout_entries 只保证是能上阵的技）；
+    # 不补的话 _roster_row 会误判"未解锁"，副行印出「Lv1 lv1 解锁」重复信息。
+    lo = [dict(e, unlocked=True) for e in core.loadout_entries(p)]
+    lo_names = {e["name"] for e in lo}
+
+    # 当前等级期望单击（与 build_skills_data 同一公式，两卡数字不会打架）：
+    #   伤害 = (力量×0.5 + 斗气×1.5) × 阶倍率 × (1+0.2/级) × 暴击期望
+    st = core.stats(p)
+    _raw_base = st["力量"] * 0.5 + st["斗气"] * 1.5
+    _crit = 1.0 + core.crit_rate(p) / 100.0 * 0.5
+
+    def _dmg_now(e: dict) -> int:
+        lv = max(1, min(5, int(sk.get(e["name"], 1))))
+        mult = float(e.get("dmg") or 0) * (1 + 0.2 * (lv - 1))
+        return int(round(_raw_base * mult * _crit))
+
+    groups: list[dict] = []
+    rows: list[dict] = []
+
+    # ① 已上阵（四槽顺序即出战顺序，不再排序）
+    on_rows = [_roster_row(e, no_by_name.get(e["name"]), sk,
+                           "上阵", "on", show_lv=True, dmg_now=_dmg_now(e)) for e in lo]
+    if on_rows:
+        groups.append({"tier": "已上阵", "label": "已上阵",
+                       "count": len(on_rows), "icon": "bolt", "rows": on_rows})
+        rows.extend(on_rows)
+
+    # ② 其余已领悟，按三阶稳定排序（与「宗门斗技」同序，便于对照）
+    by_tier: dict[str, list[dict]] = {}
+    for e in core.learned_skill_pool(p):
+        if e["name"] in lo_names:
+            continue
+        row = _roster_row(e, no_by_name.get(e["name"]), sk,
+                          "已领悟", "learn", show_lv=True)
+        by_tier.setdefault(e["tier"], []).append(row)
+        rows.append(row)
+    for tier in cfg.SKILL_TIERS:
+        rs = by_tier.get(tier) or []
+        if not rs:
+            continue
+        groups.append({
+            "tier": tier, "count": len(rs),
+            "icon": {"普通": "sword", "高阶": "bolt", "特殊": "star"}.get(tier, "sword"),
+            "rows": rs,
+        })
+
+    learned = core.learned_skill_pool(p)
+    n_ben = sum(1 for e in learned if e.get("origin") == "本宗")
+    n_other = sum(1 for e in learned if e.get("origin") == "他宗")
+    n_common = sum(1 for e in learned if e.get("origin") == "通用")
+    return {
+        "icon": "bolt", "title": "我的斗技",
+        "subtitle": (f"已上阵 {len(on_rows)}/{cfg.LOADOUT_SIZE} · 已领悟 {len(learned)} 门"
+                     f"（本宗 {n_ben} / 他宗 {n_other} / 通用 {n_common}）"),
+        "groups": groups,
+        "rows": rows,
+        "tip": "上阵编号见「宗门斗技」｜上阵 <技名>｜斗技详情 <技名> 看招式来历",
+    }
+
+
+async def render_learned(p: dict) -> bytes | None:
+    """「斗技」出图：已上阵 + 已领悟合并卡（一张卡看完我的斗技全貌）。"""
+    return await _render_list("doupo_roster", build_learned_data(p), "斗破我的斗技", qq=p.get("qq"))
 
 
 def build_faction_data(p: dict) -> dict:
@@ -787,6 +885,13 @@ def build_rank_data(top: list) -> dict:
 
 
 async def render_skills(p: dict) -> bytes | None:
+    """四槽上阵**详情卡**（doupo_skills：完整描述 + 五段斗气条 + 伤害口径）。
+
+    ⚠️ 2026-11-24 起「斗技」口令改出合并卡（``render_learned``），本函数已无
+    口令入口；保留是因为 doupo_skills 模板仍被排版验收（test_typography）当作
+    "五段等级条 + 大字粗体"样本，且将来若要开"上阵详情卡"可直接复用。
+    改这里不影响玩家可见的「斗技」——那张卡走 build_learned_data。
+    """
     # 专用模板：技能描述 + 详细伤害 + 五段斗气条 + 重点大字粗体。
     # 不再复用 doupo_list，避免把异火/宝库/背包/排行一起改坏。
     return await _render_list("doupo_skills", build_skills_data(p), "斗破斗技", qq=p.get("qq"))

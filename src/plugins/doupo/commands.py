@@ -361,11 +361,12 @@ MENU_GROUPS = (
     )),
     ("养成 · 变强", (
         ("强化", "强化当前武器：等级对任何武器生效；玄重尺十级觉醒异火恒古尺"),
-        ("斗技", "看四槽上阵卡；发「斗技 全部」出本宗斗技名录卡（含未解锁）"),
+        ("斗技", "一张卡看完：已上阵四槽 + 已领悟全部斗技（含转宗保留的他宗技）"),
+        ("宗门斗技", "看当前所属宗门的斗技池（本门传承+通用，含未解锁、上阵编号）"),
         ("斗技详情 狂狮怒罡", "带技名看完整说明；只发「斗技详情」也列出本宗全部斗技"),
         ("学斗技", "达等级+战力后随机领悟一门未学斗技（花金币）；也可「学习 <技名>」点名领悟，入道只给 1 门"),
         ("升级 龙吟碎", "用焚血散升斗技，每级伤害 +20%"),
-        ("上阵 1 3 5 7", "按「斗技 全部」名录卡序号选四槽；也可打技名，异火主动技同样能上阵"),
+        ("上阵 1 3 5 7", "按「宗门斗技」名录卡序号选四槽；也可打技名，异火主动技同样能上阵"),
         ("宗门", "看本门与可转宗门（进阶池 lv40 / 隐世池 lv90）"),
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
         ("异火", "看 5 种异火的主动技 / 被动、来历与喂养进度"),
@@ -514,6 +515,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "102 级九星斗圣冲 103 级：成功率 = 30% + 机缘/2000，帝炎 100%",
     )),
     ("斗技", (
+        "「斗技」= 一张卡看完我的斗技：已上阵四槽 + 已领悟全部"
+        "（含转宗后依原著「技艺不失」保留的他宗技）；"
+        "「宗门斗技」= 当前宗门的斗技池（本门传承+通用，含未解锁、上阵编号）",
         "三阶四槽：",
         "阶位分三档 —— 普通（黄阶/玄阶）· 高阶（地阶/天阶）· 特殊（秘法/血脉/体质/异火）",
         "上阵最多 4 门，三阶任意搭配（后期可四门全特殊）",
@@ -522,7 +526,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "斗气不够放任何一门 → 强制武器普攻，伤害大减且持续掉血",
         "升一级伤害 +20%（耗焚血散，最高 5 级）；同名技跨宗共享等级",
         "入道只领悟 1 门低阶技，其余靠「学斗技」逐个领悟：达解锁等级+战力门槛、花金币，随机得一门未学技",
-        "领悟的技要用「上阵 <技名>」或「上阵 1 3 5 7」（名录卡序号）放进四槽才会自动释放；未领悟的技不能上阵",
+        "领悟的技要用「上阵 <技名>」或「上阵 1 3 5 7」（「宗门斗技」名录卡序号）放进四槽才会自动释放；未领悟的技不能上阵",
         "解锁按阶位：黄/玄 lv1 ｜ 地阶 20/30/40 ｜ 天阶 50/60/70 ｜ 秘法 40 ｜ 体质血脉 50 ｜ 异火 60",
         "完整说明见「斗技详情 <技名>」（施展流程 + 数值 + 来历）",
     )),
@@ -533,6 +537,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "不发该派入道物品；已升的技能等级按技名保留（转回去还在）",
         "少数门派斗技本就稀少（蛇人族 / 毒宗 / 炼药师公会各 3 门、慕兰谷 2 门），",
         "进池时四槽填不满属正常，随等级解锁会补齐",
+        "魂殿（邪道·lv40 进阶池）：拜入即不可再转宗；已领悟斗技全部保留，"
+        "自带「吞噬炼化」——每斩精英/BOSS 额外吞其修为（怪物 exp 的 50%），"
+        "但吞来的修为记入根基，实战越强越虚浮",
     )),
     ("挂机", (
         "每分钟自动 +6 修为，不登录也涨，不强制打卡。",
@@ -864,6 +871,10 @@ async def cmd_fight(store, qq) -> str:
     drops = list(res.get("drops") or [])
     _drop_txt = "、".join(f"{n}×{c}" for n, c in drops[:3])
     lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt))
+    # 2026-11-24 魂殿邪修：吞噬修为单独一行（已写 p["exp"]/p["pill_exp"]，此处仅反馈）。
+    if int(res.get("devour") or 0) > 0:
+        lines.append(f"🕯️ 吞噬炼化：斩精英/BOSS 吞噬修为 +{_fmt(res['devour'])}"
+                     "（邪道速成，根基随之虚浮）")
     # 傀儡料单独一行：不进 bag、直接落傀儡库，与上面「战利」不是同一本账。
     pup = list(res.get("puppet_drops") or [])
     if pup:
@@ -951,6 +962,72 @@ async def cmd_enhance(store, qq) -> str:
 # 斗技 / 异火
 # ---------------------------------------------------------------------------
 async def cmd_skills(store, qq) -> str:
+    """「斗技」= 已上阵 + 已领悟（一张卡看完），2026-11-24 用户口径。
+
+    原「斗技」（四槽上阵）与「斗技 全部」（已学习名录）合并成一条口令：
+      ① 已上阵：四槽真实出战技（含等级）；
+      ② 已领悟：其余已学技，按三阶分组，含转宗保留的他宗技；
+      ③ 异火技：已收服但未上阵的主动技（收服即会）。
+    「宗门斗技」仍单独看本宗池 + 上阵编号，两者职责不重叠。
+    """
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    learned = core.learned_skill_pool(p)
+    lo = core.loadout_entries(p)
+    lo_names = {e["name"] for e in lo}
+    fac_name = p.get("faction_name") or "无宗门"
+    n_ben = sum(1 for e in learned if e.get("origin") == "本宗")
+    n_other = sum(1 for e in learned if e.get("origin") == "他宗")
+    n_common = sum(1 for e in learned if e.get("origin") == "通用")
+    out = [f"📜 我的斗技 · 已上阵 {len(lo)}/{cfg.LOADOUT_SIZE} · 已领悟 {len(learned)} 门"
+           f"（本宗 {n_ben} / 他宗 {n_other} / 通用 {n_common}）"]
+
+    def _tag(e: dict) -> str:
+        return {"通用": "〔通用〕", "他宗": "〔他宗〕", "本宗": "〔本宗〕",
+                "异火": "〔异火〕"}.get(e.get("origin"), "")
+
+    # ① 已上阵（四槽顺序 = 出战顺序）
+    if lo:
+        out.append("〔已上阵〕")
+        for e in lo:
+            lv = int((p.get("skills") or {}).get(e["name"], 1))
+            out.append(f"　{_tag(e)}{e['name']} Lv{lv}（{e['tier']}）")
+
+    # ② 其余已领悟，按三阶分组（与「宗门斗技」同序）
+    for tier in cfg.SKILL_TIERS:
+        rows = [e for e in learned if e["tier"] == tier
+                and e["name"] not in lo_names and e.get("origin") != "异火"]
+        if not rows:
+            continue
+        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·mp_max")
+        for e in rows:
+            lv = int((p.get("skills") or {}).get(e["name"], 1))
+            out.append(f"　{_tag(e)}{e['name']} Lv{lv}")
+
+    # ③ 已收服异火技（收服即会；已上阵的不重复列，避免同一门出现两次）
+    flames = [e for e in learned
+              if (e.get("faction") == "异火" or e.get("origin") == "异火")
+              and e["name"] not in lo_names]
+    if flames:
+        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
+        for e in flames:
+            out.append(f"　{e['name']}（{e.get('flame', '异火')}·可学）")
+
+    out.append("")
+    out.append(f"　当前宗门【{fac_name}】；本门传承与上阵编号见「宗门斗技」")
+    out.append("　〔他宗〕= 转宗前领悟、依原著「技艺已学不会忘」保留的斗技")
+    out.append(f"　升一级伤害 +20%，消耗 {cfg.SKILL_UP_ITEM}；用法：升级 <技名> / 上阵 <4 技名>")
+    return "\n".join(out)
+
+
+async def cmd_faction_skills(store, qq) -> str:
+    """「宗门斗技」= 当前所属宗门的技能池（含未解锁），2026-11-24 新增。
+
+    与「斗技」（已上阵 + 已领悟合并卡）互补：这条**只**看本门传承 + 通用 +
+    已收服异火技，数据走 core.skill_pool（本宗池）；卡上的序号圆是
+    「上阵 1 3 5 7」的唯一编号源，故合并卡不能替代它。
+    """
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
@@ -959,7 +1036,7 @@ async def cmd_skills(store, qq) -> str:
     fac_name = p.get("faction_name") or "无宗门"
     own = sum(1 for e in pool if e.get("origin") == "本宗")
     common = sum(1 for e in pool if e.get("origin") == "通用")
-    out = [f"📜 {fac_name} · 斗技三阶（本宗 {own} / 通用 {common} · 上阵 {len(lo)}/{cfg.LOADOUT_SIZE}）"]
+    out = [f"🏯 {fac_name} · 本门斗技（本宗 {own} / 通用 {common} · 上阵 {len(lo)}/{cfg.LOADOUT_SIZE}）"]
     for tier in cfg.SKILL_TIERS:
         rows = [e for e in pool if e["tier"] == tier and e.get("faction") != "异火"]
         if not rows:
@@ -977,11 +1054,8 @@ async def cmd_skills(store, qq) -> str:
             mark = "★上阵" if e["equipped"] else "可学"
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
     out.append("")
-    out.append("上阵：" + "、".join(f"{e['name']}[{e['tier']}]" for e in lo))
-    out.append("　〔通用〕= 斗技堂/拍卖会流通的基础斗技，非本宗传承")
-    out.append("　炼药、丹会、品阶考核、大长老院表决等是宗门典故，不是斗技，已不在此列")
-    out.append("　斗气不足将强制武器普攻（伤害大减、持续掉血）")
-    out.append(f"　升一级伤害 +20%，消耗 {cfg.SKILL_UP_ITEM}；用法：升级 <技名> / 上阵 <4 技名>")
+    out.append("　我领悟的全部斗技（含转宗保留的他宗技）见「斗技」")
+    out.append("　「宗门斗技」出本门名录卡，序号即上阵编号（上阵 1 3 5 7）")
     return "\n".join(out)
 
 
@@ -1076,6 +1150,9 @@ async def cmd_faction(store, qq, args) -> str:
                         f"　（境界越高，越难改换门庭）")
             if r == "nopool":
                 return "当前境界还没有可转的宗门。"
+            if r == "devour_locked":
+                return ("🕯️ 你已入魂殿，邪道不归路——拜入魂殿者终生不得再转宗门。\n"
+                        "　既已噬魂为生，便再无回头之日（吞噬炼化随行，斩精英/BOSS 吞其修为）。")
             if r == "notfound":
                 return ("当前境界没有这个宗门。可转："
                         + "、".join(res.get("options") or ["（无）"]))
@@ -1083,11 +1160,17 @@ async def cmd_faction(store, qq, args) -> str:
         await store.put_player(p)
         flame_line = ("\n　随身数值异火【%s】（入道赐下）——「养火」可养。" % res["flame"]) \
             if res.get("flame") else ""
+        # 2026-11-24 魂殿邪修：转入魂殿是不可逆邪道，明确告知吞噬被动与锁死。
+        devour_line = ""
+        if str(res.get("faction") or "") == cfg.DEVOUR_SECT:
+            devour_line = ("\n🕯️ 邪道不归：自此不得再转宗；已领悟斗技尽数保留，"
+                           "且自带【吞噬炼化】——每斩精英/BOSS 吞其修为（根基随之虚浮）。")
         return (txt.sect_change(res["name"]).rstrip("。")
                 + f"（原【{res['old']}】），耗 {res['cost']:,} 金币。\n"
                 f"　四槽已按新门重配：" + "、".join(res["loadout"])
                 + flame_line
-                + "\n　已升的技能等级按技名保留；本门斗技见「斗技」。")
+                + "\n　已升的技能等级按技名保留；本门斗技见「宗门斗技」，全部已学见「斗技」。"
+                + devour_line)
 
     fac_name = p.get("faction") or ""
     cur_pool = ""
@@ -1206,7 +1289,7 @@ async def cmd_learn_named(store, qq, name) -> str:
         return NOT_ENTERED
     name = str(name or "").strip()
     if not name:
-        return "要学哪门斗技？例：「学习 风灵分形剑」。发「斗技 全部」看名录。"
+        return "要学哪门斗技？例：「学习 风灵分形剑」。发「宗门斗技」看名录。"
     res = core.learn_named(p, name)
     note = _migration_note(res)
     if not res.get("ok"):
@@ -1214,7 +1297,7 @@ async def cmd_learn_named(store, qq, name) -> str:
             await store.put_player(p)
         why = res.get("reason")
         if why == "noskill":
-            return note + f"本宗没有【{name}】这门斗技，发「斗技 全部」看名录。"
+            return note + f"本宗没有【{name}】这门斗技，发「宗门斗技」看名录。"
         if why == "learned":
             return note + f"【{name}】你已经领悟了，发「上阵 {name}」把它带上场。"
         if why == "level":

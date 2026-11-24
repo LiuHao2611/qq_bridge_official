@@ -503,6 +503,37 @@ async def _(event: Event):
     await skinfo.finish(await commands.cmd_skill_info(store, str(event.user_id), _arg(event, kw)))
 
 
+# 2026-11-24 新增「宗门斗技」= 本门技能池（与「斗技」= 已学全部互补）。
+# 必须 PRI-1 + 注册在 sect（宗门/门派）与 skills_cmd（斗技/技能）之前：
+# 该口令同时含「宗门」「斗技」二字，若同 PRI 会被这两个 matcher 抢答成宗门卡/
+# 已学列表。PRI-1 保证先拦，block=True 阻止后续 matcher 重复回包。
+faction_skills_cmd = on_regex(_pat(r"宗门斗技"),
+                              priority=PRI - 1, block=True, rule=_mode_is("doupo"))
+
+
+@faction_skills_cmd.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, faction_skills_cmd)
+    qq = str(event.user_id)
+    msg = await commands.cmd_faction_skills(store, qq)
+    if msg == commands.NOT_ENTERED:
+        await faction_skills_cmd.finish(msg)
+    # 本门名录基本固定，出 roster 卡（与「斗技」合并卡同模板，序号口径同源
+    # core.roster_no_map —— 「上阵 1 3 5 7」的编号只认这张卡的序号圆）
+    png = None
+    try:
+        p = await store.get_player(qq)
+        if p:
+            png = await card.render_roster(p)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("斗破宗门斗技卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+    if png:
+        await finish_card(faction_skills_cmd, event, png, "roster", "doupo_faction_skills.png")
+        return
+    await faction_skills_cmd.finish(msg)
+
+
 # 注意：变量名不能叫 skills，否则会遮蔽 doupo.skills 子模块（core 依赖它）
 skills_cmd = on_regex(_pat(r"(?:斗技|技能)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
@@ -514,29 +545,16 @@ async def _(event: Event):
     qq = str(event.user_id)
     # 纯文本兜底（commands.cmd_skills 即数据源，与图片同源）
     msg = await commands.cmd_skills(store, qq)
-    # 「斗技 全部」→ 本宗斗技名录卡（全部斗技，含未解锁 / 异火技）。
-    # 基本固定的名录内容必须出卡片；只有渲染异常才降级纯文本。
-    if any(k in _plain(event) for k in ("全部", "列表", "所有")):
-        roster = None
-        try:
-            p = await store.get_player(qq)
-            if p:
-                roster = await card.render_roster(p)
-        except Exception as e:
-            logger.warning("斗破本宗斗技名录卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
-        if roster:
-            await finish_card(skills_cmd, event, roster, "roster", "doupo_roster.png")
-            return
-        await skills_cmd.finish(msg)
-        return
-    # 优先发自绘列表卡；任何异常都降级为上面的纯文本（绝不丢消息）
+    # 2026-11-24 用户口径：原「斗技」（四槽上阵）与「斗技 全部」（已学习名录）
+    # 合并为**一张卡**——固定出合并名录卡，「斗技 全部」子命令已取消。
+    # 卡片画「已上阵」+「已领悟」两区；任何渲染异常才降级纯文本（绝不丢消息）。
     png = None
     try:
         p = await store.get_player(qq)
         if p:
-            png = await card.render_skills(p)
+            png = await card.render_learned(p)
     except Exception as e:  # noqa: BLE001
-        logger.warning("斗破斗技卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+        logger.warning("斗破斗技合并卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:
         await finish_card(skills_cmd, event, png, "skills", "doupo_skills.png")
         return
