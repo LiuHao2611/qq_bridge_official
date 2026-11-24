@@ -270,8 +270,9 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         right = item.get("right")
         right_w = _w(str(right), FS_ITEM, "bold") + 14 if right else 0
 
-        # 主标题（放大加粗）
-        title_txt = str(item.get("title") or "")
+        # 主标题（放大加粗）。网格模式可用 grid_title 短标题（带纹丹格窄，保住丹名）
+        title_txt = str(item.get("grid_title") or "") if grid else ""
+        title_txt = title_txt or str(item.get("title") or "")
         title_max = (cx0 + cw) - title_x - 8 - right_w
         if item.get("head"):
             # 分组头行（数据层显式标 head=True，如异火卡的「本宗传承 / 可收服的异火」）：

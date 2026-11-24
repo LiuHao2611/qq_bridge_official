@@ -881,11 +881,18 @@ def build_bag_data(p: dict, locked=None) -> dict:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items[:24]:
-        # ⚠️ 卡片用 Pillow 自绘，字体没有 emoji 字形：🔒 会被**静默丢弃**
-        # （2026-11-19 实拍确认，玩家看不到任何锁定标记）。这里用中文标记，
-        # 文本层（cmd_bag）仍可用 🔒 —— 那是 QQ 客户端渲染的。
+        # ⚠️ Pillow 自绘无 emoji 字形：🔒 会被静默丢弃（11-19 实拍）；用中文标记。
         mark = "〔锁〕" if name in locked else ""
-        rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
+        # 丹纹带纹丹：网格格窄，用单字「纹」代替后缀（标记已表意，保住丹名可读）；
+        # 非网格列表用完整名 + 赐福说明。
+        if cfg.is_danwen_name(name):
+            grid_title = f"纹·{cfg.base_of_danwen(name)} ×{n}"
+            mark = "〔纹〕" + mark
+            sub = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
+            rows.append({"title": grid_title, "grid_title": grid_title,
+                         "list_title": f"{mark}{name} ×{n}", "sub": sub})
+        else:
+            rows.append({"title": f"{mark}{name} ×{n}", "sub": known.get(name, "")})
     return {
         "icon": "diamond", "title": "包裹",
         # 2026-11-23 修「57/24 格」误导：len(items)=物品**种数**（可 >24），
@@ -997,6 +1004,10 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             if tag:
                 desc_bits.append("〔%s〕" % tag)
             desc_bits.append(rate_bit)
+            # 丹纹率公示（Q2/Q5 拍板：概率透明，卡面与帮助同源 danwen_rate）
+            _dw_rate = cfg.danwen_rate(grade)
+            if _dw_rate > 0:
+                desc_bits.append("丹纹%d%%" % int(round(_dw_rate * 100)))
             # 2026-11-18 假药普查：卡面**只印本作真会发生的事**（cfg.recipe_impl）。
             # desc 是原著功效，有些依赖本作没有的系统（封印/寿命/假死/化形…），
             # 印在卡上就是承诺做不到的事；它改为在「炼药」文本里标「原著：」。

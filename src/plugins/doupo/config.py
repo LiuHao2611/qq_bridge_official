@@ -694,6 +694,52 @@ for _r in RECIPES:
     _r.setdefault("src", "游戏自设丹方")
     _r.setdefault("need", {})
 
+# ============================================================================
+# 丹纹（2026-11-24）—— 开炉成功时按丹药品阶概率出纹，出纹产「丹名·丹纹」带纹丹。
+# 设计文档：docs/炼药模块优化_原著考据与设计_2026-11-24.md §10/§10.5。
+# 真源唯一：丹纹率只在这里定义；服丹赐福池在 danwen.py::BLESSINGS。
+# ============================================================================
+#: 丹纹触发概率（成功之后才掷）。低品高、高品低——原著「品阶越高越稀有」。
+DANWEN_BY_GRADE: dict[str, float] = {
+    "一品": 0.20, "二品": 0.18, "三品": 0.15, "四品": 0.12, "五品": 0.10,
+    "六品": 0.08, "七品": 0.06, "八品": 0.04, "九品": 0.02, "帝品": 0.01,
+}
+DANWEN_SUFFIX = "·丹纹"           # 带纹丹名后缀，背包按完整名计数
+DANWEN_CAP = 0.20                 # 任何品阶丹纹率硬顶
+
+
+def danwen_rate(grade: str) -> float:
+    """丹纹率（成功之后掷）。未列品阶显式 0.0，不用 or 兜底。"""
+    try:
+        v = float(DANWEN_BY_GRADE.get(str(grade), 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return min(DANWEN_CAP, max(0.0, v))
+
+
+# 带纹丹：不进 RECIPES / RECIPE_NAMES（丹方卡、宝库、名录都不出现），
+# 只注册到 RECIPE_BY_NAME（供 use_item 解析基础药效）与 DANWEN_RECIPE_NAMES
+# （供服丹口令匹配）。配方浅拷贝基础丹 + danwen 标记，服下时先走基础药效再挂赐福。
+DANWEN_RECIPE_NAMES: list[str] = []
+for _base in list(RECIPES):
+    _dn = str(_base["name"]) + DANWEN_SUFFIX
+    _r = dict(_base)                     # 浅拷贝 need/buy/src 等值；不修改原丹
+    _r["name"] = _dn
+    _r["danwen"] = True
+    _r["base_name"] = str(_base["name"])
+    RECIPE_BY_NAME[_dn] = _r
+    DANWEN_RECIPE_NAMES.append(_dn)
+
+
+def is_danwen_name(name: str) -> bool:
+    return str(name).endswith(DANWEN_SUFFIX)
+
+
+def base_of_danwen(name: str) -> str:
+    s = str(name)
+    return s[:-len(DANWEN_SUFFIX)] if s.endswith(DANWEN_SUFFIX) else s
+
+
 #: 炼药师品阶。下标 0..8 = 一品..九品（**老存档语义不变，绝不整体挪位**）。
 #: 2026-11-23 起新号从「未入品」起步（原著：萧炎开局连一品炼药师都不是）：
 #: 未入品用独立索引 ALCH_NONE=-1，绝不塞进 ALCHEMIST 表 —— 一塞就得把所有老存档

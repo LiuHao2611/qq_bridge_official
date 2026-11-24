@@ -1,0 +1,228 @@
+# -*- coding: utf-8 -*-
+"""丹纹赐福（danwen blessing）—— 最高丹纹丹药附带的限时/限次特殊加成。
+
+设计文档：``docs/炼药模块优化_原著考据与设计_2026-11-24.md`` §10.5。
+
+为什么单独一个模块
+------------------
+``core.py`` 长期贴着 200KB 提交红线；赐福的「随机抽取 / 次数扣减 / 命中注入」
+是一套独立纯逻辑，与 ``temp_buff``（分钟级五维百分比）互补：
+
+* ``temp_buff`` 管**限时属性**（B03/B04/B05 +25%/30 分钟，到期自然消失）；
+* 本模块管**限次战斗触发**（B01 前 3 击×2 / B02 首击必暴击 / B06 斗气回满 1 场）。
+
+红线
+----
+1. **加成给足、靠边界平衡**：用户明确「别低于 10%、给足」，所有效果 ≥ +20%；
+   平衡只靠「次数/时长」封顶，不靠削弱数值。
+2. **次数型不掷骰**：达成条件（服了带纹丹）就挂上，扣次数确定性；随机只在「掷哪条赐福」。
+3. **不写 ``p["bonus"]``**：限时属性走 temp_buff，次数型走 ``danwen_charges``，
+   都不污染永久加成（2026-11-18 假药事故同类坑）。
+4. **零值显式判空**：``n <= 0`` 视为无，禁止 ``or`` 兜底（0 是合法耗尽态）。
+5. 纯函数、零 IO、**不 import core / config**（core 会 import 本模块）。
+"""
+from __future__ import annotations
+
+import random
+import time
+
+#: 丹纹独立随机源——不碰战斗/成败注入的 rng，保证既有调用序列逐字节不变。
+_R = random.Random()
+
+#: 赐福池唯一真源。id 稳定（存档只存 id），改数值只改这里。
+#: kind=charges 走 danwen_charges；kind=timed 走 temp_buff.add。
+BLESSINGS: tuple[dict, ...] = (
+    {"id": "B01", "name": "焚天之威", "kind": "charges", "n": 3,
+     "desc": "每场战斗前 3 次出手伤害 ×2", "effect": "dmg_x2"},
+    {"id": "B02", "name": "一击必中", "kind": "charges", "n": 1,
+     "desc": "每场战斗首次技能伤害必定暴击", "effect": "crit_first"},
+    {"id": "B03", "name": "蛮牛之力", "kind": "timed", "key": "力量", "mul": 0.25,
+     "minutes": 30, "desc": "力量、斗气 +25%（30 分钟）", "effect": "stat_atk"},
+    {"id": "B04", "name": "疾风之势", "kind": "timed", "key": "敏捷", "mul": 0.25,
+     "minutes": 30, "desc": "敏捷、防御 +25%（30 分钟）", "effect": "stat_def"},
+    {"id": "B05", "name": "虎躯之固", "kind": "timed", "key": "体力", "mul": 0.30,
+     "minutes": 30, "desc": "气血上限 +30%（30 分钟）", "effect": "stat_hp"},
+    {"id": "B06", "name": "丹田盈溢", "kind": "charges", "n": 1,
+     "desc": "斗气上限 +20%，且下一场开战时斗气回满 1 次", "effect": "mp_refill"},
+)
+
+_BY_ID = {b["id"]: b for b in BLESSINGS}
+#: 限时型的第二属性键（B03 力量→斗气，B04 敏捷→防御）。
+_TWIN = {"B03": "斗气", "B04": "防御"}
+
+
+def get(bid: str) -> dict | None:
+    return _BY_ID.get(str(bid))
+
+
+def roll(grade: str, rng=None) -> bool:
+    """按品阶掷是否出纹。默认用独立源 _R（不动注入 rng，既有序列不变）；
+    单测传 rng 可钉死。config 延迟 import 避免环。"""
+    from . import config as cfg
+    r = _R.random if rng is None else rng
+    return r() < cfg.danwen_rate(grade)
+
+
+def pick(rng=None) -> dict:
+    """等权随机抽一条赐福（6 选 1）。rng 可注入，默认 random.random。"""
+    r = random.random if rng is None else rng
+    options = list(BLESSINGS)
+    return options[min(len(options) - 1, int(r() * len(options)))]
+
+
+def _charges(p: dict) -> dict:
+    c = p.get("danwen_charges")
+    if not isinstance(c, dict):
+        return {}
+    return c
+
+
+def attach(p: dict, blessing: dict, src: str, now=None) -> str:
+    """把一条赐福挂到玩家身上，返回给玩家的可见文案。
+
+    charges 型写 ``p["danwen_charges"][id] = {"n": n, "src": src}``（同名刷新取较大次数，
+    不叠加，防囤丹刷满）；timed 型交给调用方通过 ``timed_items()`` 写 temp_buff，
+    以免本模块 import temp_buff 形成环（其实 temp_buff 不 import 本模块，可安全调用，
+    但保持纯函数边界，显式由 core 落库更清晰）。
+    """
+    bid = str(blessing["id"])
+    if blessing["kind"] == "charges":
+        c = dict(_charges(p))
+        n = int(blessing.get("n", 1))
+        old = c.get(bid)
+        if isinstance(old, dict):
+            n = max(n, int(old.get("n", 0)))  # 同名刷新：取较大剩余次数，不累加
+        c[bid] = {"n": n, "src": str(src)}
+        p["danwen_charges"] = c
+    return blessing["desc"]
+
+
+def timed_items(p: dict, blessing: dict, now=None) -> list[tuple[str, float, float, str]]:
+    """返回限时型赐福要写进 temp_buff 的条目 ``(key, mul, minutes, src)``。
+
+    B03/B04 是双属性，返回两条；B05 单属性一条。由 core 统一调 temp_buff.add。
+    """
+    if blessing["kind"] != "timed":
+        return []
+    key = str(blessing["key"])
+    mul = float(blessing.get("mul", 0))
+    mins = float(blessing.get("minutes", 30))
+    src = str(blessing["name"])
+    out = [(key, mul, mins, src)]
+    twin = _TWIN.get(blessing["id"])
+    if twin:
+        out.append((twin, mul, mins, src))
+    return out
+
+
+def consume(p: dict, bid: str) -> bool:
+    """消耗一次 charges 型赐福；剩余耗尽则删键。返回是否还有有效的这次。"""
+    c = _charges(p)
+    e = c.get(str(bid))
+    if not isinstance(e, dict):
+        return False
+    n = int(e.get("n", 0))
+    if n <= 0:            # 显式判 0，不用 or 兜底
+        c.pop(str(bid), None)
+        p["danwen_charges"] = c
+        return False
+    e["n"] = n - 1
+    if e["n"] <= 0:
+        c.pop(str(bid), None)
+    p["danwen_charges"] = c
+    return True
+
+
+def has(p: dict, effect: str) -> bool:
+    """按 effect 类型查是否有可用次数（不改状态；真正扣减用 consume）。"""
+    for bid, e in _charges(p).items():
+        if not isinstance(e, dict) or int(e.get("n", 0)) <= 0:
+            continue
+        b = _BY_ID.get(str(bid))
+        if b and b.get("effect") == effect:
+            return True
+    return False
+
+
+def bid_of(p: dict, effect: str) -> str | None:
+    """返回持有某 effect 的赐福 id（供 consume 精确扣）。"""
+    for bid, e in _charges(p).items():
+        if not isinstance(e, dict) or int(e.get("n", 0)) <= 0:
+            continue
+        b = _BY_ID.get(str(bid))
+        if b and b.get("effect") == effect:
+            return str(bid)
+    return None
+
+
+def grant(p: dict, src_name: str, rng=None, add_fn=None) -> dict:
+    """服带纹丹后挂一条赐福，返回 ``{"id","name","desc","msg"}``。
+
+    ``add_fn(key, mul, minutes, src)`` 由 core 注入 temp_buff.add（避免本模块 import）。
+    次数型写 danwen_charges，限时型通过 add_fn 写 temp_buff。
+    """
+    b = pick(rng)
+    attach(p, b, src_name)
+    if add_fn is not None:
+        for key, mul, mins, src in timed_items(p, b):
+            add_fn(key, mul, mins, src)
+    return {"id": b["id"], "name": b["name"], "desc": b["desc"]}
+
+
+def fight_state(p: dict) -> dict:
+    """战斗开场取赐福快照（局部计数，命中时由 core 调 consume 写回 p）。
+
+    ``crit``=本场还有几次必暴击，``dmg_x2``=本场还有几次伤害×2，
+    ``mp_refill``=本场是否斗气回满。次数型赐福跨场保留，这里只是本场可用量。
+    """
+    def _n(effect):
+        bid = bid_of(p, effect)
+        if not bid:
+            return 0
+        e = _charges(p).get(bid, {})
+        return int(e.get("n", 0)) if isinstance(e, dict) else 0
+    return {"crit": min(1, _n("crit_first")), "dmg_x2": _n("dmg_x2"),
+            "mp_refill": _n("mp_refill") > 0}
+
+
+def sweep(p: dict) -> bool:
+    """清掉坏数据（非 dict / 次数 <=0 / src 空），返回是否改过 p。镜像 temp_buff.sweep。"""
+    c = p.get("danwen_charges")
+    if not isinstance(c, dict):
+        if c is not None:
+            p.pop("danwen_charges", None)
+            return True
+        return False
+    kept = {}
+    for bid, e in c.items():
+        if not isinstance(e, dict):
+            continue
+        try:
+            n = int(e.get("n", 0))
+        except (TypeError, ValueError):
+            continue
+        if n <= 0 or bid not in _BY_ID:
+            continue
+        kept[bid] = e
+    if kept != c:
+        if kept:
+            p["danwen_charges"] = kept
+        else:
+            p.pop("danwen_charges", None)
+        return True
+    return False
+
+
+def lines(p: dict) -> list[str]:
+    """人物卡/背包可见：「🔥 焚天之威 · 剩 3 击」。"""
+    out = []
+    for bid, e in _charges(p).items():
+        if not isinstance(e, dict):
+            continue
+        n = int(e.get("n", 0))
+        if n <= 0:
+            continue
+        b = _BY_ID.get(str(bid))
+        if b:
+            out.append("🔥 %s · 剩 %d 次" % (b["name"], n))
+    return out

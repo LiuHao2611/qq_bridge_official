@@ -18,7 +18,7 @@ import time
 
 from . import config as cfg
 from . import doupo_text as txt
-from . import flame_bonus as _flame_bonus, temp_buff as tb
+from . import flame_bonus as _flame_bonus, temp_buff as tb, danwen as dw
 from . import flame_drop as _fdrop
 from .flame_drop import s_flame_gate  # noqa: E402  纯函数外迁，保持 core.s_flame_gate 入口
 from . import factions as fac
@@ -1014,10 +1014,8 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
         raw = st["力量"] * float(cfg.WEAPON_BASE_MULT)
         kind = "普攻"
     raw *= root   # 根基虚浮 → 实际输出打折；适量丹药 root=1 逐字节不变
-    # 2026-11-20 修真 bug：BOSS 的 debuff_atk 通过 fx.on_hit 挂到玩家的 fx_self，
-    # 但旧版只在怪出手时读 target_atk_mult(m_fx)，玩家出手从不读自己的 p_fx，
-    # 于是"降攻"只显示在文案里、不真降伤害。这里按 self 侧的降攻打折；
-    # 无降攻时倍率恒 1.0，普通战斗逐字节不变。
+    # 11-20 修：降攻此前只显示文案不真降伤害（玩家出手从不读 p_fx）；
+    # 这里按 self 侧降攻打折，无降攻恒 1.0 → 普通战斗逐字节不变。
     if fx_self is not None:
         raw *= fx.target_atk_mult(fx_self)
 
@@ -1029,17 +1027,10 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     notes: list[str] = []
     heal_ratio = 0.0
     dmg = base
-    # 2026-11-20 修真 bug：**目标侧的闪避从没被结算过**。
-    # 玩家打怪时只算了防御减伤，怪身上挂着「身法」也不会闪；于是
-    # ① 怪物的 evade 类效果纯文案，② 玩家 7 门「控场·压闪避」斗技
-    # （凶熊碎地拳 / 青湮剑罡 / 湮幻刺 / 气化天地 / 邪风斩 / 光耀印 /
-    # 千幻玄冰刺）压了个不存在的属性 → 等于只加了描述。
-    # 现在补上：目标闪避 = 自身 evade + 被压制的量（debuff_evade 为负）。
-    # 位置在 on_hit **之前**：闪掉了就不该挂毒/降攻（miss 不产生命中效果）。
-    # 2026-11-20 命中对冲：攻击方的命中（``atk_hit``，%）直接减在目标闪避上，
-    # 与「玩家躲怪」是同一条公式的另一半（见 cfg 的 HERO_HIT/MON_* 注释）。
-    # ``atk_hit`` 默认 0.0 → PVP(duel) 与既有调用方的阈值逐字节不变。
-    # ⚠️ t_ev<=0 时**不掷骰**，所以普通战斗的 rng 序列逐字节不变。
+    # 11-20 修：目标闪避此前从没结算（怪 evade 纯文案、7 门压闪避斗技只加描述）。
+    # 目标闪避 = evade + 压制量(负)；位置在 on_hit 前，闪掉则不挂毒/降攻。
+    # 命中对冲：atk_hit(%) 减在目标闪避上，与「玩家躲怪」同一公式另一半；
+    # 默认 0 → PVP 逐字节不变；t_ev<=0 不掷骰 → 普通战斗 rng 序列不变。
     if fx_target is not None:
         t_ev = max(0.0, float(fx_target.get("evade", 0))
                    + fx.target_evade_delta(fx_target)
@@ -1358,6 +1349,10 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     hp = int(p.get("hp") or st["体力"])
     # 开战沿用当前斗气（结转），不再无条件满蓝；clamp 到上限防越界存档。
     mp = max(0, min(mp_max(p), int(p.get("mp", mp_max(p)))))
+    # 丹纹赐福：本场快照；斗气回满型开战生效一次
+    _dw = dw.fight_state(p)
+    if _dw["mp_refill"] and dw.consume(p, "B06"):
+        mp = mp_max(p)
     m_hp = int(mon["hp"])
     m_atk = int(mon["atk"])
     m_def = int(mon["def"])
@@ -1372,16 +1367,14 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     rounds, dmg_log, taken = 0, [], 0
     # 2026-11-19 战斗事件状态（全是本场局部变量，绝不写回存档）
     locked_set = set(locked or ())
-    #: 自动服药计数。多敌遭遇战由 encounter 传**同一份**预算进来，
-    #: 否则 5 连战会每战各嗑 2 枚、一场吃掉 10 枚家底。
+    #: 自动服药计数。多敌遭遇由 encounter 传同一份预算，防 5 连战各嗑 2 枚。
     pill_used = pill_budget if pill_budget is not None else {"hp": 0, "mp": 0}
-    # ⚠️ 不能用 `or`：cap=0 是「本场一颗都不许自动吃」的合法意图，而 0 是 falsy，
-    # 会静默回落成默认 2 颗（2026-11-20 第十轮：遗迹连打想封 0 时发现封不住）。
+    # ⚠️ 不能用 or：cap=0 是合法「一颗不吃」，0 是 falsy 会回落默认 2 颗。
     pill_cap = (int(pill_used["cap"]) if "cap" in pill_used
                 else int(cfg.AUTO_PILL_MAX_PER_FIGHT))
     fortune_left = 0
     fortune_seen = False
-    fortune_round = 0       # 福利发放的回合号（当回合不递减，否则 1 回合福利只剩半程）
+    fortune_round = 0       # 发放回合号（当回合不递减）
     exhausted = False
     _kind = str(mon.get("kind") or "")
 
@@ -1548,11 +1541,16 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         if int(p_fx.get("silence", 0)) > 0 or _pfx_start["skip"]:
             entry, cost = None, 0
         m_ctx["target_hp_ratio"] = m_hp / max(1, mon["hp"])
+        _ca = crit_add + (100 if (_dw["crit"] and entry is not None) else 0)
+        if _ca != crit_add and dw.consume(p, "B02"):
+            _dw["crit"] = 0
         hit = _hit(p, m_def, entry, rng, p_fx, m_fx, m_ctx,
-                   crit_add=crit_add, extra_effects=self_effects, atk_hit=p_hit)
-        # 心火共鸣：玩家 1~2 回合增伤（承伤减免在怪击那段）
-        # 注意**不在这里递减**：递减放在本回合双方都行动完之后，否则 1 回合的
-        # 共鸣只有增伤吃到、减伤吃不到（怪行动时计数已经归零）。
+                   crit_add=_ca, extra_effects=self_effects, atk_hit=p_hit)
+        # 丹纹赐福·焚天之威：前 N 次出手伤害 ×2（命中才扣次数）
+        if _dw["dmg_x2"] > 0 and hit["dmg"] > 0 and dw.consume(p, "B01"):
+            hit["dmg"] *= 2; _dw["dmg_x2"] -= 1; hit["danwen_x2"] = True
+        # 心火共鸣：玩家 1~2 回合增伤（承伤减免在怪击那段）。
+        # 不在本处递减，放回合双方行动完，保证增减伤同进同出。
         if fortune_left > 0:
             hit["dmg"] = max(1, int(hit["dmg"] * float(cfg.FORTUNE_DMG_MULT)))
             hit["fortune"] = True
@@ -3123,6 +3121,10 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         p["alch_exp"] = int(p.get("alch_exp", 0)) + cfg.CRAFT_EXP
         up = _alch_level_up(p)
         res = {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
+        # 丹纹：成功之后按品阶掷，命中额外产一枚带纹丹（服用给随机赐福）
+        if dw.roll(rec.get("grade", "")):
+            add_item(p, name + cfg.DANWEN_SUFFIX, 1)
+            res["danwen"] = True
         if _danhui > 0:
             res["danhui"] = round(_danhui, 4)
         return res
@@ -3196,7 +3198,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     exp_factor = cfg.low_grade_exp_factor(p.get("alch", 0), grade_idx)
     mp_per = max(1, int(mp_max(p) * cfg.CRAFT_MP_PER))
 
-    n_done = n_ok = n_fail = 0
+    n_done = n_ok = n_fail = n_danwen = 0
     exp = 0
     limited = ""
     _is_high = (grade_idx >= cfg.alch_grade_idx(cfg.PUPPET_HIGH_GRADE_FROM))
@@ -3221,6 +3223,10 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
             if _is_high:
                 p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
             exp += int(cfg.CRAFT_EXP * exp_factor)
+            # 丹纹：每炉成功独立掷，命中额外产带纹丹
+            if dw.roll(rec.get("grade", "")):
+                add_item(p, name + cfg.DANWEN_SUFFIX, 1)
+                n_danwen += 1
         else:
             add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
             n_fail += 1
@@ -3235,6 +3241,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     p["last_craft"] = now_ts
     return {"ok": True, "name": name, "rate": rate, "diff": diff,
             "n": n, "n_done": n_done, "n_ok": n_ok, "n_fail": n_fail,
+            "n_danwen": n_danwen,
             "exp": exp, "exp_factor": exp_factor, "mp_used": mp_per * n_done,
             "mp_left": int(p.get("mp", 0)), "dross": cfg.CRAFT_FAIL_DROSS * n_fail,
             "alch_up": alch_up, "alch": int(p.get("alch", 0)),
@@ -3255,19 +3262,20 @@ def _advance_one(p) -> int:
     return p["lv"]
 
 
-def use_item(p, name, used_counts=None, rng=random.random) -> dict:
-    """服用丹药 / 炼化天材地宝（2026-11-18 材料不再是背包摆设）。
-
-    解析优先级：先按丹药配方，未命中再按天材地宝表。两者的 effect/value 走同一
-    结算分支（hp/mp/exp/luck/dodge/crit/stat/skill/breakthrough），只对 ``msg``
-    前缀做区分——既有丹药的 reason/msg 文案逐字不变，既有测试与安全网关不受影响。
-
-    ``used_counts``（2026-11-18 破境丹）：``{境界下标: 已服次数}``，由命令层从
-    ``pill_use`` 表读出后传入，用来判「一阶限 N 枚」（原著抗性）。默认 None = 不做
-    次数限制（既有单测/脚本调用行为逐字节不变）。
-
-    ``rng``：升星判定用的随机源，默认 ``random.random``，便于单测钉死概率。
-    """
+def use_item(p, name, used_counts=None, rng=random.random, _skip_take=False) -> dict:
+    """服丹/炼化。effect 分支与 msg 前缀沿用旧口径，既有测试逐字不变。
+    used_counts=破境丹一阶限次；rng 可注入；_skip_take 内部递归用（带纹丹）。"""
+    # 丹纹带纹丹：扣带纹丹 → 按基础丹执行药效 → 成功后挂随机赐福
+    if cfg.is_danwen_name(name):
+        if not take_item(p, name, 1):
+            return {"ok": False, "reason": "none"}
+        _base = cfg.base_of_danwen(name)
+        res = use_item(p, _base, used_counts=used_counts, rng=rng, _skip_take=True)
+        if res.get("ok"):
+            g = dw.grant(p, name, rng=rng, add_fn=lambda k, m, mi, s: tb.add(p, k, m, mi, s))
+            res["msg"] += "\n" + txt.danwen_grant(g["name"], g["desc"])
+            res["danwen"] = g
+        return res
     rec = cfg.RECIPE_BY_NAME.get(name)
     is_material = False
     if not rec:
@@ -3300,7 +3308,7 @@ def use_item(p, name, used_counts=None, rng=random.random) -> dict:
     if (eff == "hp" and int(p.get("hp", 0)) >= int(st["体力"])) or \
             (eff == "mp" and int(p.get("mp", 0)) >= mp_max(p)):
         return {"ok": False, "reason": "full", "pill": name}
-    if not take_item(p, name, 1):
+    if not _skip_take and not take_item(p, name, 1):
         return {"ok": False, "reason": "none"}
 
     eff, val = rec["effect"], int(rec["value"])

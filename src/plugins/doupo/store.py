@@ -40,6 +40,7 @@ import sqlite3
 import time
 
 from . import temp_buff as _tbuff
+from . import danwen as _danwen
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -452,7 +453,10 @@ class Store:
         所以「到期」不需要任何定时器。纯本地计算，失败只留痕、不拦读取。
         """
         try:
-            if _tbuff.sweep(p):
+            changed = _tbuff.sweep(p)
+            if _danwen.sweep(p):
+                changed = True
+            if changed:
                 await self.put_player(p)
         except Exception as e:  # noqa: BLE001
             _log("warning", "限时增益清扫失败（%s）：%s" % (type(e).__name__, str(e)[:160]))

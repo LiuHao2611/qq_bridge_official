@@ -510,6 +510,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "连炼：发「炼制 回灵丹 5次」一次开5炉，各炉独立成败，整批只占一次冷却",
         "连炼耗斗气、按实有药材收炉；低阶丹经验递减，七品以上须实战历练升灵魂境界",
         "失败给药渣，药渣喂异火；丹名前〔回斗气〕〔回血〕为功效标签",
+        "丹纹：成功时按品阶概率出纹（一品20%递减至帝品1%），出纹多得一枚带纹丹",
+        "带纹丹服下除本效外另得随机赐福：焚天之威(前3击伤害×2)/一击必中(首技必暴击)/"
+        "蛮牛之力(力+斗气+25%)/疾风之势(敏+防+25%)/虎躯之固(血+30%)/丹田盈溢(斗气回满)，"
+        "全部限次或限时30分钟，给足但不过量",
     )),
     ("异火", (
         "青莲地心火 斗气槽+25%/级；陨落心炎 经验+50%/级；",
@@ -1748,6 +1752,8 @@ async def cmd_craft(store, qq, name) -> str:
         return txt.craft_fail_plain()
     _grade = str(cfg.RECIPE_BY_NAME.get(hit, {}).get("grade") or "")
     msg = txt.craft_success(hit, _grade, cfg.rate_cn(res["rate"]))
+    if res.get("danwen"):
+        msg += "\n" + txt.craft_danwen(hit, 1)
     if over:
         msg += "\n" + over_hint.rstrip("\n")
     if res.get("alch_up"):
@@ -1789,6 +1795,8 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
     if res.get("exp_factor", 1.0) < 1.0:
         detail += f"（低阶丹，经验{cfg.rate_cn(res['exp_factor'])}计）"
     lines.append(detail)
+    if res.get("n_danwen"):
+        lines.append(txt.craft_danwen(hit, int(res["n_danwen"])))
     lines.append(f"　斗气 -{res['mp_used']}（余{res['mp_left']}）")
     if res.get("limited") in ("mat", "mp"):
         lines.append(txt.craft_batch_limited(res["limited"]))
@@ -2011,7 +2019,8 @@ async def cmd_use(store, qq, name) -> str:
     # 2026-11-18：丹药 + 天材地宝统一走「服丹/炼化」入口，材料也有实际作用。
     # 先精确匹配（防「复灵紫丹」被「复紫灵丹」的子串抢先命中），再宽松匹配。
     # 2026-11-23：别名（复紫灵丹）也要能被点到，否则老存档里的丹成了无主物品。
-    pool = list(cfg.RECIPE_NAMES) + list(cfg.RECIPE_ALIAS) + list(cfg.MATERIAL_NAMES)
+    pool = (list(cfg.RECIPE_NAMES) + list(cfg.RECIPE_ALIAS)
+            + list(cfg.MATERIAL_NAMES) + list(cfg.DANWEN_RECIPE_NAMES))
     hit = name if name in pool else next(
         (n for n in pool if name in n or n in name), None)
     if not hit:
