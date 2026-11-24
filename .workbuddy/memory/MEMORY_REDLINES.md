@@ -47,3 +47,13 @@
 ## 13. 遗迹固定难度 + 后台战力推荐（2026-11-22，用户二选一定稿）
 🚨 **难度唯一真值 = 每段后台 `power_rec`**，怪由 `core.ruin_scaled_monster(sg,...)` 按 `core.ruin_ref_lv(power_rec)` 的**标尺玩家**反解，与真人战力无关（斗尊打斗宗段=真碾压）。回退 `monster_scaled(p,...)`=自适应=永远没碾压感 ⇒ E2E 守门红。`power_rec==power(tower_ref_player(该段 lv))` 非手拍常数，**后台字段绝不展示前台**。傀儡 bonus 也按标尺算（同 tower_floor），真人强傀儡在 fight 全额出手=净收益。守门 `test_doupo_ruin_fixed.py`206（含 E2E 走真命令比对不同等级落库 foe_hp_max——白盒只测 helper 会被 mutant 骗过）。
 🚨 **残血暴毙是正常设计不许修**：用户原话「残血就残血，只要不是BUG，残血就应该自动吃药，没药吃就等死，这是正常的」。连打跨段结转 hp/mp + 服药整趟共用 `pill_budget`(cap=2) + 战败即停三件套原样；禁加段间回满血/`_refill(p)`/提高药预算。
+
+## 14. 兽火/异火两类身份 + 入道零送火（2026-11-24，用户「送异火不合原著」）
+🚨 **入道/转宗绝不送火**：`STARTER_FLAME=""`、`FACTION_FLAME_GRANT={}`。原著异火极稀有，白送=毁设定。禁任何"新手福利/补偿"式恢复送火（`test_doupo_flame_beast.py` 有守门用例）。
+🚨 **火焰身份只有两类**：异火 = `FLAME_NAMES + BONUS_FLAME_NAMES + FUSION_FLAMES`（琉璃莲心火/三千莲心火 属异火）；兽火 = `BEAST_FLAMES`（8 朵）。禁再出现"天然火/人造火/融合火/其他火焰"分类（玩家可见文案守门）。`p["flames"][name]` 是唯一真值，禁新增玩家字段。阳火/化生火数据已删，台账留 `docs/九星突破BOSS战与火焰掉落_2026-11-19.md`；`化生火` 只剩**弄焰诀技能文案**（原著第一百四十章，不入 `p["flames"]`），别当残留删掉。
+🚨 **引火通道不许并进普通炼药率**：`BEAST_SEAL_RATE=0.70`，兽火单方不吃 `craft_rate_for` 越阶惩罚。原因：新号 `alch=ALCH_NONE(-1)`、紫火丹四品越 4 档 = `0.5×0.05=0.025`，与"空火禁炼药"互锁 → 第一朵火永远炼不出。入口唯一 `config.rate_for_recipe(p, rec, flame_bonus)`，`craft`/`craft_batch` 共用（禁双真源）。
+🚨 **掉落门槛唯一**：`YIHUO_DROP_MIN_REALM=7`（斗宗）。realm<7 → 兽火池 500‰(50%)；realm≥7 → 异火池 1000‰(必得)。两池都按 realm 梯度（`BEAST_DROP_POOL` 0/2/4/6；`YIHUO_DROP_POOL` 7/9），禁"全池随机"（会 1 级掉血妖焰火）。野外 `MONSTER_FLAME` 由 `MONSTERS.flame` 汇总，禁另抄一份表；血妖焰火无单一魔兽（近千火魔兽血凝），只能单方/异火档。
+🚨 **幻金火无原著出处**（语料 0 命中）→ 必须 `game_only=True` + 标"游戏原创"，**禁编章节号**。紫晶翼狮王六阶(131章)/奎木兽五阶(216章)/海魔兽七阶(1075章) 有语料可引。
+🚨 **宝库必须分两卡**：93 种挤一卡 4744px > 3600 上限不可读。按 `HERB_BY_NAME.src` 前缀 `"兽火单方"` 分（基础 65／兽火 28），入口「宝库 兽火」；`test_card` 守两卡高度。
+⚠️ **测试解释器**：PATH 上 `python` 是 3.13.12.old（无 pytest）。用 `/c/Users/L/AppData/Local/Programs/Python/Python313/python.exe`。`src/plugins/doupo/test_*.py` 是**自跑脚本**（`python 文件`），pytest 收集必报 NoneBot 未初始化。
+⚠️ **`tmp/push_incremental.py` 文件模式**：已改读 `git ls-files -s`（原 `os.access(X_OK)` 在 Windows 恒真 → `.txt` 被推成 100755，远端 tree 与本地永久不等）。有第 2 参可指定 parent，重做误推时不叠噪音提交；`/git/commits/{sha}` **必须全 SHA**（短 SHA 404）。
