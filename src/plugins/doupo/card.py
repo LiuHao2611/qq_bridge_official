@@ -500,6 +500,9 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
     # novel 章节引文只用于离线核验，绝不进卡片。有来源就加、没有就不加。
     phrase = fx.source_phrase(e)
     lv = max(1, min(5, int(sk.get(name, 1))))
+    #: 2026-11-25 用户「等级展示改成解包游戏里发光/不发光的小元素」：
+    #: 合并卡模板把 meta 末尾的 ``LvN`` 换成 5 段等级条（亮 N 段 + 暗 5-N 段）。
+    #: 结构化字段给模板和测试用；纯文本兜底仍保留 ``LvN`` 字样。
     return {
         # 全局序号（1-based，按卡片显示顺序 = core.skill_pool_sorted）。
         # 玩家可直接发「上阵 1 3 5 7」按序号上阵，无需手打技名。
@@ -525,6 +528,8 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
         "has_source": bool(phrase),
         "chips": chips,
         "gate": str(e.get("gate") or ""),
+        # 技能等级（仅 show_lv=True 的合并卡有意义；宗门池卡恒 None 不画条）
+        "lv": lv if show_lv else None,
         # ---- 兼容通用列表卡 / 既有测试的扁平字段 ----
         "title": name,
         "right": state,

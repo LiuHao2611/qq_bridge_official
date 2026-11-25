@@ -71,6 +71,8 @@ QQ 聊天窗显示宽度固定，卡片越宽被压得越狠（1080 宽缩到 72
 """
 from __future__ import annotations
 
+import re
+
 from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
@@ -323,6 +325,50 @@ def _meta_lines(row: dict, inner_w: int) -> list[str]:
         else:
             out.extend(Canvas.wrap(ln, FS_META, "regular", max(60, inner_w)))
     return out or [""]
+
+
+#: 斗技等级条（2026-11-25 用户要求照解包游戏实机截图做亮/暗小元素）：
+#: 实机「斗技」面板每门技能名下方是 5 段横条 —— 琥珀发光 = 已升到的等级，
+#: 暗灰描边 = 未达到。这里画在副行末尾，替换掉原本的纯文本 ``LvN``。
+LV_SEG_N = 5
+LV_SEG_GAP = 2
+LV_SEG_H = 8
+#: 色值取自解包实证（2026-11-25 只读调研 `D:\AI\doupo`，未改动任何素材）：
+#: * 亮态 = `实机截图合集.png` 斗技面板等级条主色，采样 #FFAF41/#FF9E3A/#F39436；
+#: * 暗态 = `src/l.java:1922` 的 `setColor(4344419)` = 0x424A63，
+#:   截图采样 #434B64，高光 #4B5470。亮暗两态与游戏同一色系。
+LV_LIT = "#FF9E3A"
+LV_LIT_EDGE = "#FFE08A"
+LV_GLOW = "#FFAF41"
+LV_DARK = "#424A63"
+LV_DARK_EDGE = "#4B5470"
+
+
+def _lv_token(line: str):
+    """副行末尾的 ``LvN`` → (原文, 等级, 起点下标)；没有则返回 None。"""
+    m = re.search(r"(?:^| · )(Lv([1-5]))$", str(line or ""))
+    return (m.group(1), int(m.group(2)), m.start(1)) if m else None
+
+
+def _draw_lv_bar(c: Canvas, x: int, cy: int, lv: int) -> int:
+    """画 5 段等级条，返回实际宽度（= 被替换的「 · LvN」实测宽，布局不漂移）。"""
+    total = _w(" · Lv%d" % lv, FS_META, "regular")
+    seg = max(4, (total - (LV_SEG_N - 1) * LV_SEG_GAP) // LV_SEG_N)
+    top = cy - LV_SEG_H // 2
+    for i in range(LV_SEG_N):
+        x0 = x + i * (seg + LV_SEG_GAP)
+        box = (x0, top, x0 + seg, top + LV_SEG_H)
+        if i < lv:
+            # 发光两层：外层半透明琥珀晕 + 内层实底 + 顶边高光
+            c.rounded_rect((x0 - 1, top - 1, x0 + seg + 1, top + LV_SEG_H + 1),
+                           radius=2, fill=LV_GLOW, fill_alpha=70)
+            c.rounded_rect(box, radius=2, fill=LV_LIT, outline=LV_LIT_EDGE, width=1)
+            c.line((x0 + 1, top + 1, x0 + seg - 1, top + 1),
+                   fill=LV_LIT_EDGE, width=1)
+        else:
+            c.rounded_rect(box, radius=2, fill=LV_DARK, outline=LV_DARK_EDGE,
+                           width=1)
+    return seg * LV_SEG_N + LV_SEG_GAP * (LV_SEG_N - 1)
 
 
 def _row_texts(row: dict, inner_w: int) -> dict:
@@ -579,8 +625,20 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             cy = iy + H_NAME + GAP_NAME_META
             meta_lines = t_["meta_lines"] or [""]
             for mi, ml in enumerate(meta_lines):
-                stext("%s.meta%d" % (name, mi), ix_text,
-                      cy + mi * H_META + H_META // 2, ml, FS_META, p["dim_color"])
+                ly = cy + mi * H_META + H_META // 2
+                tok = _lv_token(ml) if row.get("lv") is not None else None
+                if tok:
+                    lv_txt, lv, cut = tok
+                    head = str(ml)[:cut].rstrip()
+                    if head:
+                        stext("%s.meta%d" % (name, mi), ix_text, ly, head,
+                              FS_META, p["dim_color"])
+                    hx = ix_text + (_w(head, FS_META, "regular") if head else 0)
+                    _draw_lv_bar(c, hx, ly, lv)
+                    rec("%s.lv" % name, lv_txt, hx, ly, FS_META, "regular", "lm")
+                else:
+                    stext("%s.meta%d" % (name, mi), ix_text, ly, ml,
+                          FS_META, p["dim_color"])
             cy += H_META * len(meta_lines)
 
             # ---- 完整技能描述（用户明确要求：不许只放 brief 一句）----

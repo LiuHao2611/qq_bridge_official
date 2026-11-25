@@ -657,6 +657,48 @@ class _MemStore:
         self.p = p
 
 
+def test_merged_card_level_uses_glowing_game_style_bar():
+    """2026-11-25 用户「等级展示改成解包游戏里发光和不发光的小元素」。
+
+    守三件事：① 合并卡行带结构化 ``lv``；② 模板真的画出 ``<技名>.lv`` 盒；
+    ③ 实图像素上第一段是暖色发光、末段是暗色未点亮（不是把 LvN 糊回文字）。
+    """
+    import importlib
+
+    pic = card._load_pic()
+    assert pic is not None
+    tpl = importlib.import_module(card._PKG_NAME + ".templates.doupo_roster")
+    theme = importlib.import_module(card._PKG_NAME + ".theme").get("light")
+
+    def sample(level: int):
+        p = _p(lv=45)
+        p["skills"] = {e["name"]: level for e in core.skill_pool(p)}
+        data = card.build_learned_data(p)
+        rows = [r for g in data["groups"] for r in g["rows"] if r.get("lv")]
+        assert rows, "合并卡没透出技能等级"
+        assert all(r["lv"] == level for r in rows), "等级字段没跟着玩家存档走"
+        boxes: list[tuple] = []
+        c = tpl.build(theme, data=data, width=720, boxes=boxes)
+        name = rows[0]["name"]
+        hit = [b for b in boxes if b[0] == name + ".lv"]
+        assert hit, "模板没画等级条（%s.lv 盒缺失）" % name
+        _, bx, by0, _, by1 = hit[0]
+        total = tpl._w(" · Lv%d" % level, tpl.FS_META, "regular")
+        seg = max(4, (total - (tpl.LV_SEG_N - 1) * tpl.LV_SEG_GAP)
+                  // tpl.LV_SEG_N)
+        cy = (by0 + by1) // 2
+        at = lambda i: c.img.getpixel(
+            (bx + i * (seg + tpl.LV_SEG_GAP) + seg // 2, cy))[:3]
+        return at(0), at(tpl.LV_SEG_N - 1)
+
+    first, last = sample(1)
+    assert first[0] > first[2] + 40, "第一段没发光成琥珀色：%s" % (first,)
+    assert sum(last) < sum(first), "1 级时末段仍是亮的（暗态没画）：%s/%s" % (
+        first, last)
+    first5, last5 = sample(5)
+    assert last5[0] > last5[2] + 40, "5 级时末段没点亮：%s" % (last5,)
+
+
 # runner
 # ---------------------------------------------------------------------------
 def _run_all():

@@ -188,6 +188,8 @@ def test_debuff_atk_reduces_monster_damage_in_fight():
     assert fx.target_atk_mult(st) < 0.7, "降攻未被状态记录"
     # 反证：fight 结算必须读它（源码接线守门，防「状态写了没人用」复发）
     import inspect
+    # 2026-11-25 fight 实现外迁到 battle_core.py，core.fight 是同名 re-export；
+    # inspect.getsource 会跟着函数对象走到 battle_core，守门口径不变。
     src = inspect.getsource(core.fight)
     assert "target_atk_mult(m_fx)" in src, "fight 未把降攻接进怪的伤害公式"
 
@@ -213,8 +215,13 @@ def test_debuff_heal_reduces_lifesteal():
               fx.new_state(), st, 100, lambda: 0.01)
     assert fx.heal_mult(st) <= 0.51, "减疗未被记录"
     import inspect
-    src = inspect.getsource(core)
-    assert src.count("fx.heal_mult(") >= 3, "减疗未接进 PVE/PVP 回血公式"
+    from doupo import battle_core  # 2026-11-25 PVE 战斗内核外迁
+    # 两边都要守：PVE 在 battle_core.fight，PVP 在 core.duel。
+    # 旧写法只数 core 一处，fight 迁出后会假红；改成分别断言，强度只增不减。
+    src_pvp = inspect.getsource(core)
+    src_pve = inspect.getsource(battle_core)
+    assert src_pvp.count("fx.heal_mult(") >= 1, "减疗未接进 PVP(duel) 回血公式"
+    assert src_pve.count("fx.heal_mult(") >= 1, "减疗未接进 PVE(fight) 回血公式"
 
 
 def test_silence_blocks_skill_and_expires():
@@ -227,8 +234,11 @@ def test_silence_blocks_skill_and_expires():
     fx.expire_turn(st)
     assert int(st["silence"]) == 0, "禁技到期未清零（会永久生效）"
     import inspect
-    src = inspect.getsource(core)
-    assert src.count('fx.get("silence", 0)') >= 3, "禁技未接进 fight/duel 选技"
+    from doupo import battle_core  # 2026-11-25 PVE 战斗内核外迁
+    src_pvp = inspect.getsource(core)
+    src_pve = inspect.getsource(battle_core)
+    assert src_pvp.count('fx.get("silence", 0)') >= 1, "禁技未接进 PVP(duel) 选技"
+    assert src_pve.count('fx.get("silence", 0)') >= 1, "禁技未接进 PVE(fight) 选技"
 
 
 def test_cond_flags_derive_from_real_battle_state():
