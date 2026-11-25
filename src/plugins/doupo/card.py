@@ -878,6 +878,11 @@ def build_bag_data(p: dict, locked=None) -> dict:
         标「一纹/二纹/三纹」，几纹就写几（``corner_tr``）；
       * **锁定不写前缀**：左上角一个「锁」字（``corner_tl``），别把名字挤掉。
 
+    🚨 2026-11-25 用户明确：「别改我背包的丹药展示效果，那是我的独特设计，只是让你
+    改口令和命名，不要改其他的。」⇒ **物品真名**（存档键 / 口令输入）是前缀式
+    ``一纹破厄丹``；但**背包格子里的展示**仍是他定的那一套 —— 基础丹名 + 右上角
+    金色光晕纹字角标。两者不是一回事，别再"统一"成一种（会把他的设计删掉）。
+
     丹药说明与 ``cmd_bag`` 同源，走 ``cfg.recipe_impl`` —— 卡面只印「本作真会
     发生的事」；直接用 ``desc``（原著承诺）会违反 2026-11-18 的诚实契约。
     """
@@ -889,11 +894,15 @@ def build_bag_data(p: dict, locked=None) -> dict:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items:
-        # 2026-11-25：带纹丹改成**档位前置**（`一纹破厄丹`），名字本身已经说明几纹，
-        # 右上角不再重复挂「一纹」角标（同一信息画两遍 = 噪音），只保留左上「锁」。
-        shown = name
+        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
+        # 显示名一律剥掉丹纹后缀（用户：丹药名称不要变），纹数交给右上角角标
+        shown = cfg.base_of_danwen(name) if tier else name
         row = {"title": f"{shown} ×{n}", "sub": known.get(name) or known.get(shown, "")}
-        if name in locked:
+        if tier:
+            row["corner_tr"] = cfg.DANWEN_TIERS[min(3, tier) - 1]
+            row["sub"] = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
+        # 锁定：只认真正被锁的那个名字（普通丹与带纹丹是两件独立的物品）
+        if name in locked or shown in locked:
             row["corner_tl"] = "锁"
         rows.append(row)
     return {

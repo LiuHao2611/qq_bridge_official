@@ -1896,13 +1896,17 @@ async def cmd_bag(store, qq) -> str:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
-    # 2026-11-25：带纹丹改为**档位前置**（`一纹破厄丹`），名字自带纹数，
-    # 不再需要「基础名 + 括号纹数」那套补偿写法。
+    # 2026-11-25 用户：「别改我背包的丹药展示效果，那是我的独特设计，只是让你改
+    # 口令和命名」。所以真名虽是前缀式（一纹破厄丹），文本展示仍按他定的老样子：
+    # 基础丹名 + 括号纹数，不把「一纹」塞进名字里。
     for i, (name, n) in enumerate(items, 1):
-        mark = "🔒" if (name in locked) else ""
-        out.append(f"　[{i}] {mark}{name} ×{n}")
-        if name in known:
-            out.append(f"　　　{known[name]}")
+        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
+        shown = cfg.base_of_danwen(name) if tier else name
+        mark = "🔒" if (name in locked or shown in locked) else ""
+        tail = f"（{cfg.DANWEN_TIERS[min(3, tier) - 1]}）" if tier else ""
+        out.append(f"　[{i}] {mark}{shown} ×{n}{tail}")
+        if name in known or shown in known:
+            out.append(f"　　　{known.get(name) or known[shown]}")
     out.append("")
     out.append("　用法：服丹 回灵丹　｜　查看 回灵丹 看详情　｜　"
                "锁定 回灵丹（锁定后战斗不会自动服用）")
