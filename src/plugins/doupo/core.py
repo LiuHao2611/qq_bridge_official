@@ -2972,6 +2972,26 @@ def bag(p) -> dict:
     return p.setdefault("bag", {})
 
 
+def migrate_danwen_bag(p) -> list[tuple[str, str]]:
+    """把旧后缀带纹丹（``破厄丹·丹纹``）改名成新前缀名（``一纹破厄丹``）。
+
+    2026-11-25 用户「改成一纹破厄丹这种，几纹直接写在名字前面」。
+    物品名就是唯一键，所以改名=合并键（同档重复时数量相加），幂等。
+    :return: ``[(旧名, 新名), ...]``，供调用方同步改锁定表；无改动返回空列表。
+    """
+    b = bag(p)
+    moved: list[tuple[str, str]] = []
+    for old in list(b.keys()):
+        new = cfg.migrate_danwen_name(old)
+        if not new or new == old:
+            continue
+        b[new] = int(b.get(new, 0) or 0) + int(b.pop(old, 0) or 0)
+        moved.append((old, new))
+    for name in [k for k, v in b.items() if int(v or 0) <= 0]:
+        b.pop(name, None)
+    return moved
+
+
 def count_item(p, name) -> int:
     return int(bag(p).get(name, 0))
 
@@ -3122,8 +3142,11 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         up = _alch_level_up(p)
         res = {"ok": True, "rate": rate, "diff": diff, "alch_up": up}
         # 丹纹：成功之后按品阶掷，命中额外产一枚带纹丹（纹数 1~3，服用给随机赐福）
-        if (_t := dw.roll(rec.get("grade", ""))):
-            add_item(p, name + cfg.danwen_suffix(_t), 1)
+        # 2026-11-25 补洞：必须先过 `cfg.danwen_allowed` —— 焚血散这类「升技材料/
+        # 引火/养魂」丹根本没有注册带纹版，掷出来就是一枚吃不了也锁不了的死物品
+        # （线上实测抓到 `焚血散·一纹`）。
+        if cfg.danwen_allowed(rec) and (_t := dw.roll(rec.get("grade", ""))):
+            add_item(p, cfg.danwen_name(name, _t), 1)
             res["danwen"] = _t
         if _danhui > 0:
             res["danhui"] = round(_danhui, 4)
@@ -3224,8 +3247,9 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
                 p["high_grade_crafts"] = int(p.get("high_grade_crafts", 0) or 0) + 1
             exp += int(cfg.CRAFT_EXP * exp_factor)
             # 丹纹：每炉成功独立掷，命中额外产带纹丹（纹数 1~3 各自成物）
-            if (_t := dw.roll(rec.get("grade", ""))):
-                add_item(p, name + cfg.danwen_suffix(_t), 1)
+            # 同单发 craft：升技材料/引火/养魂丹没有带纹版，不许掷（会成死物品）
+            if cfg.danwen_allowed(rec) and (_t := dw.roll(rec.get("grade", ""))):
+                add_item(p, cfg.danwen_name(name, _t), 1)
                 n_danwen += 1
         else:
             add_item(p, "药渣", cfg.CRAFT_FAIL_DROSS)
@@ -3479,6 +3503,46 @@ def insight(p, rng=random.random) -> dict:
             "cost": cost, "count": len(p["learned"]), "migrated": migrated}
 
 
+#: 玩家手打技名时最常见的同音/形近混淆（2026-11-25 用户「学习 帝印诀」被判 noskill）。
+#: 只做**改写等价**，不做编辑距离/拼音猜测——宁可提示「你是不是想学 X」，也不许瞎猜一门。
+_NAME_ALIASES = str.maketrans({"诀": "决", "绝": "决", "卬": "印", "坡": "破"})
+
+
+def _name_key(s: str) -> str:
+    """技名归一化 key：去空白 + 同音字折叠（用于精确/唯一近似匹配）。"""
+    return str(s or "").strip().translate(_NAME_ALIASES).replace(" ", "")
+
+
+def resolve_skill_name(p, name: str, names: list[str] | None = None) -> str:
+    """把玩家手打的技名解析成**唯一**正式名（解不出返回空串）。
+
+    三级：① 原样精确 → ② 同音字折叠后精确（必须唯一）→ ③ 互相包含（必须唯一）。
+    任何一级出现多义就放弃（返回空串），由调用方提示候选，绝不替玩家拍板。
+
+    :param names: 候选名清单；缺省取「本宗可领悟池」（已解锁、不含异火技）。
+                  升级/上阵这类要覆盖已拥有技的场合，把 ``learned_names`` 传进来。
+    """
+    if names is None:
+        pool = [e["name"] for e in sk_mod.learnable(p) if e.get("origin") != "异火"]
+    else:
+        pool = [str(n) for n in names if n]
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    if raw in pool:
+        return raw
+    key = _name_key(raw)
+    if not key:
+        return ""
+    same = [n for n in pool if _name_key(n) == key]
+    if len(same) == 1:
+        return same[0]
+    if same:
+        return ""
+    near = [n for n in pool if key in _name_key(n) or _name_key(n) in key]
+    return near[0] if len(near) == 1 else ""
+
+
 def learn_named(p, name: str) -> dict:
     """定向领悟一门**指定的**斗技（用户 2026-11-16「学习 风灵分形剑」诉求）。
 
@@ -3487,6 +3551,7 @@ def learn_named(p, name: str) -> dict:
 
     失败 reason：noskill（本宗没有这门/异火技）、learned（已会）、
     level（等级不够）、power（战力不足）、gold（金币不足）。
+    ``noskill`` 时附带 ``suggest``（近似技名候选），供命令层回「你是不是想学 X」。
     """
     name = str(name or "").strip()
     migrated: list[str] | None = None
@@ -3499,6 +3564,14 @@ def learn_named(p, name: str) -> dict:
     pool = [e for e in sk_mod.learnable(p) if e.get("origin") != "异火"]
     hit = next((e for e in pool if e["name"] == name), None)
     if hit is None:
+        # 2026-11-25：同音字/漏字是玩家最常见的错法（「帝印诀」≠「帝印决」），
+        # 唯一可解就用正式名，不拿「没有这门斗技」糊玩家脸。
+        canon = resolve_skill_name(p, name)
+        if canon:
+            hit = next((e for e in pool if e["name"] == canon), None)
+            if hit is not None:
+                name = canon
+    if hit is None:
         # 本宗有这门但等级未到 → 明确告诉差几级；完全没有 → noskill
         any_tier = next((e for e in sk_mod.entries_for(p)
                          if e["name"] == name and e.get("origin") != "异火"), None)
@@ -3506,7 +3579,13 @@ def learn_named(p, name: str) -> dict:
             return {"ok": False, "reason": "level", "name": name,
                     "need_lv": int(any_tier["unlock"]), "lv": int(p.get("lv", 1)),
                     "migrated": migrated}
-        return {"ok": False, "reason": "noskill", "name": name, "migrated": migrated}
+        chars = set(_name_key(name))
+        sug = sorted(
+            (e["name"] for e in pool if len(set(_name_key(e["name"])) & chars) >= 2),
+            key=lambda n: -len(set(_name_key(n)) & chars),
+        )[:3]
+        return {"ok": False, "reason": "noskill", "name": name,
+                "suggest": sug, "migrated": migrated}
     if name in owned:
         return {"ok": False, "reason": "learned", "name": name, "migrated": migrated}
 

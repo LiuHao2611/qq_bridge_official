@@ -704,17 +704,18 @@ DANWEN_BY_GRADE: dict[str, float] = {
     "一品": 0.20, "二品": 0.18, "三品": 0.15, "四品": 0.12, "五品": 0.10,
     "六品": 0.08, "七品": 0.06, "八品": 0.04, "九品": 0.02, "帝品": 0.01,
 }
-#: 丹纹档位（2026-11-24 用户「前面再带上一，二，三等等，几纹就显示几」）。
-#: 物品名**自带档位**（``丹名·二纹``），存档不新增字段：丹被吃/卖光自然消失，
+#: 丹纹档位（2026-11-25 用户「改成一纹破厄丹这种，几纹就直接写在丹药名称前面」）。
+#: 物品名**自带档位**，存档不新增字段：丹被吃/卖光自然消失，
 #: 不会像 ``{物品名: 纹数}`` 那样留下跟背包对不上的脏数据。
 DANWEN_TIERS = ("一纹", "二纹", "三纹")
 #: 出纹后的档位分布（按顺序累计）：一纹 70% / 二纹 25% / 三纹 5%。
 #: 锚原著「二纹、三纹青灵丹」——纹数越高越罕见，但三纹不是必得（避免经济失控）。
 DANWEN_TIER_W = (0.70, 0.25, 0.05)
-#: 2026-11-24 首版无档位的后缀，存量存档里可能还有（线上实测 2 枚）。
-#: 一律按**一纹**解释，绝不因升级让玩家的丹变成无主物品。
-DANWEN_LEGACY = "·丹纹"
-DANWEN_SUFFIX = DANWEN_LEGACY     # 旧引用兼容（等价于一纹后缀）
+#: 2026-11-24 首版用的是**后缀**（``破厄丹·丹纹`` / ``破厄丹·一纹``），线上存档里还有。
+#: 这些只作为「旧名识别 + 迁移源」，不再作为新产出。
+DANWEN_LEGACY_SUFFIXES = (("·丹纹", 1), ("·一纹", 1), ("·二纹", 2), ("·三纹", 3))
+DANWEN_LEGACY = "·丹纹"           # 旧引用兼容（等价一纹后缀）
+DANWEN_SUFFIX = DANWEN_LEGACY     # 旧引用兼容
 DANWEN_CAP = 0.20                 # 任何品阶丹纹率硬顶
 
 
@@ -727,17 +728,54 @@ def danwen_rate(grade: str) -> float:
     return min(DANWEN_CAP, max(0.0, v))
 
 
-def danwen_suffix(tier) -> str:
-    """档位 → 物品名后缀。越界夹到 1..3，绝不抛异常（结算路径不许因数据脏而炸）。"""
+def danwen_prefix(tier) -> str:
+    """档位 → 前缀。越界夹到 1..3，绝不抛异常（结算路径不许因数据脏而炸）。"""
     try:
         i = int(tier)
     except (TypeError, ValueError):
         i = 1
-    return "·" + DANWEN_TIERS[max(1, min(len(DANWEN_TIERS), i)) - 1]
+    return DANWEN_TIERS[max(1, min(len(DANWEN_TIERS), i)) - 1]
 
 
-def _all_danwen_suffixes() -> tuple[str, ...]:
-    return tuple("·" + t for t in DANWEN_TIERS) + (DANWEN_LEGACY,)
+def danwen_name(base: str, tier) -> str:
+    """丹名 + 档位 → 带纹丹名（**档位写在最前面**）。
+
+    两种必须插 ``·`` 隔开的情况（否则会撞上原著丹名，读起来也像另一枚丹）：
+      * 基名本身以纹数开头：``三纹青灵丹`` 的一纹版 → ``一纹·三纹青灵丹``；
+      * 生成名正好是另一枚原著丹：``青灵丹`` 的三纹版 → ``三纹·青灵丹``
+        （不隔开就变成原著那枚「三纹青灵丹」，会把真丹覆盖成带纹丹）。
+    """
+    p = danwen_prefix(tier)
+    b = str(base or "")
+    if b.startswith(DANWEN_TIERS):
+        return p + "·" + b
+    cand = p + b
+    other = RECIPE_BY_NAME.get(cand)
+    if other is not None and not other.get("danwen"):
+        return p + "·" + b
+    return cand
+
+
+def migrate_danwen_name(name: str) -> str:
+    """旧后缀带纹丹名 → 新前缀名；不是旧名就原样返回（幂等）。
+
+    2026-11-25 补洞：**抽到孤儿带纹名时退回基础丹**。线上实测抓到
+    ``焚血散·一纹`` —— 焚血散是升技材料（``effect="skill"``），注册表按
+    ``_DANWEN_SKIP_EFFECTS`` 不给它建带纹版，但旧版炼药出货**不看这个闸**，
+    照样掷出了这枚带纹丹 ⇒ 一个既不能服、又不能锁、卖不掉的死物品。
+    改名之后若新名同样不在注册表里，就说明它是这类孤儿：
+    退回基础丹（数量由 ``core.migrate_danwen_bag`` 累加），别把死名搬过去。
+    """
+    s = str(name or "")
+    for suf, t in DANWEN_LEGACY_SUFFIXES:
+        if s.endswith(suf):
+            base = s[: -len(suf)]
+            new = danwen_name(base, t)
+            if new in DANWEN_INDEX:
+                return new
+            # 孤儿带纹版：基础丹在册就退回基础丹，否则原样（不猜、不吞）
+            return base if base in RECIPE_BY_NAME else s
+    return s
 
 
 # 带纹丹：不进 RECIPES / RECIPE_NAMES（丹方卡、宝库、名录都不出现），
@@ -748,44 +786,60 @@ def _all_danwen_suffixes() -> tuple[str, ...]:
 #    养魂涎要渡进傀儡），旧版先扣后跑会白吃掉玩家的稀有带纹丹
 #    —— 2026-11-24 实测抓出的吞丹洞，别再把它们放开。
 _DANWEN_SKIP_EFFECTS = frozenset({"beast_flame", "skill", "puppet_soul"})
+#: 公开别名：炼药出货路径（``core.craft`` / ``core.craft_batch``）必须用
+#: ``danwen_allowed`` 先过这道闸。2026-11-25 前出货路径不看它，于是焚血散
+#: 也能掷出带纹版 —— 而带纹版没注册 ⇒ 线上躺着一枚死物品（实测抓到）。
+DANWEN_SKIP_EFFECTS = _DANWEN_SKIP_EFFECTS
+
+
+def danwen_allowed(rec) -> bool:
+    """这枚丹能不能出丹纹？三类「不是吃掉而是另有用途」的丹出纹就是死物品。"""
+    return str((rec or {}).get("effect") or "") not in _DANWEN_SKIP_EFFECTS
 DANWEN_RECIPE_NAMES: list[str] = []
+#: 带纹丹名 → (基础丹名, 纹数)。**唯一真源**：`is_danwen_name` 只查这张表，
+#: 不做前缀猜测——否则原著丹名「三纹青灵丹/二纹青灵丹」会被误判成带纹丹。
+DANWEN_INDEX: dict[str, tuple[str, int]] = {}
+
+
+def _register_danwen(base: dict, dn: str, base_name: str, tier: int) -> None:
+    r = dict(base)                       # 浅拷贝 need/buy/src 等值；不修改原丹
+    r["name"] = dn
+    r["danwen"] = True
+    r["base_name"] = base_name
+    r["danwen_tier"] = tier              # 供 use_item 的赐福文案说清「几纹」
+    RECIPE_BY_NAME[dn] = r
+    DANWEN_RECIPE_NAMES.append(dn)
+    DANWEN_INDEX[dn] = (base_name, tier)
+
+
 for _base in list(RECIPES):
     if str(_base.get("effect") or "") in _DANWEN_SKIP_EFFECTS:
         continue
     _bn = str(_base["name"])
-    # 三档全注册 + 旧后缀兼容别名（线上已有「聚气散·丹纹」这种名字的丹）
-    for _dn in [_bn + s for s in _all_danwen_suffixes()]:
-        _r = dict(_base)                 # 浅拷贝 need/buy/src 等值；不修改原丹
-        _r["name"] = _dn
-        _r["danwen"] = True
-        _r["base_name"] = _bn
-        # 档位写进配方，供 use_item 的赐福文案说清「几纹」
-        _r["danwen_tier"] = next(
-            (i for i, t in enumerate(DANWEN_TIERS, 1) if _dn.endswith("·" + t)), 1)
-        RECIPE_BY_NAME[_dn] = _r
-        DANWEN_RECIPE_NAMES.append(_dn)
+    # 新名（档位在前）：一纹破厄丹 / 二纹破厄丹 / 三纹破厄丹
+    for _t in (1, 2, 3):
+        _register_danwen(_base, danwen_name(_bn, _t), _bn, _t)
+    # 旧后缀名只为「未迁移存档照样能服」留着（不产出、可迁移）
+    for _suf, _t in DANWEN_LEGACY_SUFFIXES:
+        _old = _bn + _suf
+        if _old in RECIPE_BY_NAME:
+            continue
+        _register_danwen(_base, _old, _bn, _t)
 
 
 def is_danwen_name(name: str) -> bool:
-    s = str(name)
-    return any(s.endswith(suf) for suf in _all_danwen_suffixes())
+    return str(name) in DANWEN_INDEX
 
 
 def base_of_danwen(name: str) -> str:
-    s = str(name)
-    for suf in _all_danwen_suffixes():
-        if s.endswith(suf):
-            return s[:-len(suf)]
-    return s
+    hit = DANWEN_INDEX.get(str(name))
+    return hit[0] if hit else str(name)
 
 
 def danwen_tier(name: str) -> int:
-    """物品名 → 纹数（1/2/3）。非带纹丹返回 0；旧后缀按一纹。"""
-    s = str(name)
-    for i, t in enumerate(DANWEN_TIERS, 1):
-        if s.endswith("·" + t):
-            return i
-    return 1 if s.endswith(DANWEN_LEGACY) else 0
+    """物品名 → 纹数（1/2/3）。非带纹丹返回 0；旧后缀按各自纹数。"""
+    hit = DANWEN_INDEX.get(str(name))
+    return hit[1] if hit else 0
 
 
 #: 炼药师品阶。下标 0..8 = 一品..九品（**老存档语义不变，绝不整体挪位**）。

@@ -111,7 +111,8 @@ async def main():
     # 2026-11-17 新增电梯/周副本/周本状态 3 条 → 37 + 3 = 40
     # 2026-11-19 新增「收服」主动收服入口（三层投放补齐）→ 51 + 1 = 52
     # 2026-11-24 新增「宗门斗技」（本门技能池，与「斗技」= 已学全部互补）→ 52 + 1 = 53
-    check("菜单条数 = menu_total()", commands.menu_total() == 53,
+    # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令此前图卡上根本没写）→ 53 + 1 = 54
+    check("菜单条数 = menu_total()", commands.menu_total() == 54,
           f"menu_total={commands.menu_total()}")
     # 新设计：菜单是唯一切换口（斗破菜单），其余口令全部纯中文、不再带前缀
     lines = [l.split(" —— ")[0].strip() for l in menu.splitlines() if " —— " in l]
@@ -263,7 +264,11 @@ async def main():
     r = await commands.cmd_skills(store, A)
     check("斗技 列出 4 门", all(s["name"] in r for s in cfg.SKILLS))
     r = await commands.cmd_skill_up(store, A, "龙吟碎")
-    check("升级 缺焚血散被挡", "不足" in r, r[:60])
+    # 2026-11-25 线上反馈「❌ 焚血散不足」不说升哪门技，玩家无从判断是不是点错了技名。
+    # 契约从「含『不足』」收紧：技名 / 材料名 / 需求量 / 持有量，四件都要有。
+    check("升级 缺料文案点名技名与数量",
+          "龙吟碎" in r and "焚血散 ×1" in r and "你有 0" in r, r[:80])
+    check("升级 缺料文案给出补救路径", "炼制" in r, r[:120])
     p = await store.get_player(A)
     core.add_item(p, cfg.SKILL_UP_ITEM, 10)
     await store.put_player(p)

@@ -646,6 +646,33 @@ class Store:
                                  % (type(e).__name__, str(e)[:200])) from e
         return bool(locked) != bool(had)
 
+    async def rename_item_lock(self, qq: str, old: str, new: str) -> bool:
+        """把一个锁定条目的物品名改成新名（2026-11-25 丹纹改名迁移用）。
+
+        改名=换主键：先删旧行再插新行，同一事务内完成；新名已存在时保留原有的
+        ``locked_at``（不覆盖玩家更早的锁定时间）。返回是否发生了改名。
+        """
+        old, new = str(old), str(new)
+        if not old or not new or old == new:
+            return False
+        async with self._lock:
+            try:
+                with self._tx() as con:
+                    row = con.execute(
+                        "SELECT 1 FROM item_lock WHERE qq=? AND name=?",
+                        (str(qq), old)).fetchone()
+                    if not row:
+                        return False
+                    con.execute("DELETE FROM item_lock WHERE qq=? AND name=?",
+                                (str(qq), old))
+                    con.execute(
+                        "INSERT OR IGNORE INTO item_lock(qq, name, locked_at) "
+                        "VALUES(?,?,?)", (str(qq), new, time.time()))
+            except Exception as e:  # noqa: BLE001
+                raise StoreError("背包锁定改名失败（%s）：%s"
+                                 % (type(e).__name__, str(e)[:200])) from e
+        return True
+
     # ---- 后期天焚炼气塔（聚火壶）----
     async def tower_state(self, qq: str) -> dict:
         """塔修状态；没有记录时返回全 0 的默认状态（不写库，读透明）。"""

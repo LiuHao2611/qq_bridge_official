@@ -888,15 +888,11 @@ def build_bag_data(p: dict, locked=None) -> dict:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     rows = []
     for name, n in items:
-        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
-        # 显示名一律剥掉丹纹后缀（用户：丹药名称不要变），纹数交给右上角角标
-        shown = cfg.base_of_danwen(name) if tier else name
+        # 2026-11-25：带纹丹改成**档位前置**（`一纹破厄丹`），名字本身已经说明几纹，
+        # 右上角不再重复挂「一纹」角标（同一信息画两遍 = 噪音），只保留左上「锁」。
+        shown = name
         row = {"title": f"{shown} ×{n}", "sub": known.get(name) or known.get(shown, "")}
-        if tier:
-            row["corner_tr"] = cfg.DANWEN_TIERS[min(3, tier) - 1]
-            row["sub"] = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
-        # 锁定：只认真正被锁的那个名字（普通丹与带纹丹是两件独立的物品）
-        if name in locked or shown in locked:
+        if name in locked:
             row["corner_tl"] = "锁"
         rows.append(row)
     return {

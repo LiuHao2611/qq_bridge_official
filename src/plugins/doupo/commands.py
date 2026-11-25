@@ -57,6 +57,19 @@ async def _player(store, qq):
     # 老档火焰迁移（2026-11-24）：阳火/化生火已下线，惰性折算药渣后移除（一次性）
     if p and _fdrop.migrate_legacy_flames(p, core.add_item):
         await store.put_player(p)
+    # 丹纹改名迁移（2026-11-25）：`破厄丹·丹纹` → `一纹破厄丹`（物品名就是主键）。
+    # 放在唯一取档口，任何口令第一次读到都会顺手迁好；锁定表同步改键。
+    if p:
+        moved = core.migrate_danwen_bag(p)
+        if moved:
+            await store.put_player(p)
+            rename = getattr(store, "rename_item_lock", None)
+            if rename is not None:
+                for old, new in moved:
+                    try:
+                        await rename(str(qq), old, new)
+                    except Exception:  # noqa: BLE001 — 锁表迁移是增强项，失败不影响服丹
+                        pass
     return p
 
 
@@ -1245,11 +1258,27 @@ async def cmd_skill_up(store, qq, name) -> str:
     names = list(dict.fromkeys(_sk.learned_names(p))) or [e["name"] for e in core.skill_pool(p)]
     if not name:
         return "用法：升级 <技名>（可选：" + "、".join(names) + "）"
+    # 2026-11-25 用户「升级斗技不行」：`升级 帝印诀`（诀）对不上 `帝印决`，旧代码只做
+    # 全字/子串匹配 → 回「无此斗技」。这里先走同音字归一，能唯一解出就用正式名。
+    canon = core.resolve_skill_name(p, name, names)
+    if canon:
+        name = canon
     hit = next((n for n in names if n == name), None) or next(
         (n for n in names if name in n or n in name), None)
     if not hit:
         hit = next((n for n in cfg.SKILL_NAMES if name in n or n in name), None)
     if not hit:
+        # 2026-11-25 用户「升级斗技不行」（`升级 帝炎破世`）：异火主动技**能上阵却不能升级**
+        # ——它不在 learned 里（收服即有），skill_up 也只认 learned。旧文案「无此斗技」
+        # 还把「可选」列成六门本宗技，玩家会以为自己打错字。这里单独讲清楚：去养火。
+        try:
+            flame_names = [e["name"] for e in _sk.fs.entries_for(p)]
+        except Exception:  # noqa: BLE001 — 查不到异火池就按普通「无此斗技」处理
+            flame_names = []
+        fl = core.resolve_skill_name(p, name, flame_names) if flame_names else ""
+        if fl:
+            return (f"【{fl}】是异火主动技，不走升技材料：它的强度随「异火等级」走。\n"
+                    f"　发「异火」看当前火种，养火升阶才涨伤害。")
         return "无此斗技。可选：" + "、".join(names)
     res = core.skill_up(p, hit)
     await store.put_player(p)
@@ -1258,8 +1287,10 @@ async def cmd_skill_up(store, qq, name) -> str:
             return f"【{hit}】已至 {res['lv']} 级圆满。"
         if res.get("reason") == "noskill":
             return f"你还没领悟【{hit}】——先发「学斗技」领悟，或「斗技详情」看本宗能学什么。"
-        return (f"❌ {res.get('item', cfg.SKILL_UP_ITEM)}不足：需要 {res['need']} 份，"
-                f"你有 {res['have']}。\n　去「炼制 {cfg.SKILL_UP_ITEM}」自己炼。")
+        # 2026-11-25：「❌ 焚血散不足」不说升哪门技，玩家无从判断是不是点错了技名
+        item = str(res.get("item", cfg.SKILL_UP_ITEM))
+        return (f"❌ 升【{hit}】要 {item} ×{res['need']}，你有 {res['have']}。\n"
+                f"　发「炼制 {item}」自己炼，或「宝库」看看有没有存货。")
     return f"✅【{hit}】升至 {res['lv']}/{res['max']} 级，技能伤害再进一层。"
 
 
@@ -1323,6 +1354,12 @@ async def cmd_learn_named(store, qq, name) -> str:
             await store.put_player(p)
         why = res.get("reason")
         if why == "noskill":
+            sug = res.get("suggest") or []
+            if sug:
+                # 2026-11-25：同音字/漏字（「帝印诀」）别只说「没有这门」，
+                # 直接给候选，玩家点一下就能学。
+                return note + (f"本宗没有【{name}】这门斗技。你是不是想学："
+                               + "、".join(f"「学习 {n}」" for n in sug) + "？")
             return note + f"本宗没有【{name}】这门斗技，发「宗门斗技」看名录。"
         if why == "learned":
             return note + f"【{name}】你已经领悟了，发「上阵 {name}」把它带上场。"
@@ -1375,16 +1412,33 @@ async def cmd_loadout(store, qq, args) -> str:
     names = translated
     if not names:
         cur = core.loadout_entries(p)
-        return ("当前上阵：" + "、".join(f"{e['name']}[{e['tier']}]" for e in cur)
-                + "\n可上阵：" + "、".join(f"{i}.{e['name']}" for i, e in enumerate(
-                    core.skill_pool_sorted(p), 1))
-                + f"\n用法：上阵 1 3 5 7（名录卡序号）或 <技名>（最多 {cfg.LOADOUT_SIZE} 门）")
+        # 🚨 2026-11-25 用户「上阵 11 14 就不行了」：旧文案把 skill_pool（已解锁）**全部**
+        # 写进「可上阵」，其中含「可学但未领悟」的技——用户照着序号打必然被拒，看着
+        # 就像口令坏了。这里按 is_equippable 分成「可上阵（已领悟）」与「待领悟」两档，
+        # 序号仍与名录卡严格同源（enumerate 顺序不变，只是分组显示）。
+        learned = set(core.equippable_names(p))
+        pool_all = core.skill_pool_sorted(p)
+        ready = [f"{i}.{e['name']}" for i, e in enumerate(pool_all, 1) if e["name"] in learned]
+        todo = [f"{i}.{e['name']}" for i, e in enumerate(pool_all, 1) if e["name"] not in learned]
+        lines = ["当前上阵：" + ("、".join(f"{e['name']}[{e['tier']}]" for e in cur) or "（空）"),
+                 "可上阵（已领悟）：" + ("、".join(ready) or "（无）")]
+        if todo:
+            lines.append("待领悟（先发「学习 <技名>」）：" + "、".join(todo))
+        lines.append(f"用法：上阵 1 3 5 7（名录卡序号）或 <技名>（最多 {cfg.LOADOUT_SIZE} 门）")
+        return "\n".join(lines)
     chosen = []
+    pool_names = [e["name"] for e in pool]
     for n in names:
+        # 2026-11-25 同「升级」：`上阵 帝印诀`（诀）也要能对上 `帝印决`（决）。
+        canon = core.resolve_skill_name(p, n, pool_names)
+        if canon:
+            n = canon
         hit = next((e for e in pool if e["name"] == n), None) or next(
             (e for e in pool if n in e["name"] or e["name"] in n), None)
         if not hit:
-            return f"「{n}」不可上阵（未解锁或非本宗）。可上阵：" + "、".join(e["name"] for e in pool)
+            # 同一口径：这里也只列「已领悟」的，别再把未领悟的技当成可上阵（见上）。
+            return (f"「{n}」不可上阵（未解锁或非本宗）。当前可上阵："
+                    + ("、".join(core.equippable_names(p)) or "（无，先发「学斗技」）"))
         if hit["name"] not in chosen:
             chosen.append(hit["name"])
     if len(chosen) > cfg.LOADOUT_SIZE:
@@ -1839,16 +1893,16 @@ async def cmd_bag(store, qq) -> str:
     known.update({h["name"]: h["desc"] for h in cfg.HERBS})
     if not items:
         out.append("　空空如也。")
+    # 2026-11-25：带纹丹改为**档位前置**（`一纹破厄丹`），名字自带纹数，
+    # 不再需要「基础名 + 括号纹数」那套补偿写法。
     for i, (name, n) in enumerate(items, 1):
-        tier = cfg.danwen_tier(name) if cfg.is_danwen_name(name) else 0
-        shown = cfg.base_of_danwen(name) if tier else name
-        mark = "🔒" if (name in locked or shown in locked) else ""
-        tail = f"（{cfg.DANWEN_TIERS[min(3, tier) - 1]}）" if tier else ""
-        out.append(f"　[{i}] {mark}{shown} ×{n}{tail}")
-        if name in known or shown in known:
-            out.append(f"　　　{known.get(name) or known[shown]}")
+        mark = "🔒" if (name in locked) else ""
+        out.append(f"　[{i}] {mark}{name} ×{n}")
+        if name in known:
+            out.append(f"　　　{known[name]}")
     out.append("")
-    out.append("　用法：服丹 回灵丹　｜　锁定 回灵丹 / 解锁 回灵丹（锁定后战斗不会自动服用）")
+    out.append("　用法：服丹 回灵丹　｜　查看 回灵丹 看详情　｜　"
+               "锁定 回灵丹（锁定后战斗不会自动服用）")
     return "\n".join(out)
 
 
@@ -1868,12 +1922,91 @@ def _match_item_name(name: str) -> str:
     return sorted(hits, key=len)[0] if hits else ""
 
 
+# ---------------------------------------------------------------------------
+# 「带纹丹」输入容错（2026-11-25 用户「我要服用有丹纹的丹药，应该怎么输入」）
+# ---------------------------------------------------------------------------
+# 背包**显示名**刻意剥掉了纹数后缀（用户「丹药名称不要变」，纹数交给右上角角标），
+# 所以玩家眼里那格就叫「聚气散」，照卡面输入只会命中**不带纹**那枚；而带纹丹的真名
+# 是「聚气散·一纹 / ·二纹 / ·三纹」（旧档还有「·丹纹」），玩家无从得知该打什么。
+# 这里把「·／.／空格／括号／无分隔、纹数在前在后」各种写法统一吃掉，
+# 并且**只认背包里真有的那一枚**——绝不拿别的纹顶替（三纹很稀有，误吃就是坑）。
+_TIER_WORDS = (("三纹", 3), ("二纹", 2), ("一纹", 1), ("丹纹", 1),
+               ("3纹", 3), ("2纹", 2), ("1纹", 1))
+
+
+def _norm_item_text(s: str) -> str:
+    """物品名归一化：各种「点」→ ·，去空格/横线/括号，压掉重复的 ·。"""
+    t = str(s or "").strip()
+    for ch in ("．", ".", "・", "•", "‧", "｡", "*", "＊"):
+        t = t.replace(ch, "·")
+    for ch in (" ", "\t", "-", "—", "_", "(", ")", "（", "）",
+               "【", "】", "《", "》", "、", "，", ","):
+        t = t.replace(ch, "")
+    while "··" in t:
+        t = t.replace("··", "·")
+    return t.strip("·")
+
+
+def resolve_owned_item(p, raw: str) -> tuple[str, bool]:
+    """玩家手打的名称 → **背包里真实存在、且可服用/可炼化**的物品名。
+
+    :return: ``(真实物品名, 是否自动换成了带纹丹)``；解不出返回 ``("", False)``。
+
+    规则（顺序即优先级）：
+      ① 原样命中（含 ``·二纹`` 后缀）→ 直接用；
+      ② 拆出纹数词（前/后置都认）→ 命中该纹；**指定了纹数就不许换别的纹**；
+      ③ 没写纹数 → 有纯丹先吃纯丹（带纹的留着），没纯丹才按 一→二→三 取最低纹。
+    """
+    usable = set(cfg.RECIPE_BY_NAME) | set(cfg.MATERIAL_BY_NAME)
+    bag = core.bag(p)
+    t = _norm_item_text(raw)
+    if not t:
+        return "", False
+    if t in bag and t in usable:
+        return t, False
+    tier = 0
+    base = t
+    for word, n in _TIER_WORDS:
+        if base.endswith(word) and len(base) > len(word):
+            tier, base = n, base[: -len(word)].strip("·")
+            break
+        if base.startswith(word) and len(base) > len(word):
+            tier, base = n, base[len(word):].strip("·")
+            break
+    base = base.strip("·")
+    if not base:
+        return "", False
+    if tier:
+        # 🚨 旧后缀「·丹纹 / ·一纹」**只等价一纹**：只把 1 纹的候选带上它们。
+        # 旧实现无条件把 legacy 塞进候选 → 玩家要「二纹」而包里只有「·丹纹」时会被
+        # 顶替成一纹（线上实测 2026-11-25 08:18 抓到），等于骗玩家吃掉另一枚丹。
+        cands = [cfg.danwen_name(base, tier)]
+        if tier == 1:
+            cands += [base + cfg.DANWEN_LEGACY, base + "·一纹"]
+        for cand in cands:
+            if cand in bag and cand in usable:
+                return cand, True
+        return "", False          # 指定了纹数就没有替代品，交给上层回「你没有」
+    if base in bag and base in usable:
+        return base, False
+    for i in (1, 2, 3):
+        cand = cfg.danwen_name(base, i)
+        if cand in bag and cand in usable:
+            return cand, True
+    for cand in (base + cfg.DANWEN_LEGACY, base + "·一纹"):
+        if cand in bag and cand in usable:
+            return cand, True
+    return "", False
+
+
 async def cmd_lock(store, qq, name, on: bool = True) -> str:
     """锁定 / 解锁一件物品。锁定只拦「战斗自动服药」，手动服丹照旧可以。"""
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    hit = _match_item_name(name)
+    # 与服丹同一套归一：`锁定 聚气散二纹` 也要落到真实物品名上
+    owned, _auto = resolve_owned_item(p, name)
+    hit = owned or _match_item_name(name)
     if not hit:
         return "用法：锁定 回灵丹　/　解锁 回灵丹"
     if core.count_item(p, hit) <= 0:
@@ -2036,14 +2169,21 @@ async def cmd_use(store, qq, name) -> str:
         return NOT_ENTERED
     name = (name or "").strip()
     if not name:
-        return "用法：服丹 回灵丹"
+        return ("用法：服丹 回灵丹\n"
+                "　带纹丹：服丹 回灵丹·二纹　或　服丹 回灵丹 二纹（一/二/三纹）")
+    # 2026-11-25：背包显示名剥掉了纹数（用户要求名称不变、纹数走角标），
+    # 玩家照卡面打「聚气散」只能吃到不带纹那枚。这里先按「背包里真有的」解析。
+    owned, auto_danwen = resolve_owned_item(p, name)
     # 2026-11-18：丹药 + 天材地宝统一走「服丹/炼化」入口，材料也有实际作用。
     # 先精确匹配（防「复灵紫丹」被「复紫灵丹」的子串抢先命中），再宽松匹配。
     # 2026-11-23：别名（复紫灵丹）也要能被点到，否则老存档里的丹成了无主物品。
     pool = (list(cfg.RECIPE_NAMES) + list(cfg.RECIPE_ALIAS)
             + list(cfg.MATERIAL_NAMES) + list(cfg.DANWEN_RECIPE_NAMES))
-    hit = name if name in pool else next(
-        (n for n in pool if name in n or n in name), None)
+    if owned:
+        hit = owned
+    else:
+        hit = name if name in pool else next(
+            (n for n in pool if name in n or n in name), None)
     if not hit:
         return "无此丹药。"
     # 「一阶限 N 枚」只对破境类丹药生效（原著抗性），普通丹药读库没意义。
@@ -2079,9 +2219,12 @@ async def cmd_use(store, qq, name) -> str:
             return ("🧪 【%s】不是口服之物 —— 丹还在你包里。\n"
                     "　发「升级 技能名」把它用在斗技上（每级 1 份，最高 5 级）。" % hit)
         return res.get("msg") or "无法服用。"
+    note = ""
+    if auto_danwen:
+        note = "\n　（包里没有不带纹的，这枚带纹丹直接服下了）"
     if hit in cfg.MATERIAL_BY_NAME:
-        return f"✨ {res['msg']}"
-    return f"💊 服下【{hit}】，{res['msg']}"
+        return f"✨ {res['msg']}{note}"
+    return f"💊 服下【{hit}】，{res['msg']}{note}"
 
 
 # ---------------------------------------------------------------------------

@@ -148,8 +148,14 @@ def test_build_and_render_list_cards():
     d_sh_beast = card.build_shop_data(p, beast=True)
     assert d_sh["title"] == "随身商店"
     assert len(d_sh["rows"]) + len(d_sh_beast["rows"]) == len(core.shop_list())
-    assert d_bg["title"] == "包裹" and "24 格" in d_bg["subtitle"] \
-        and "/" not in d_bg["subtitle"], "背包副标题不应出现 N/24 这种像超容量的写法"
+    # 2026-11-25：用户「背包别搞翻页，延长」→ 不再有 24 格上限口径，
+    # 副标题改成「N 种物品 · 丹药优先 · 金币 X」。旧断言要求含「24 格」已过期
+    # （那是翻页时代的上限写法，现在写反而是假承诺）。改为守新契约：
+    # 有物品种数、无「N/M」式容量分数、无「格」字上限。
+    _sub_bg = str(d_bg["subtitle"])
+    assert d_bg["title"] == "包裹", d_bg["title"]
+    assert "种物品" in _sub_bg and "/" not in _sub_bg and "格" not in _sub_bg, \
+        "背包副标题应为「N 种物品 · 金币 X」口径（不翻页、无格数上限）: %r" % _sub_bg
 
     # 渲染层：正常环境应产出合法 PNG（机器验收）
     pngs = {
