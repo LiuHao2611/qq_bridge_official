@@ -1810,7 +1810,9 @@ MONSTER_CHARACTERS: dict[str, dict] = {
                "quotes": (),
                "skill": {"name": "离火翻涛", "chance": 0.20, "effect": "burst", "mult": 1.8},
                "mech": {"t": "reflect", "v": 0.22, "d": 2, "p": 0.28, "kind": "海魔·反噬"}},
-    "幻火蝎龙兽": {"name": "幻火蝎龙兽", "title": "异种魔兽（游戏原创）", "elite": True,
+    # title 会印在玩家看得见的卡面上，绝不能带「游戏原创」这类元说明（沉浸感红线）；
+    # 出处考据只写在 source 里，留给内部核对用（2026-11-26 沉浸门禁抓到后清掉）。
+    "幻火蝎龙兽": {"name": "幻火蝎龙兽", "title": "异种魔兽", "elite": True,
                    "source": "游戏原创（附件 docs/兽火单方.txt 新造，语料 0 命中，不编章节）",
                    "intro": "沙砾下骤然拱起一道金影，蝎尾与龙翼并生的凶兽现形，"
                             "周身金焰扭曲了四周的光。",

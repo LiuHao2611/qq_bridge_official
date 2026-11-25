@@ -413,7 +413,9 @@ def test_battle_card_and_button():
           str(db.CARD_ACTIONS.get("battle")))
     check("按钮口令真实", "战斗评价" in set(db.real_commands()), "缺真实口令")
     plan = button_dispatch.plan()
-    check("按钮可分发", plan.get("战斗评价") == ("cmd_battle_comment", "qq", "")
+    # 2026-11-26：card_key 从 ""（裸文本，无键盘）改成 battle_text —— 用户实测
+    # 「点继续战斗后战斗结果没有携带任何按钮」，纯文本必须自带按钮组。
+    check("按钮可分发", plan.get("战斗评价") == ("cmd_battle_comment", "qq", "battle_text")
           and "战斗评价" in db.ALL_BUTTON_CMDS, str(plan.get("战斗评价")))
     check("键盘派生同口令", [b.cmd for b in kb.buttons_for("doupo:battle")] == ["战斗评价"],
           str(kb.buttons_for("doupo:battle")))

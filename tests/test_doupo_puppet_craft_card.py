@@ -89,6 +89,11 @@ def check(name, ok, detail=""):
     print(("PASS  " if ok else "FAIL  ") + name + ("  -> " + str(detail) if not ok else ""))
     if not ok:
         FAILED.append(name)
+        # ⚠️ 2026-11-26：以前这里只 print 不抛，于是 `pytest tests/` 把本文件判成
+        # 全绿——报表好看，断言其实一条都没生效（本文件就藏着一条真失败）。
+        # 直跑仍保留「整份跑完再汇总」，pytest 下则立刻抛，让 CI 真的会红。
+        if "pytest" in sys.modules:
+            raise AssertionError(name + (("  -> " + str(detail)) if detail else ""))
     return ok
 
 
@@ -145,9 +150,13 @@ def test_handler_gate():
     # （这里给 finish_text 补了 card_key），惰性量词就会在长文本上**灾难性回溯**，
     # 整个 pytest 进程被 timeout 插件 SIGTERM 掉——看起来像「测试卡死」，其实是
     # 正则爆了。改成定长窗口 + 线性 `[ ]*`，匹配不上就干脆利落地红。
-    window = seg[gate:gate + 800]
+    # `gate` 指向的是 `commands.puppet_is_subcmd(arg)`（不含前面的 `if `），
+    # 窗口必须把 `if ` 一起框进来，否则下面要求 `if commands...` 的正则永不匹配。
+    _if = seg.rfind("if ", 0, gate)
+    window = seg[_if if _if != -1 else gate: gate + 800]
     shape = re.search(
         r"if commands\.puppet_is_subcmd\(arg\):\n"
+        r"(?:[ ]*#[^\n]*\n)*"          # 允许中间夹注释（分流理由就写在那儿）
         r"[ ]*await finish_text\(puppet_cmd, event, txt, card_key=\"puppet_text\"\)\n"
         r"[ ]*return\n", window)
     check("分流是「条件原样 + finish_text(带按钮) + return」的完整结构", bool(shape),
