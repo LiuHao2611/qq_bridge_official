@@ -60,11 +60,32 @@
 
 ## 15. 背包全量不翻页 + 丹纹三档 + 格子角标（2026-11-24，用户「背包别搞翻页，延长…改完直接上线」）
 🚨 **背包不许再分页/截断**：`bagview.page_of` / `PER_PAGE` 已**删除**，`build_bag_data(p, locked=None)` / `render_bag(p, locked=None)` / `cmd_bag(store, qq)` **都没有 page 形参**。禁恢复 `items[:24]`、禁再加翻页按钮、禁往卡面塞 `page`/`total_pages` 字段（`test_bagview.py::t_no_truncation` 守门，64 种必须 64 行）。卡高随物品数增长，可到 1300px+ 属正常。
-🚨 **带纹丹卡面/文本都不改名**：显示 `cfg.base_of_danwen(name)`，纹数只走行 dict 的 `corner_tr`（一纹/二纹/三纹，几纹写几），锁定只走 `corner_tl="锁"`。禁再把「纹·丹名」写进 title、禁回退成 `〔纹〕/〔锁〕` 前缀。
+🚨 **带纹丹名字自带纹数、后缀命名已废弃**（2026-11-25 用户「改成一纹破厄丹这种，几纹就直接写在丹药名称前面」→ **本节旧口径（显示基础丹名 + `corner_tr` 角标）已被推翻**）：唯一生成入口 `cfg.danwen_name(base, tier)`；`DANWEN_INDEX` 是「带纹名→(基础丹名,纹数)」唯一真源，**禁用前缀/后缀猜测**（原著丹 `三纹青灵丹`/`二纹青灵丹` 会被误判）。卡面/文本 title 直接用带纹全名，**不再挂 `corner_tr`**（同一信息画两遍），只留 `corner_tl="锁"`。旧后缀（`·丹纹`/`·一纹`/…）**只作迁移源**，`core.migrate_danwen_bag` 幂等改名合并 + `store.rename_item_lock` 同步锁表。
 🚨 **角标字色只能取调色板 `gold`**（浅 `#B07A16` / 深 `#FFD058`），因为要和「包裹」牌匾同族金；禁用 `accent_color`/硬编码色（`test_bagview.py` + `tmp/check_bag_boxes.py` 双主题守门）。
-🚨 **格子角标 = 楷体 + 金色光晕 + 骑在格子上边框（截断框线）**（2026-11-25 用户二次定稿）：
+🚨 **格子角标 = 楷体 + 金色光晕 + 骑在格子上边框（截断框线）**（2026-11-25 用户二次定稿；**2026-11-25 起只服务左上「锁」，纹数已进名称**）：
 唯一入口 `doupo_list.draw_corner_badge()`。①字体必须 `UI.font(size,"kai")`（doupo_kai.ttf，与「包裹」牌匾同族），禁退回等线；②光晕必须 `GaussianBlur` 且光晕层比色块大 `CORNER_GLOW`，**禁叠两层 + 禁竖向伪粗**（小字会糊死），伪粗只取横向 ±1；③必须先用 `p["panel"]` 实心块盖断格顶框线再压字（这是「截断边框」的全部观感来源）；④`CORNER_INSET` 必须 > 格子圆角半径 8，否则把圆角啃成方角。
 🚨 **`S.small` 默认 `anchor="lm"`（垂直中线）**：给它是「中线」不是「上缘」（旧代码传 `cell_y+3` 让小字浮到格子外）。角标一律走 `corner_cy()/corner_top()/corner_bottom()`；名称中线 `GRID_NAME_CY` **恒为常量**，禁按「有无角标」偏移（同排基线必须一致）。
 ⚠️ **斗破卡存在两套主题**：本地默认渲染的是深色 game 风，**手机生产实际出的是浅色**（浅 lavender 格 + 深色字）。改任何卡片配色/角标后，`light` 与 `dark` 都要实渲染看图，别只按一边下结论。
 🚨 **丹纹档位必须真有效果**，不能只是标签：`_TIER_SCALE=(1,1,1.5,2)` **只放大次数/时长、百分比一分不动**（用户定的平衡杠杆=限时/限次）；三纹额外多赐一条福且躲开同 id（同名 `max()` 刷新会白吃）。存量 `·丹纹` 永久保留为别名按一纹读，**禁删**（老档会失效）。
 🚨 **变异反证禁 `git checkout -- <file>`**：当天 23:40 用它还原 `card.py`，把未提交的 build_bag_data 重写一起冲掉了（退回分页版）。只许 `cp` 到 /tmp 备份、`cp` 回来，再 `git diff --stat` 复核增删行数。
+
+## 16. 官方通道纯文本只能走 OfficialChannel（2026-11-25，「上阵/学习/锁定/主题」打字没反应）
+🚨 **官方通道的纯文本回复必须经 `OfficialChannel.send`，原生 `matcher.finish(str)` 会被平台静默吞掉**：当日 00:15–00:25 七条纯文本口令全部「命中 matcher + `running complete` + 无异常 + 用户收不到」，同批卡片全部正常。修复=`game_compat.install_official_text_bridge()` 拦 `QQBot.send`。
+🚨 **补丁边界不许放宽**：只拦 `isinstance(message, str)` 且非空白。**一旦放进 `Message`/`MessageSegment`（图片段）就会丢图**；通道返回 False 或抛异常**必须回退原生**（宁可发得难看也不能不发）。`tests/test_official_text_bridge.py` 守这四条。
+🚨 **`msg_seq` 必须与原生 `event._reply_seq` 共用一个计数器**（`_seq_seed` / `_seq_commit`）：通道自带 `reply_ref["msg_seq"]` 从 1 起，原生 `QQBot.send` 也是 `event._reply_seq += 1`；两边各数各的 → 同一 msg_id 的第二次发送必撞 seq=1 → `40054005 消息被去重`。
+🚨 **`_seq_commit` 里禁 import 通道包**（`src.plugins.qq_bridge.channel.*` 顶层会拉 httpx），否则宿主纯标准库测试直接不可跑；只读 `reply_ref["msg_seq"]` 字段即可，口径与 `passive_seq.peek_msg_seq` 一致。
+⚠️ **排障先看 `logs/service.log` 而不是 `qq_bridge.log`**：前者有**每条入站原文 + 命中 matcher 的 lineno + `running complete`/`running failed`**；后者只有出站与 pic_render。「没反应」三分类照它查：①无 `Event will be handled` = 无 matcher 匹配（口令写错/模式门）；②有 handled 有 complete 无出站 = 发送出口问题；③有 failed + 栈 = 代码异常。
+⚠️ **「running complete」≠ 发成功**：nonebot 只有抛异常才打 failed，平台静默吞消息时日志一片祥和。
+⚠️ **测试里别用「假通道抛异常」当哨兵**：会被回退 `except` 吞掉，用例假通过。要用「记账断言通道是否被调用过」。
+⚠️ **`帮助` 存在双 matcher 重复**（`doupo:178` + `game_tools.official_bridge:364`），靠 `40054005` 去重才没变成两条回包；根治要收敛出口，**不许只改 seq**（会立刻变成两条）。
+🚨 **单行正文必须补成多行**（2026-11-25 第三轮，同一事故的更深一层）：走通道只是必要条件，**不是充分条件**。「多行 172 字到达、单行 42 字消失」同晚成对出现（00:57:05 到达 / 00:57:16 消失），与 msg_type 无关。所有官方文本出口统一过 `game_compat.prepare_official_text()`：`pad_single_line`（单行补第二行页脚，多行/空白原样、必须幂等）+ `escape_markdown_angles`（`<技名>` → `＜技名＞`，否则 markdown 当 HTML 标签，轻则吞字重则 `40034011 无效 markdown content`）。**禁止**在 `_channel_send_text` 里绕过这两个函数直接发原文（`tests/test_official_text_bridge.py::channel_text_is_padded` 结构门禁）。方括号 `[特殊]`/`[已领悟]` 不用转义（markdown 里无 `(url)` 的 `[x]` 按字面渲染）。
+
+## 17. 「查看 <物品名>」详情卡 + 炼药卡精简（2026-11-25，用户「加一个查看物品的功能…几纹有什么概率出什么加成。从何而来」）
+🚨 **不给出纹版的丹，出货路径必须先过闸**：`cfg.danwen_allowed(rec)`（跳过 `beast_flame`/`skill`/`puppet_soul`）。旧版 `core.craft`/`craft_batch` **不看这道闸**，给升技材料 `焚血散` 掷出了 `焚血散·一纹`，而注册表不给它建带纹版 ⇒ 线上躺着一枚**既不能服、不能锁、卖不掉**的死物品（实测抓到）。`test_use_danwen` 用「`_t := dw.roll(` 出现次数 == 被 `cfg.danwen_allowed` 包住的次数」做结构门禁，**改出货路径必看这条**。
+🚨 **孤儿带纹名迁移回基础丹**：`migrate_danwen_name` 算出的新名不在 `DANWEN_INDEX` 里时退回 `base`（`焚血散·一纹` → `焚血散`），不要把死名搬到新命名上。
+🚨 **物品分类唯一源 `cfg.item_kind` + `cfg.MISC_ITEMS`**：卡（`card.build_item_detail_data`）与文本（`commands.cmd_view`）**共用同一张表**，禁止各判一套（会出现「卡里有丹纹段、文本说不认识」）。`查看` 查**图鉴**不查背包 —— 宝库没买的药材也要看得见；`服丹`/`锁定` 才要求背包真有。
+🚨 **丹纹段不许自己重算数值**：`danwen.scale_of/fmt/tier_rule/tier_table` 是唯一出口。`tier_table` **只标「变了的那一个数」**，且**只在文案含 `{n}`/`{min}` 时才标**（B02/B06 的 `n` 是充能数，句子不引用它，照缩放映成「二纹 2 次」会与前半句「首次」自相矛盾）；单位只写一次，否则每条多折一行。
+🚨 **玩家可见文案禁出现章节号与工程口吻**：`RECIPE_IMPL_OVERRIDE` 里 44 条「（无封印系统）」「（无寿命系统）」「（玩法未上线）」已全部清掉，**别再写回去**；`天火融雪丹` desc 原本是考据笔记（含「第900章」），已改成一句药性、考据留在 `src`。`test_view_item.py::test_no_chapter_number_or_meta_on_card` 全量扫「第N章 / 无X系统 / 未上线」。
+🚨 **炼药卡 `desc` 只印 `cfg.recipe_impl`**：禁再拼〔功效标签〕/把握/越档/丹纹率（那是详情卡与「炼药」文本的活）。`RECIPES_PER_PAGE=14`；材料行必须**按「、」整项换行**（`Canvas.wrap` 按像素硬折会把「黑岩根×2」劈成「黑岩」+「根×2」）。
+⚠️ **`core.py` 204648 B / `commands.py` 202304 B，离 200KB 红线只剩 152 / 2496 B**：任何一次编辑都会被 `.githooks/pre-commit` 拦死。下一步必须真拆（建议把 `core.fight()` ~670 行挪到 `battle_core.py`），**禁靠 --no-verify 或删注释凑数**。
+⚠️ **`tools/phone_deploy.py` 临时区按相对路径落盘**：早先平铺 `/tmp/push/`，一次 push 两个 `__init__.py` 会互踩（L3 报「传输被破坏」，易误判成网络）；`mkdir` 必须用 `os.path.dirname`（`Path().parent` 在 Windows 给反斜杠）。
