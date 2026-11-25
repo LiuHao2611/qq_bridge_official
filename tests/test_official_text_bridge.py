@@ -27,7 +27,11 @@
 ③ 非字符串（图片段 / `Message`）→ **原样走原生**，出图链路零影响；
 ④ 通道返回 False / 抛异常 → **必须回退原生**（绝不比现状更差）；
 ⑤ NapCat 事件 → `finish_text` 仍走原生，行为零变化；
-⑥ `msg_seq` 与原生 `event._reply_seq` 同一计数器（根治 40054005 双发撞车）。
+⑥ `msg_seq` 与原生 `event._reply_seq` 同一计数器（根治 40054005 双发撞车）；
+⑦ 2026-11-25 19:45 次生事故：官方 API 偶发 `NetworkError`，`finish_text` 首发
+   失败后降级兜底桥丢了 `card_key="fight_text"` → 战斗回执挂成主菜单按钮（用户体感
+   「战斗没反应/发错」）。守 `_channel_send_text` 对**网络类失败**即时重试一次且
+   **保留同一个 keyboard_cmd**；业务类失败（去重/配额/4005xxx）不重试。
 
 跑法：python tests/test_official_text_bridge.py（宿主纯标准库，无需 nonebot/pytest）
 """
@@ -124,6 +128,65 @@ class _Finished(Exception):
 
 async def _noop(_raw, _text, _kcmd=""):  # 通道替身：不发，只回报 True
     return True
+
+
+def _install_fake_channel(send_results):
+    """桩出官方通道层，直接驱动 ``_channel_send_text`` 内部的重试逻辑。
+
+    旧用例把 ``_channel_send_text`` 整个替换掉，测不到函数内的重试；这里改桩
+    更下一层的 ``get_channel / Outgoing / attach_ctx``，让真实函数跑起来。
+
+    :param send_results: 每次 ``ch.send`` 按顺序返回的结果（dict）。
+    :return: ``(calls, ch)``，calls 记录每次 send 的 Outgoing（含 keyboard_cmd）。
+    """
+    calls: list = []
+
+    class Outgoing:
+        def __init__(self, text="", images=None, keyboard_cmd=""):  # noqa: ANN001
+            self.text = text
+            self.images = images
+            self.keyboard_cmd = keyboard_cmd
+
+    class FakeChannel:
+        async def normalize(self, raw, self_id=""):  # noqa: ANN001
+            return {"reply_ref": {}, "user_key": "qq:OPENID_TEST"}
+
+        async def send(self, ctx, outgoing):  # noqa: ANN001
+            calls.append(outgoing)
+            i = len(calls) - 1
+            return send_results[i] if i < len(send_results) else {"ok": True}
+
+    ch = FakeChannel()
+    for pkg in ("src.plugins", "src.plugins.qq_bridge"):
+        if pkg not in sys.modules:
+            m = types.ModuleType(pkg)
+            m.__path__ = []  # type: ignore[attr-defined]
+            sys.modules[pkg] = m
+
+    chan = types.ModuleType("src.plugins.qq_bridge.channel")
+    chan.__path__ = []  # type: ignore[attr-defined]
+    chan.OFFICIAL = "official"
+    chan.get_channel = lambda name: ch
+    sys.modules["src.plugins.qq_bridge.channel"] = chan
+
+    base = types.ModuleType("src.plugins.qq_bridge.channel.base")
+    base.Outgoing = Outgoing
+    base.attach_official_ctx = lambda ctx: object()  # noqa: ARG005
+    base.detach_official_ctx = lambda token: None  # noqa: ARG005
+    sys.modules["src.plugins.qq_bridge.channel.base"] = base
+    return calls, ch
+
+
+def _stub_quiz_no_button() -> None:
+    """让 finish_text 里 take_button() 返回空（本组用例只测 card_key 链路）。"""
+    if "doupo" not in sys.modules:
+        pkg = types.ModuleType("doupo")
+        pkg.__path__ = [str(_ROOT / "src/plugins/doupo")]  # type: ignore[attr-defined]
+        sys.modules["doupo"] = pkg
+    qs = types.ModuleType("doupo.quiz_session")
+    qs.take_button = lambda: ""
+    sys.modules["doupo.quiz_session"] = qs
+    setattr(sys.modules["doupo"], "quiz_session", qs)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +413,69 @@ def t_channel_text_is_padded() -> None:
         "官方通道文本必须经 prepare_official_text（单行必被平台吞，见 2026-11-25 证据链）")
 
 
+def t_network_fail_retries_keeping_kcmd() -> None:
+    """事故守门①：NetworkError 首发失败必须重试一次，且保留同一个 keyboard_cmd。"""
+    qq = _install_fake_qq()
+    mod = _fresh_mod(qq)
+    calls, _ch = _install_fake_channel([
+        {"ok": False, "reason": "NetworkError detail=<NetWorkError message=API request failed>"},
+        {"ok": True, "id": "OK2"},
+    ])
+    ev = qq.GroupMessageCreateEvent()
+    ok = asyncio.run(mod._channel_send_text(ev, "战斗回执正文", "doupo:fight_text"))
+    assert ok is True, "重试成功后必须回报 True（否则 finish_text 仍降级丢按钮）"
+    assert len(calls) == 2, "网络类失败必须恰好重试一次，实际 send %d 次" % len(calls)
+    assert [c.keyboard_cmd for c in calls] == ["doupo:fight_text"] * 2, (
+        "两次发送必须都带同一个 keyboard_cmd，实际 %r" % [c.keyboard_cmd for c in calls])
+
+
+def t_business_fail_no_retry() -> None:
+    """事故守门②：业务失败（去重/配额/4005xxx）不得重试——重试无意义还撞 40054005。"""
+    for reason in ("40054005 消息被去重", "配额不足", "4005xxx appid invalid"):
+        qq = _install_fake_qq()
+        mod = _fresh_mod(qq)
+        calls, _ch = _install_fake_channel([{"ok": False, "reason": reason}])
+        ev = qq.GroupMessageCreateEvent()
+        ok = asyncio.run(mod._channel_send_text(ev, "正文", "doupo:fight_text"))
+        assert ok is False, "业务失败应回报 False 让上层降级，reason=%s" % reason
+        assert len(calls) == 1, "业务失败不得重试，reason=%s 实际 send %d 次" % (reason, len(calls))
+
+
+def t_success_no_retry() -> None:
+    """事故守门③：首发成功不得重试（防重试逻辑变成双发）。"""
+    qq = _install_fake_qq()
+    mod = _fresh_mod(qq)
+    calls, _ch = _install_fake_channel([{"ok": True, "id": "OK1"}])
+    ev = qq.GroupMessageCreateEvent()
+    ok = asyncio.run(mod._channel_send_text(ev, "正文", "doupo:fight_text"))
+    assert ok is True
+    assert len(calls) == 1, "首发成功不得再发一次，实际 send %d 次" % len(calls)
+
+
+def t_fight_text_button_survives_net_error() -> None:
+    """事故守门④（真场景）：finish_text(card_key=fight_text) 首发 NetworkError 后，
+    重试成功 → matcher 空 finish，不降级兜底桥 → 按钮仍是战斗三键而非主菜单。
+    """
+    qq = _install_fake_qq()
+    mod = _fresh_mod(qq)
+    _stub_quiz_no_button()
+    calls, _ch = _install_fake_channel([
+        {"ok": False, "reason": "NetworkError detail=<NetWorkError message=API request failed>"},
+        {"ok": True, "id": "OK2"},
+    ])
+    m = _Matcher()
+    ev = qq.GroupMessageCreateEvent()
+    try:
+        asyncio.run(mod.finish_text(m, ev, "【战斗】风起\n你击败了对手", card_key="fight_text"))
+    except _Finished:
+        pass
+    assert len(calls) == 2, "战斗回执应重试一次，实际 %d 次" % len(calls)
+    assert all(c.keyboard_cmd == "doupo:fight_text" for c in calls), (
+        "战斗按钮口令必须在重试中保留，实际 %r" % [c.keyboard_cmd for c in calls])
+    assert m.done == [()], (
+        "重试成功后必须空 finish（不降级兜底桥），否则按钮掉回主菜单，实际 %r" % m.done)
+
+
 CASES = (
     ("install_idempotent", t_install_idempotent),
     ("text_goes_channel", t_text_goes_channel),
@@ -364,6 +490,10 @@ CASES = (
     ("escape_markdown_angles", t_escape_markdown_angles),
     ("channel_text_is_padded", t_channel_text_is_padded),
     ("no_raw_text_finish_left_unbridged", t_grep_no_raw_text_finish_left_unbridged),
+    ("network_fail_retries_keeping_kcmd", t_network_fail_retries_keeping_kcmd),
+    ("business_fail_no_retry", t_business_fail_no_retry),
+    ("success_no_retry", t_success_no_retry),
+    ("fight_text_button_survives_net_error", t_fight_text_button_survives_net_error),
 )
 
 

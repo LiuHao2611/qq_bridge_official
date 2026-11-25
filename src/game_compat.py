@@ -500,8 +500,25 @@ async def _channel_send_text(raw: Any, text: str, keyboard_cmd: str = "") -> boo
     token = None
     try:
         token = attach_official_ctx(ctx)
-        ret = await ch.send(ctx, Outgoing(text=prepare_official_text(text),
-                                          keyboard_cmd=keyboard_cmd or ""))
+
+        def _payload():
+            # 2026-11-25 19:45 事故：重载后 QQ 网关偶发 NetworkError（API request
+            # failed，5s 超时），第一次 send 失败后 finish_text 会降级走兜底桥，
+            # 那条**没带 card_key** → 战斗回执挂成了主菜单按钮，用户体感「没反应
+            # /发错了」。这里对连接层抖动即时重试一次，保留同一个 keyboard_cmd。
+            return Outgoing(text=prepare_official_text(text),
+                            keyboard_cmd=keyboard_cmd or "")
+
+        ret = await ch.send(ctx, _payload())
+        if not (isinstance(ret, dict) and ret.get("ok")):
+            reason = str(ret.get("reason") or "") if isinstance(ret, dict) else ""
+            # 只对网络类失败重试；业务失败（4005xxx / 去重 / 配额）重试无意义。
+            if any(k in reason for k in ("NetworkError", "ConnectError", "Timeout",
+                                         "Try again", "API request failed")):
+                import asyncio  # noqa: PLC0415 - 只用一次，避免顶层拉重依赖
+
+                await asyncio.sleep(0.4)
+                ret = await ch.send(ctx, _payload())
     finally:
         if token is not None:
             detach_official_ctx(token)
