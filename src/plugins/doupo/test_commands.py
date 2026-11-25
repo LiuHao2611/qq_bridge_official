@@ -112,7 +112,8 @@ async def main():
     # 2026-11-19 新增「收服」主动收服入口（三层投放补齐）→ 51 + 1 = 52
     # 2026-11-24 新增「宗门斗技」（本门技能池，与「斗技」= 已学全部互补）→ 52 + 1 = 53
     # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令此前图卡上根本没写）→ 53 + 1 = 54
-    check("菜单条数 = menu_total()", commands.menu_total() == 54,
+    # 2026-11-25 新增「查看 <物品名>」物品详情 → 54 + 1 = 55
+    check("菜单条数 = menu_total()", commands.menu_total() == 55,
           f"menu_total={commands.menu_total()}")
     # 新设计：菜单是唯一切换口（斗破菜单），其余口令全部纯中文、不再带前缀
     lines = [l.split(" —— ")[0].strip() for l in menu.splitlines() if " —— " in l]

@@ -92,6 +92,8 @@ _TEMPLATES = {
     "doupo_puppet": _doupo_puppet.build,  # 斗破傀儡卡（一具一块 / 五道资格 / 雷淬纯度）
     "doupo_ruin": _doupo_ruin.build,  # 斗破傀儡遗迹日副本卡（三段进度 / 掉落 / 原著出处）
     "doupo_craft": _doupo_craft.build,  # 斗破傀儡炼制成傀卡（成傀 / 用料 / 降档提醒）
+    "doupo_item": _doupo_craft.build,  # 斗破物品详情卡（本效 / 丹纹三档赐福池 / 从何而来）
+                                       # 与成傀卡共用同一分段内核（该 build 无任何硬编码文案）
     "aimenu": _aimenu.build,  # 指令总览双列加长图（覆盖全部命令族，一张图）
     "checkin": _checkin.build,  # 每日签到卡（连续/累计/喵币 + 里程碑进度 + 本月日历）
     "plain": _plain.build,  # 平原状态和时间卡（Rabbit 版式：白卡+四组状态/倒计时胶囊）
@@ -137,6 +139,7 @@ TEMPLATE_LABELS: dict[str, str] = {
     "doupo_puppet": "斗破傀儡卡",
     "doupo_ruin": "斗破傀儡遗迹卡",
     "doupo_craft": "斗破傀儡炼制卡",
+    "doupo_item": "斗破物品详情卡",
     "aimenu": "指令总览卡",
     "checkin": "签到卡",
     "plain": "平原状态卡",

@@ -312,3 +312,63 @@ def lines(p: dict) -> list[str]:
         if b:
             out.append("🔥 %s · 剩 %d 次" % (b["name"], n))
     return out
+
+
+# ---------------------------------------------------------------------------
+# 「查看 <物品名>」详情卡的取数口径（2026-11-25）
+# 用户：「几纹有什么概率出什么加成」「尽量展示详细」。卡面不许自己重算，
+# 否则改一次数值就要改三处（卡面 / 文本 / 实际结算）。以下三个函数是唯一出口。
+# ---------------------------------------------------------------------------
+def scale_of(tier) -> float:
+    """档位 → 缩放倍率（一纹 1.0 / 二纹 1.5 / 三纹 2.0）。"""
+    return _scale_of(tier)
+
+
+def fmt(blessing: dict, tier=1) -> str:
+    """按档位把某条赐福渲染成实数值文案（次数 / 时长已缩放）。"""
+    return _fmt(blessing, _scale_of(tier))
+
+
+def tier_rule(tier) -> str:
+    """档位规则一句话（详情卡「丹纹」段用）。
+
+    一纹 1 条按原次数/时长；二纹 1 条但次数时长 ×1.5；三纹 1 条 ×2.0
+    并**另加一条**（用户：「最高丹纹额外给特殊加成」）。
+    """
+    t = _clamp_tier(tier)
+    if t >= _TIER_EXTRA:
+        return "三纹：赐福 1 条，次数/时长 ×2.0，另额外再得 1 条"
+    if t == 2:
+        return "二纹：赐福 1 条，次数/时长 ×1.5"
+    return "一纹：赐福 1 条，按原次数/时长"
+
+
+def tier_table(blessing: dict) -> str:
+    """同一条赐福的「一纹原文 + 更高档差值」：「每场战斗前 3 次出手 ×2（二纹 4 次 / 三纹 6 次）」。
+
+    早先版本把整句按档重述三遍（``…×2 ｜ 二纹 …×2；三纹 …×2``），
+    一条占两行、六条就顶掉半张卡。玩家要的是「高档到底多给多少」，
+    所以只把**变了的那一个数**（次数 / 分钟）标出来。
+    """
+    base = _fmt(blessing, _scale_of(1))
+    desc = str(blessing.get("desc") or "")
+    # 🚨 只在**文案本身用了占位符**时才算档位差：
+    # B02「首次技能伤害必定暴击」/ B06「回满 1 次」的 ``n`` 是充能数、句子不引用它，
+    # 若照缩放映成「二纹 2 次 / 三纹 2 次」会与前半句「首次」自相矛盾（实测截图抓到）。
+    if "{n}" in desc:
+        unit, get, fmtv = "次", _n_of, lambda v: str(v)
+    elif "{min}" in desc:
+        unit, get, fmtv = "分钟", _mins_of, lambda v: (
+            str(int(v)) if float(v) % 1 == 0 else str(round(v, 1)))
+    else:
+        return base
+    b0 = get(blessing, _scale_of(1))
+    bits = []
+    for t in (2, 3):
+        v = get(blessing, _scale_of(t))
+        if v != b0:
+            bits.append("%s纹 %s" % ("一二三"[t - 1], fmtv(v)))
+    if bits:
+        # 单位只写一次：「二纹 45 / 三纹 60 分钟」（每条都带单位会多折一行）
+        return "%s ｜ %s %s" % (base, " / ".join(bits), unit)
+    return base

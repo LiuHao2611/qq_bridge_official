@@ -225,6 +225,95 @@ def test_legacy_migration_then_learn_named():
         check("点名技也进 learned", target in p["learned"], str(p["learned"]))
 
 
+def test_learn_named_alias_and_suggest():
+    """🔴 2026-11-25 用户「学习 帝印诀」被判 noskill（同音字）。
+
+    ① 同音字（诀/绝 → 决）必须能学到正确那门；
+    ② 真解不出时不能只说「没有这门」，要给出候选技名（suggest），
+       让玩家一句「学习 X」就能学会。
+    """
+    p = _rich_player()
+    pool = [e["name"] for e in sk.learnable(p) if e.get("origin") != "异火"]
+    canon = next((n for n in pool if "决" in n), None)
+    check("存在含「决」的可学技（别名回归样本）", canon is not None, str(pool))
+
+    if canon:
+        # 同音字：诀 / 绝 都应解析到 canon
+        for alias_char in ("诀", "绝"):
+            alias = canon.replace("决", alias_char)
+            check("同音字解析到正式名(%s)" % alias_char,
+                  core.resolve_skill_name(p, alias) == canon,
+                  "%s -> %r" % (alias, core.resolve_skill_name(p, alias)))
+        r = core.learn_named(p, canon.replace("决", "诀"))
+        check("同音字也能领悟", r.get("ok") is True, str(r))
+        check("领悟的是正式名", r.get("name") == canon, str(r))
+
+        # 反序（真解不出）→ noskill + 候选里含 canon
+        rev = canon[::-1]
+        r2 = core.learn_named(p, rev)
+        check("反序技名仍报 noskill", r2.get("reason") == "noskill", str(r2))
+        check("noskill 给出候选", canon in (r2.get("suggest") or []), str(r2.get("suggest")))
+        out = asyncio.run(commands.cmd_learn_named(MemStore(p), "x", rev))
+        check("命令层文案给「你是不是想学」", "你是不是想学" in out, out[:120])
+
+    # 完全不沾边的名字：不许瞎给候选
+    r3 = core.learn_named(p, "不存在的斗技")
+    check("无关技名无候选", r3.get("suggest") == [], str(r3.get("suggest")))
+    check("无关技名不写「你是不是想学」",
+          "你是不是想学" not in asyncio.run(
+              commands.cmd_learn_named(MemStore(p), "x", "不存在的斗技")))
+
+
+def test_skill_up_and_loadout_accept_typo():
+    """🔴 2026-11-25 用户「升级斗技不行」：`升级 帝印诀`（诀）对不上 `帝印决`（决）。
+
+    升级/上阵原来只做全字+子串匹配 → 直接回「无此斗技」/「不可上阵」，玩家以为坏了。
+    同音字归一必须覆盖这两个口令，不能只修「学习」。
+    """
+    p = _rich_player()
+    pool = [e["name"] for e in sk.learnable(p) if e.get("origin") != "异火"]
+    canon = next((n for n in pool if "决" in n), None)
+    check("有含「决」的可学技（升级/上阵别名样本）", canon is not None, str(pool))
+    if not canon:
+        return
+    check("先领悟目标技", core.learn_named(p, canon).get("ok") is True, canon)
+    typo = canon.replace("决", "诀")
+
+    out = asyncio.run(commands.cmd_skill_up(MemStore(p), "x", typo))
+    check("升级：错字不再报「无此斗技」", "无此斗技" not in out, out[:90])
+    check("升级：认出正式技名", canon in out, out[:90])
+
+    out2 = asyncio.run(commands.cmd_loadout(MemStore(p), "x", typo))
+    check("上阵：错字不再报「不可上阵」", "不可上阵" not in out2, out2[:90])
+    check("上阵：认出正式技名", canon in out2, out2[:90])
+
+
+def test_skill_up_flame_skill_explains_instead_of_noskill():
+    """🔴 2026-11-25 用户「升级斗技不行」（`升级 帝炎破世`）。
+
+    异火主动技能上阵（`equippable_names` 含它）却不在 `learned` 里，
+    `skill_up` 只认 learned → 旧代码回「无此斗技」，还列一串本宗技，
+    玩家只会以为自己打错字。必须明确指向「异火」养火。
+    """
+    p = _rich_player()
+    # 造一个「已收服异火」的档（帝炎看 diyan 位，其余看 flames 喂养等级）
+    flame = next(iter(sk.fs.FLAME_SKILLS))
+    p.setdefault("flames", {})[flame] = 1
+    flames = [e["name"] for e in sk.fs.entries_for(p)]
+    check("异火主动技样本可用", bool(flames), str(flame))
+    if not flames:
+        return
+    target = flames[0]
+    check("异火技不在 learned 里（复现前提）",
+          target not in (p.get("learned") or []), target)
+    check("异火技可上阵（口径不一致的另一半）",
+          target in core.equippable_names(p), target)
+    out = asyncio.run(commands.cmd_skill_up(MemStore(p), "x", target))
+    check("异火技不报「无此斗技」", "无此斗技" not in out, out[:100])
+    check("异火技文案指向养火", "异火等级" in out, out[:100])
+    check("异火技文案点名该技", target in out, out[:100])
+
+
 def test_cmd_learn_named_no_old_version_prompt():
     """命令层：老档学斗技/定向学习都不再出现「老版本/无需领悟」提示。"""
     p = _rich_player()

@@ -275,7 +275,7 @@ def list_buttons(p: dict[str, Any]) -> dict[str, tuple[tuple[str, str], ...]]:
 CARD_LABELS = {
     "panel": "人物卡", "roster": "斗技名册", "skills": "斗技卡", "faction": "宗门卡",
     "flames": "异火卡", "shop": "宝库卡", "bag": "背包卡", "rank": "排行卡",
-    "recipes": "炼药卡", "battle": "战斗回看卡",
+    "recipes": "炼药卡", "battle": "战斗回看卡", "item": "物品详情卡",
 }
 
 #: 玩家配置时可用的卡片别名（含中文口语名 + key）。菜单卡不在其中（禁配）。
@@ -291,6 +291,7 @@ CARD_ALIASES = {
     "排行": "rank", "排行榜": "rank", "rank": "rank",
     "炼药": "recipes", "丹方": "recipes", "炼药卡": "recipes", "recipes": "recipes",
     "战斗回看": "battle", "战斗回看卡": "battle", "battle": "battle",
+    "查看": "item", "物品": "item", "物品详情": "item", "item": "item",
 }
 
 

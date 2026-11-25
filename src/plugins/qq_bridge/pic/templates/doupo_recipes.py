@@ -55,17 +55,17 @@ ICON_STYLE = "line"
 # 间距
 HEAD_GAP = 12                  # 标题分割线到副标题
 SUB_GAP = 14                   # 副标题到第一组
-GRADE_GAP = 16                 # 组间距
+GRADE_GAP = 14                 # 组间距
 GRADE_H = FS_GRADE + 12        # 分组标题行高
-BLOCK_GAP = 10                 # 组内丹药块间距（行间）
+BLOCK_GAP = 8                  # 组内丹药块间距（行间；11-25 收紧：desc 只剩本效，块变矮）
 BLOCK_PAD_X = 16               # 块左右内边距（2026-11-22 12→16：单元格内
                                # 文字离边框太近，用户点名「字和边框黏在一起」）
-BLOCK_PAD_Y = 12               # 块上下内边距
+BLOCK_PAD_Y = 10               # 块上下内边距（11-25 12→10：卡面只留丹方+效果，可收紧）
 BLOCK_RADIUS = 10
-NAME_MAT_GAP = 6               # 丹名行与材料行
-MAT_DESC_GAP = 5               # 材料行与功效行
+NAME_MAT_GAP = 5               # 丹名行与材料行
+MAT_DESC_GAP = 4               # 材料行与功效行
 MAT_LH = FS_MAT + 4            # 材料折行行高
-DESC_LH = FS_DESC + 5          # 功效折行行高
+DESC_LH = FS_DESC + 4          # 功效折行行高
 READY_W = 56                   # 右侧「可炼/缺料/购买」标记预留宽
 FOOT_GAP = 16                  # 列表到底部提示
 H_TIP = 12 + FS_TIP + 8
@@ -112,14 +112,35 @@ def _mat_text(mat) -> str:
 
 
 def _mat_lines(row: dict, max_w: int) -> list[str]:
-    """材料行折行；无药方（buyonly）改为「N 金购买」一行。"""
+    """材料行折行：**按「、」整项换行**，绝不把一个药名劈成两半。
+
+    2026-11-25 用户「卡片收紧、别写废话」之后块变矮、列变窄，
+    旧的 ``Canvas.wrap`` 按像素硬折，实测把「黑岩根×2」折成
+    「黑岩」+「根×2」——药名断在中间，玩家得猜是哪味药。
+    改成贪心装行：一行装不下就整项挪到下一行，行尾补「、」表示还有。
+    """
     if row.get("buyonly"):
         return ["%d 金购买" % int(row.get("buy", 0))]
     mats = row.get("mats") or []
     if not mats:
         return []
-    line = "、".join(_mat_text(m) for m in mats)
-    return Canvas.wrap(line, FS_MAT, "regular", max(60, max_w))
+    limit = max(60, max_w)
+    lines: list[str] = []
+    cur = ""
+    for part in (_mat_text(m) for m in mats):
+        cand = part if not cur else cur + "、" + part
+        if _w(cand, FS_MAT, "regular") <= limit:
+            cur = cand
+            continue
+        if cur:
+            lines.append(cur + "、")
+            cur = part
+        else:
+            lines.extend(Canvas.wrap(part, FS_MAT, "regular", limit))
+            cur = ""
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def _desc_lines(row: dict, max_w: int) -> list[str]:

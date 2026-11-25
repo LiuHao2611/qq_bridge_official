@@ -598,6 +598,54 @@ def test_roster_no_guard_detects_regression():
     assert caught, "检测失效：错位映射没被判据抓到"
 
 
+def test_loadout_text_splits_learned_and_todo():
+    """「上阵」无参文案必须分「可上阵（已领悟）」与「待领悟」两档（2026-11-25）。
+
+    用户原话「上阵 11 14 就不行了」：旧文案把 skill_pool（已解锁）**全部**列进
+    「可上阵」，其中含可学未领悟的技 → 用户照着序号打必被拒，看着像口令坏了。
+    """
+    from doupo import commands
+
+    p = _p()
+    pool = core.skill_pool_sorted(p)
+    # 夹具必须同时有「已领悟」和「未领悟」，否则测不出分组
+    p["learned"] = [e["name"] for e in pool[:1]]
+    learned = set(core.equippable_names(p))
+    assert any(e["name"] not in learned for e in pool), "夹具里没有未领悟技"
+
+    out = asyncio.run(commands.cmd_loadout(_MemStore(p), "10001", ""))
+    assert "可上阵（已领悟）" in out, out[:200]
+    assert "待领悟" in out, out[:200]
+    ready_line = next(ln for ln in out.splitlines() if ln.startswith("可上阵（已领悟）"))
+    todo_line = next(ln for ln in out.splitlines() if ln.startswith("待领悟"))
+    for i, e in enumerate(pool, 1):
+        if e["name"] in learned:
+            assert f"{i}.{e['name']}" in ready_line, "已领悟技丢了：%s" % e["name"]
+        else:
+            assert e["name"] not in ready_line, "未领悟技混进可上阵：%s" % e["name"]
+            assert e["name"] in todo_line, "未领悟技没进待领悟：%s" % e["name"]
+    # 旧文案（无分组的「可上阵：」）必须彻底消失，避免又退回误导版
+    assert "\n可上阵：" not in out, "仍是旧的无分组文案"
+
+
+def test_loadout_reject_lists_only_learned():
+    """被拒时列的「当前可上阵」也只能是已领悟的（同一口径）。"""
+    from doupo import commands
+
+    p = _p()
+    pool = core.skill_pool_sorted(p)
+    p["learned"] = [e["name"] for e in pool[:1]]
+    learned = set(core.equippable_names(p))
+    unlearned = [e["name"] for e in pool if e["name"] not in learned]
+    assert unlearned, "夹具里没有未领悟技"
+
+    out = asyncio.run(commands.cmd_loadout(_MemStore(p), "10001", str(len(pool) + 99)))
+    assert "不可上阵" in out, out[:120]
+    listed = out.split("当前可上阵：", 1)[-1]
+    for nm in unlearned:
+        assert nm not in listed, "未领悟技出现在「当前可上阵」：%s" % nm
+
+
 class _MemStore:
     def __init__(self, p):
         self.p = p

@@ -29,7 +29,10 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 # Event 从兼容层取（运行时有真 Event；纯业务单测的 _stub_nonebot 无此属性时回退 object）
 # finish_card（2026-11-16）：官方通道出图时挂对应功能按钮，NapCat 行为不变。
-from src.game_compat import Event, finish_card, finish_text, image_seg, is_official, view
+from src.game_compat import (
+    Event, finish_card, finish_text, image_seg, install_official_text_bridge,
+    is_official, view,
+)
 
 from . import commands
 from . import card
@@ -39,6 +42,15 @@ from . import store as store_mod
 from . import puppet_store as puppet_store_mod
 
 logger = logging.getLogger("qq_bridge.doupo")
+
+# 2026-11-25：官方通道纯文本统一收口（「上阵 / 学习 / 锁定 / 主题」打字没反应的
+# 根因修复——原生 matcher.finish(str) 发出的纯文本在官方通道被平台静默吞掉，
+# 卡片/按钮走的 OfficialChannel.send 才到得了）。幂等；NapCat 单跑时自动跳过。
+try:
+    install_official_text_bridge()
+except Exception as _e:  # noqa: BLE001 — 兜底补丁失败绝不能拖垮整个插件
+    logger.warning("官方纯文本通道补丁安装失败（不影响其它功能）：%s: %s",
+                   type(_e).__name__, _e)
 
 # 进程级单例（store.STORE）：按钮点击回调与本插件必须共享同一实例，
 # 否则官方按钮点「人物」读不到当前存档。见 store.py 末尾说明。
@@ -781,6 +793,41 @@ async def _(event: Event):
                           page=page, total_pages=total_pages)
         return
     await recipes.finish(msg)
+
+
+# ---------------------------------------------------------------------------
+# 「查看 <物品名>」物品详情卡（2026-11-25 用户要求）
+# ---------------------------------------------------------------------------
+# 用户原话：「加一个查看物品的功能，无论是背包还是宝库还是丹药，这些物品，都加
+# 一个查看物品详情的功能，比如我输入查看 破厄丹，他就给我展示这个物品的卡片」。
+# 与「服丹/锁定」的区别：那两条**要求背包里真有**（会扣物品），
+# 查看只查图鉴 —— 宝库里没买的药材、还没炼过的丹，也得看得到。
+# 关键词只认「查看」：与「斗技详情」这类「详情」口令不冲突，不会互相抢。
+view_cmd = on_regex(_pat(r"查看") + r"\s*(.*)", priority=PRI, block=True,
+                    rule=_mode_is("doupo"))
+
+
+@view_cmd.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, view_cmd)
+    qq = str(event.user_id)
+    arg = _arg(event, "查看")
+    name = commands.item_lookup(arg) if arg else ""
+    txt = await commands.cmd_view(store, qq, arg)
+    png = None
+    if name:
+        try:
+            p = await store.get_player(qq)
+            if p:
+                png = await card.render_item_detail(p, name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("斗破物品详情卡渲染异常，降级纯文本：%s: %s",
+                           type(e).__name__, e)
+    if png:
+        await finish_card(view_cmd, event, png, "item", "doupo_item.png")
+        return
+    await view_cmd.finish(txt)
 
 
 craft = on_regex(_pat(r"(?:炼制|炼丹)") + r"\s*(.*)", priority=PRI, block=True, rule=_mode_is("doupo"))

@@ -44,10 +44,12 @@ def _stub():
 _stub()
 from doupo import core, config as cfg, danwen as dw, temp_buff as tb  # noqa: E402
 
-DN = "凝血散" + cfg.DANWEN_SUFFIX          # 存量存档名（·丹纹），按一纹兼容
-DN1 = "凝血散" + cfg.danwen_suffix(1)       # 新产出名（·一纹）
-DN2 = "凝血散" + cfg.danwen_suffix(2)
-DN3 = "凝血散" + cfg.danwen_suffix(3)
+DN = "凝血散" + cfg.DANWEN_LEGACY            # 存量存档名（·丹纹），按一纹兼容
+# 2026-11-25 用户「改成一纹破厄丹这种，几纹写在名称前面」：带纹丹名改前缀，
+# 唯一生成入口是 cfg.danwen_name（含撞车加隔点的规则），测试不许自己拼后缀。
+DN1 = cfg.danwen_name("凝血散", 1)            # 一纹凝血散
+DN2 = cfg.danwen_name("凝血散", 2)
+DN3 = cfg.danwen_name("凝血散", 3)
 
 
 def P(alch=5):
@@ -116,10 +118,10 @@ def t_craft_emits_danwen():
 
 
 def t_craft_tier_by_weight():
-    """纹数按 70/25/5 权重落到 一纹/二纹/三纹，品名后缀与纹数一致。"""
+    """纹数按 70/25/5 权重落到 一纹/二纹/三纹，品名前缀与纹数一致。"""
     for x, tier in ((0.10, 1), (0.80, 2), (0.98, 3)):
         r, p = _craft_once([0.0, x])
-        nm = "凝血散" + cfg.danwen_suffix(tier)
+        nm = cfg.danwen_name("凝血散", tier)
         assert r.get("danwen") == tier, (x, r.get("danwen"))
         assert core.count_item(p, nm) == 1, (x, nm, p["bag"])
 
@@ -238,14 +240,13 @@ def t_special_pills_have_no_danwen():
     """兽火单方/升技材料/养魂涎不能有带纹版（服下必先扣后失败 = 吞丹）。"""
     for nm in ("焚血散", "养魂涎", "紫火丹", "桃花丹"):
         for i in range(1, len(cfg.DANWEN_TIERS) + 1):
-            dn = nm + cfg.danwen_suffix(i)
+            dn = cfg.danwen_name(nm, i)
             assert dn not in cfg.RECIPE_BY_NAME, dn
             assert dn not in cfg.DANWEN_RECIPE_NAMES, dn
         assert nm + cfg.DANWEN_LEGACY not in cfg.RECIPE_BY_NAME, nm
     # 常规丹必须仍有全部档位（含存量别名）
-    for s in (cfg.danwen_suffix(1), cfg.danwen_suffix(2),
-              cfg.danwen_suffix(3), cfg.DANWEN_LEGACY):
-        assert "凝血散" + s in cfg.RECIPE_BY_NAME, s
+    for s in (DN1, DN2, DN3, DN):
+        assert s in cfg.RECIPE_BY_NAME, s
 
 
 def t_tier_scales_duration_not_pct():

@@ -795,6 +795,8 @@ DANWEN_SKIP_EFFECTS = _DANWEN_SKIP_EFFECTS
 def danwen_allowed(rec) -> bool:
     """这枚丹能不能出丹纹？三类「不是吃掉而是另有用途」的丹出纹就是死物品。"""
     return str((rec or {}).get("effect") or "") not in _DANWEN_SKIP_EFFECTS
+
+
 DANWEN_RECIPE_NAMES: list[str] = []
 #: 带纹丹名 → (基础丹名, 纹数)。**唯一真源**：`is_danwen_name` 只查这张表，
 #: 不做前缀猜测——否则原著丹名「三纹青灵丹/二纹青灵丹」会被误判成带纹丹。
@@ -2989,3 +2991,66 @@ VENOM_LIFESTEAL = 0.12
 #: 天府联盟 · 全属性比例加成 +4%（不锁宗，与魂殿锁死形成对照）。走 stats 六维。
 TIANFU_SECT = "tianfu"
 TIANFU_ALLSTAT = 0.04
+
+
+# ============================================================================
+# 物品分类（「查看 <物品名>」唯一真源，2026-11-25）
+# ============================================================================
+# 卡片层（card.build_item_detail_data）与文本层（commands.cmd_view）必须给出
+# **同一套分类**，否则会出现「卡里有丹纹段、文本说不认识」这种自相矛盾。
+# 所以分类表放在数据层（本文件），两边都只读它。
+#
+# 用户原话：「加一个查看物品的功能，无论是背包还是宝库还是丹药，这些物品，
+# 都加一个查看物品详情的功能……从何而来。其他物品都一样……以药老或者普通商家
+# 的口吻描述就行。」⇒ 系统物（药渣/炎星石/玄重尺）没有原著出处，文案只写
+# 「它到底干什么」，不编设定、不写章节号。
+
+#: 系统杂项：既不是丹、也不是药材/天材地宝。``kind``=类别行，``rows``=本效段，
+#: ``tip``=底部用法。数值引用本文件常量，不写死。
+MISC_ITEMS: dict[str, dict] = {
+    "药渣": {
+        "kind": "炼药残渣",
+        "rows": ["炼药失败的残留，每次失败得 %d 份" % CRAFT_FAIL_DROSS,
+                 "养火的唯一燃料：发「养火 <火名>」把现有药渣一次喂光"],
+        "tip": "发「养火 青莲地心火」喂火升级 · 发「异火」看现有火种",
+    },
+    "炎星石": {
+        "kind": "强化石",
+        "rows": ["玄重尺强化的耗材，强化越高越吃石",
+                 "战斗、竞技场、天降炎星石都会掉（约 %d%% 一场）"
+                 % int(DROP_RATE_STONE / 10)],
+        "tip": "发「强化」消耗炎星石强化玄重尺 · 发「人物」看当前武器",
+    },
+    "玄重尺": {
+        "kind": "武器",
+        "rows": ["入道时的那柄黑尺，越强化越沉",
+                 "强化靠炎星石：发「强化」一次一颗往上叠"],
+        "tip": "发「强化」升武器 · 发「人物」看攻击与强化等级",
+    },
+}
+
+
+def item_kind(name: str) -> str:
+    """物品名 → 类别：``pill`` / ``danwen`` / ``herb`` / ``material`` /
+    ``puppet`` / ``misc`` / ``""``（查无此物）。
+
+    「带纹丹」单独一类：它既是丹（本效照旧）又多了赐福，卡面要分别处理。
+    ``puppet`` 收两类：``PUPPET_MATERIALS`` 名单 + 按阶命名的``X魔核``
+    （魔核是动态生成的，正文最高只到七阶，故按后缀判、限长防误吞）。
+    """
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    if s in DANWEN_INDEX:
+        return "danwen"
+    if s in RECIPE_BY_NAME:
+        return "pill"
+    if s in HERB_BY_NAME:
+        return "herb"
+    if s in MATERIAL_BY_NAME:
+        return "material"
+    if s in MISC_ITEMS:
+        return "misc"
+    if s in PUPPET_MATERIALS or (s.endswith("魔核") and len(s) <= 12):
+        return "puppet"
+    return ""

@@ -143,7 +143,8 @@ def test_baseline_sane():
     real = _baseline_real_commands()
     # 2026-11-24：基准落后实际 1 条（历史新增口令未同步，HEAD 上就红），跟到真实 53。
     # 2026-11-24 晚：菜单补「外观 · 卡片主题」分组（用户「主题口令菜单上没写」）→ 53→54。
-    assert len(real) == 54, "MENU_GROUPS 基准应为 54 条 canonical 口令，实际 %d" % len(real)
+    # 2026-11-25：新增「查看 <物品名>」物品详情 → 54→55。
+    assert len(real) == 55, "MENU_GROUPS 基准应为 55 条 canonical 口令，实际 %d" % len(real)
     for must in ("斗破菜单", "入道", "人物", "修炼", "突破", "战斗", "强化",
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "收服", "养火", "宝库", "买", "炼药", "炼制", "服丹",
@@ -211,6 +212,8 @@ def test_each_card_buttons_are_relevant_family():
         "ruin": {"炼制傀儡", "傀儡", "战斗"},
         # 2026-11-20 傀儡炼制成卡（成傀后：看名录 / 回遗迹打料 / 打一场试刀）
         "craft": {"傀儡", "傀儡遗迹", "战斗"},
+        # 2026-11-25 物品详情卡（看完详情：吃掉 / 去炼 / 再逛）
+        "item": {"服丹", "炼药", "宝库", "背包"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (

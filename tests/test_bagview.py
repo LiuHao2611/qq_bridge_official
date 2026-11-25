@@ -8,8 +8,9 @@ lv100+ 的号 64 种物品里前 24 全是堆量药材，**刚炼的丹药被整
 本测试钉死四件事：
 1. 丹药（含带纹丹）必须排在任何材料之前；
 2. **全量展示、不翻页**（用户口径「背包别搞翻页，延长」）——64 种物品一行不许丢；
-3. 带纹丹**名称不变**（卡面/文本都显示基础丹名），纹数只走右上角标
-   ``corner_tr``，几纹写几；锁定只走左上角标 ``corner_tl``＝「锁」；
+3. 带纹丹**名称自带纹数**（2026-11-25 用户「改成一纹破厄丹这种，几纹就直接
+   写在丹药名称前面」）→ 格子标题就是「一纹聚气散 ×1」，右上角不再重复挂角标
+   （同一信息画两遍是噪音）；锁定只走左上角标 ``corner_tl``＝「锁」；
 4. 角标颜色与卡片标题同族金（``gold``），不吃 accent/text 色。
 
 自带 runner：python tests/test_bagview.py
@@ -66,7 +67,7 @@ def _tpl_mod():
     return sys.modules[pic.__name__ + ".templates.doupo_list"]
 
 #: 带纹丹名（一纹），全测试共用
-DW1 = "聚气散" + cfg.danwen_suffix(1)
+DW1 = cfg.danwen_name("聚气散", 1)          # 一纹聚气散（前缀命名）
 
 
 def _big_bag():
@@ -111,30 +112,36 @@ def t_no_truncation():
     assert "page" not in d and "total_pages" not in d, sorted(d)
 
 
-def t_pill_name_unchanged():
-    """🔒 带纹丹在格子里**显示基础丹名**，纹数只走右上角标（用户：名称不要变）。"""
+def t_pill_name_carries_tier():
+    """🔒 带纹丹的名字**自带纹数**（前缀），右上角不再重复挂角标。
+
+    2026-11-25 用户：「这个命名太麻烦了，改成一纹破厄丹这种，几纹就直接写在
+    丹药名称前面」。名称已经写明几纹，再挂一个「一纹」角标就是把同一件事
+    画两遍 —— 格子右上角只留给真正需要额外标注的东西（锁定走左上角「锁」）。
+    """
     p = _big_bag()
     d = card.build_bag_data(p)
-    row = next(r for r in d["rows"] if r.get("corner_tr"))
-    assert row["title"].startswith("聚气散 ×"), "格子标题被改名了：%r" % row["title"]
-    assert "一纹" not in row["title"], "纹数不该进标题：%r" % row["title"]
-    assert row["corner_tr"] == "一纹", row["corner_tr"]
-    # 普通丹不该有角标
+    row = next(r for r in d["rows"] if r["title"].startswith("一纹"))
+    assert row["title"].startswith(DW1 + " ×"), "带纹丹名称没带纹数：%r" % row["title"]
+    assert not row.get("corner_tr"), "名称已带纹数，右上角不该再挂纹数角标"
+    # 普通丹既无角标也不是带纹名
     plain = next(r for r in d["rows"] if r["title"].startswith("破厄丹 "))
     assert "corner_tr" not in plain and "corner_tl" not in plain, plain
 
 
-def t_tier_badge_matches_tier():
-    """几纹就显示几：一纹/二纹/三纹各自对应角标。"""
+def t_tier_in_name_matches_tier():
+    """几纹就写几：一纹/二纹/三纹各自一行、名字各自以纹数开头。"""
     p = {"gold": 0, "bag": {"聚气散": 1}}
     for i in range(1, len(cfg.DANWEN_TIERS) + 1):
-        p["bag"]["聚气散" + cfg.danwen_suffix(i)] = 1
+        p["bag"][cfg.danwen_name("聚气散", i)] = 1
     d = card.build_bag_data(p)
-    got = sorted(r["corner_tr"] for r in d["rows"] if r.get("corner_tr"))
-    assert got == sorted(cfg.DANWEN_TIERS), got
-    # 三个带纹版本 + 基础丹 = 4 行，名称全部是「聚气散」
-    assert len(d["rows"]) == 4, len(d["rows"])
-    assert all(r["title"].startswith("聚气散") for r in d["rows"]), d["rows"]
+    titles = [r["title"] for r in d["rows"]]
+    # 三个带纹版本 + 基础丹 = 4 行（三档各自独立物品，绝不合并）
+    assert len(d["rows"]) == 4, titles
+    for word in cfg.DANWEN_TIERS:
+        assert any(t.startswith(word + "聚气散 ") for t in titles), (word, titles)
+    assert any(t.startswith("聚气散 ") for t in titles), titles
+    assert not any(r.get("corner_tr") for r in d["rows"]), "不该再有纹数角标"
 
 
 def t_lock_corner():
@@ -144,11 +151,12 @@ def t_lock_corner():
     locked_rows = [r for r in d["rows"] if r.get("corner_tl")]
     assert len(locked_rows) == 2, [r["title"] for r in locked_rows]
     assert all(r["corner_tl"] == "锁" for r in locked_rows)
-    dw_row = next(r for r in locked_rows if r.get("corner_tr"))
-    assert dw_row["corner_tr"] == "一纹" and dw_row["corner_tl"] == "锁"
-    assert dw_row["title"].startswith("聚气散 ×"), dw_row["title"]
-    # 锁定的普通丹不带纹角标
-    plain_row = next(r for r in locked_rows if not r.get("corner_tr"))
+    dw_row = next(r for r in locked_rows if r["title"].startswith("一纹"))
+    assert dw_row["corner_tl"] == "锁", dw_row
+    assert dw_row["title"].startswith(DW1 + " ×"), dw_row["title"]
+    assert not dw_row.get("corner_tr"), "名称已带纹数，不该再挂角标"
+    # 锁定的普通丹同理
+    plain_row = next(r for r in locked_rows if r["title"].startswith("破厄丹 ×"))
     assert plain_row["title"].startswith("破厄丹 ×"), plain_row["title"]
 
 
@@ -204,14 +212,18 @@ def t_row_baseline_aligned():
     tpl = _tpl_mod()
     pic = card._load_pic()
     p = {"qq": "1", "gold": 0, "bag": {
-        "聚气散" + cfg.danwen_suffix(2): 1,   # 有角标（二纹）
+        # 2026-11-25：纹数已写进名字，右上角不再挂角标 —— 本用例改用**锁定**
+        # （左上角「锁」）当「有角标那一格」，它走同一套 draw_corner_badge 几何，
+        # 基线规则照样被钉住，不会因为去掉纹数角标而空转。
+        cfg.danwen_name("聚气散", 2): 1,      # 有角标（左上「锁」）
         "回灵丹": 2,                          # 无角标
         "血蟒枝": 3,                          # 无角标（材料）
         "冰晶石": 4,                          # 无角标（材料）
     }}
     boxes: list[tuple] = []
     theme = pic.resolve_theme("light", "斗破背包")
-    tpl.build(theme, card.build_bag_data(p), card.CARD_WIDTH, boxes=boxes)
+    tpl.build(theme, card.build_bag_data(p, locked={cfg.danwen_name("聚气散", 2)}),
+              card.CARD_WIDTH, boxes=boxes)
     names = {b[0]: b for b in boxes if str(b[0]).startswith("g") and "." not in str(b[0])}
     assert len(names) == 4, sorted(names)
     centers = {}
@@ -234,8 +246,8 @@ def t_zero_and_dirty_filtered():
     assert names == ["聚气散"], names
 
 
-TESTS = [t_pills_first, t_no_truncation, t_pill_name_unchanged,
-         t_tier_badge_matches_tier, t_lock_corner, t_corner_geometry_inside_cell,
+TESTS = [t_pills_first, t_no_truncation, t_pill_name_carries_tier,
+         t_tier_in_name_matches_tier, t_lock_corner, t_corner_geometry_inside_cell,
          t_row_baseline_aligned, t_zero_and_dirty_filtered]
 
 if __name__ == "__main__":

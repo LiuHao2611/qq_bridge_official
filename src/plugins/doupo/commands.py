@@ -402,8 +402,11 @@ MENU_GROUPS = (
         ("买 血灵草 2", "买 2 份血灵草"),
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
         ("炼制 回灵丹", "开炉炼丹；「炼制 回灵丹 5次」连炼5炉，失败得药渣"),
-        ("服丹 回灵丹", "服用丹药"),
-        ("背包", "包裹：丹药优先、24 格一页，「背包2」翻页；锁定物品带 🔒，战斗不自动服用"),
+        ("服丹 回灵丹", "服用丹药；带纹丹写成「服丹 二纹破厄丹」"),
+        ("查看 破厄丹", "看物品详情：本效、丹纹各档概率与赐福、从何而来"),
+        # 2026-11-25：背包已改「不翻页、一卡到底」，旧文案还写着「24 格一页 / 背包2 翻页」，
+        # 玩家照着发「背包2」只会拿到同一张满包卡 —— 菜单不许承诺做不到的事。
+        ("背包", "包裹：丹药优先、一卡到底不翻页；格子上「锁」=已锁定，战斗不自动服用"),
         ("锁定 回灵丹", "锁定物品：只拦「战斗自动服药」，手动服丹照旧"),
         ("解锁 回灵丹", "解除锁定，恢复自动服用"),
     )),
@@ -1997,6 +2000,97 @@ def resolve_owned_item(p, raw: str) -> tuple[str, bool]:
         if cand in bag and cand in usable:
             return cand, True
     return "", False
+
+
+# ---------------------------------------------------------------------------
+# 「查看 <物品名>」物品详情（2026-11-25 用户要求）
+# ---------------------------------------------------------------------------
+def _split_tier(t: str) -> tuple[str, int]:
+    """「二纹破厄丹」/「破厄丹二纹」/「破厄丹·二纹」→ (破厄丹, 2)。"""
+    for word, n in _TIER_WORDS:
+        if t.startswith(word) and len(t) > len(word):
+            return t[len(word):].strip("·"), n
+        if t.endswith(word) and len(t) > len(word):
+            return t[: -len(word)].strip("·"), n
+    return t, 0
+
+
+def item_lookup(raw: str) -> str:
+    """玩家手打的物品名 → **已知物品名**（不要求持有，宝库里没买的也能看）。
+
+    :return: 归一后的物品名（可能是带纹丹全名）；查无此物返回 ``""``。
+
+    与 ``resolve_owned_item`` 的分工：那个查**背包**（能否服用/锁定，要求持有）；
+    这个查**图鉴**（有没有这件东西），所以宝库药材、天材地宝、系统杂项都认。
+    分类判据走 ``cfg.item_kind``（与卡片层同一张表），不在这里另判一套。
+    """
+    t = _norm_item_text(raw)
+    if not t:
+        return ""
+    if cfg.item_kind(t):
+        return t
+    base, tier = _split_tier(t)
+    if tier and base:
+        cand = cfg.danwen_name(base, tier)
+        if cfg.item_kind(cand):
+            return cand
+        # 玩家问「破厄丹二纹」但这款丹没有带纹版 —— 退回基础丹给他看本效
+        if cfg.item_kind(base):
+            return base
+    return ""
+
+
+def _view_text(name: str) -> str:
+    """详情卡的**文本兜底**（只在卡片渲染失败时用；正常一律出图）。
+
+    只给最关键的三件：本效、来历、丹纹，不铺赐福池 —— 那是卡片的活。
+    """
+    kind = cfg.item_kind(name)
+    base = cfg.base_of_danwen(name) if kind == "danwen" else name
+    lines = ["【%s】" % name]
+    if kind in ("pill", "danwen"):
+        rec = cfg.RECIPE_BY_NAME.get(base) or {}
+        lines.append("本效：%s" % (cfg.recipe_impl(rec) or rec.get("desc") or "—"))
+        need = rec.get("need") or {}
+        if need:
+            lines.append("炼制：%s" % "、".join("%s×%d" % (k, int(v))
+                                              for k, v in need.items()))
+        elif int(rec.get("buy", 0) or 0) > 0:
+            lines.append("宝库：%d 金一枚" % int(rec["buy"]))
+        if cfg.danwen_allowed(rec):
+            lines.append("丹纹：成功后有 %d%% 几率出纹，一/二/三纹再按 %s 分。"
+                         % (int(round(cfg.danwen_rate(str(rec.get("grade") or "")) * 100)),
+                            "/".join("%d%%" % int(round(w * 100)) for w in cfg.DANWEN_TIER_W)))
+        return "\n".join(lines)
+    if kind == "herb":
+        h = cfg.HERB_BY_NAME.get(name) or {}
+        lines.append("本效：%s" % (h.get("desc") or "—"))
+        lines.append("宝库：%d 金一味" % int(h.get("price", 0) or 0))
+        return "\n".join(lines)
+    if kind == "material":
+        m = cfg.MATERIAL_BY_NAME.get(name) or {}
+        lines.append("本效：%s" % (m.get("desc") or "—"))
+        if int(m.get("price", 0) or 0) > 0:
+            lines.append("宝库：%d 金一份" % int(m["price"]))
+        return "\n".join(lines)
+    misc = cfg.MISC_ITEMS.get(name)
+    if misc:
+        return "\n".join(["【%s】%s" % (name, misc["kind"])] + list(misc["rows"]))
+    return "【%s】傀儡材料，凑齐配方即开炉。" % name
+
+
+async def cmd_view(store, qq, arg: str = "") -> str:
+    """「查看 <物品名>」的兜底文本。正常路径由 ``card.render_item_detail`` 出图。"""
+    arg = (arg or "").strip()
+    if not arg:
+        return ("用法：查看 <物品名>　例：查看 破厄丹 / 查看 二纹破厄丹 /"
+                " 查看 冰晶石\n　丹药看得见本效、丹纹各档概率与赐福、从何而来；"
+                "药材与天材地宝看得见价格与用途。")
+    name = item_lookup(arg)
+    if not name:
+        return ("没找到「%s」这件东西。\n　发「包裹」看自己有什么 · 发「宝库」看药材 · "
+                "发「炼药」看能炼的丹方" % arg)
+    return _view_text(name)
 
 
 async def cmd_lock(store, qq, name, on: bool = True) -> str:

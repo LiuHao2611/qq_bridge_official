@@ -31,6 +31,7 @@ from . import commands
 from . import avatar
 from . import factions as fac
 from . import skill_effects as fx
+from . import danwen as dw
 
 log = logging.getLogger("qq_bridge.doupo.card")
 
@@ -978,6 +979,13 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     低阶丹药由 ``available_recipes`` 直接过滤掉，卡上只出现当前境界可用者；
     每页固定 ``cfg.RECIPES_PER_PAGE`` 枚，模板按两列网格排布，页码信息由
     ``page`` / ``total_pages`` / ``total_avail`` 透出（供卡面与翻页按钮共用）。
+
+    2026-11-25 用户「炼药的卡片就只展示丹方和丹药本身效果就行，别写其他废话，
+    丹药卡片收紧，布局紧凑点，别搞得翻页太多了」——
+    卡面 ``desc`` **只印** ``cfg.recipe_impl``（本作真会发生的事），
+    功效标签 / 把握 / 越档 / 丹纹率全部撤出卡面：那些是「这一炉风险多大」的
+    决策信息，看一次就够，印在每一格上只会把两列挤成四行、翻页翻到烦。
+    它们仍在「炼药」纯文本与「查看 <丹名>」详情卡里（分场景给，不重复给）。
     """
     alch_idx = int(p.get("alch", 0))
     alch_label = cfg.alch_label(alch_idx)
@@ -991,35 +999,11 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             if r["grade"] != grade:
                 continue
             need = r.get("need") or {}
-            # 2026-11-18 原著口径：单丹成功率随品阶差变化，功效显式挂标签。
-            # 信息拼进 desc（模板 Canvas.wrap 折行 + _block_h 同源度量），
-            # 不改模板坐标骨架 —— 越1档「勉强」、越≥2档「几无可能」。
-            rate, diff = cfg.craft_rate_for(alch_idx, r.get("grade", ""))
-            tag = cfg.effect_tag(r.get("effect", ""))
-            rate_bit = "%s把握" % cfg.rate_cn(rate)
-            if diff > 0:
-                rate_bit += " 越%d档·勉强" % diff if diff == 1 else " 越%d档·几无" % diff
-            desc_bits = []
-            if tag:
-                desc_bits.append("〔%s〕" % tag)
-            desc_bits.append(rate_bit)
-            # 丹纹率公示（Q2/Q5 拍板：概率透明，卡面与帮助同源 danwen_rate）
-            _dw_rate = cfg.danwen_rate(grade)
-            if _dw_rate > 0:
-                desc_bits.append("丹纹%d%%" % int(round(_dw_rate * 100)))
-            # 2026-11-18 假药普查：卡面**只印本作真会发生的事**（cfg.recipe_impl）。
-            # desc 是原著功效，有些依赖本作没有的系统（封印/寿命/假死/化形…），
-            # 印在卡上就是承诺做不到的事；它改为在「炼药」文本里标「原著：」。
-            body = cfg.recipe_impl(r)
-            if body:
-                desc_bits.append(body)
             rows.append({
                 "name": r["name"],
                 "mats": [[k, int(v)] for k, v in need.items()],
-                "desc": " · ".join(desc_bits),
-                "effect_tag": tag,
-                "rate": int(rate * 100),
-                "diff": diff,
+                # 只印本效（唯一源 cfg.recipe_impl，2026-11-18 诚实契约不变）
+                "desc": cfg.recipe_impl(r),
                 "ready": all(core.count_item(p, k) >= int(v) for k, v in need.items()),
                 # 无药方丹药：卡面改为「N 金购买」而非空材料行（与原著考据口径一致）
                 "buyonly": not bool(need),
@@ -1359,6 +1343,204 @@ def build_craft_data(report: dict | None) -> dict:
         "groups": groups,
         "tip": "发「傀儡」看名录 · 发「傀儡 淬炼」雷淬升档 · 发「傀儡 配方」看全部配方",
     }
+
+
+# ---------------------------------------------------------------------------
+# 「查看 <物品名>」物品详情卡（2026-11-25 用户要求）
+# ---------------------------------------------------------------------------
+#: 用户原话：「加一个查看物品的功能，无论是背包还是宝库还是丹药，这些物品，
+#: 都加一个查看物品详情的功能……有什么效果，几纹有什么概率出什么加成。从何而来。
+#: 其他物品都一样……尽量展示详细，必须结合原著，但是不要写明原著多少章什么的，
+#: 就以药老或者普通商家的口吻描述就行。」
+#:
+#: 由此定下三条硬口径：
+#:   1. **药老口吻**：原著味放在「本效」段的一句话里（`药老言：<desc>`），
+#:      不写章节号 —— config 里的 ``src`` 字段（「原著第230章」）**绝不上卡**；
+#:   2. **数据不重算**：丹纹率读 ``cfg.danwen_rate``、档位权重读 ``cfg.DANWEN_TIER_W``、
+#:      赐福数值读 ``danwen.tier_table`` —— 改数值只改一处，卡面自动跟；
+#:   3. **查得到就能看**：不要求持有（宝库里没买的也能看详情），只有持有量那行
+#:      才随背包变化。
+CARD_ITEM_NAME = "斗破物品详情"
+
+#: 千分率 → 百分比文案（掉落表都按千分记）
+def _per_mille(v) -> str:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return "极低"
+    return ("%d%%" % (n // 10)) if n % 10 == 0 else ("%.1f%%" % (n / 10.0))
+
+
+def _danwen_rows(base: dict) -> list[str]:
+    """丹药的「丹纹」段：出纹率 → 档位权重 → 三档规则 → 赐福池逐条实数值。"""
+    grade = str(base.get("grade") or "")
+    rate = cfg.danwen_rate(grade)
+    if rate <= 0:
+        return []
+    w = cfg.DANWEN_TIER_W
+    rows = ["开炉成功后有 %d%% 几率出纹（%s丹药，品阶越高越难）"
+            % (int(round(rate * 100)), grade),
+            "出纹后再掷档位：一纹 %d%%　二纹 %d%%　三纹 %d%%"
+            % (int(round(w[0] * 100)), int(round(w[1] * 100)), int(round(w[2] * 100)))]
+    rows += [dw.tier_rule(1), dw.tier_rule(2), dw.tier_rule(3)]
+    rows.append("赐福池（六选一；括号里是这个丹药的档位多给的部分）")
+    for b in dw.BLESSINGS:
+        rows.append("【%s】%s" % (b["name"], dw.tier_table(b)))
+    return rows
+
+
+def _pills_using(item_name: str) -> list[str]:
+    """哪些丹方的药方里用到了这味材料（反向索引，卡面「用途」段用）。"""
+    return [n for n, r in cfg.RECIPE_BY_NAME.items()
+            if not r.get("danwen") and item_name in (r.get("need") or {})]
+
+
+def build_item_detail_data(p: dict, name: str) -> dict | None:
+    """物品名 → 详情卡参数（``doupo_item`` / 与成傀卡共用分段内核）。
+
+    查找顺序：带纹丹 → 丹药 → 药材 → 天材地宝 → 系统杂项 → None。
+    返回 None 表示「查无此物」，调用方应给文本引导而不是拿占位卡糊过去。
+    """
+    raw = str(name or "").strip()
+    kind = cfg.item_kind(raw)
+    if not kind:
+        return None
+    held = core.count_item(p, raw) if raw else 0
+    tier = cfg.danwen_tier(raw) if kind == "danwen" else 0
+    base_name = cfg.base_of_danwen(raw) if tier else raw
+    rec = cfg.RECIPE_BY_NAME.get(raw) or cfg.RECIPE_BY_NAME.get(base_name)
+
+    groups: list[dict] = []
+
+    # ---- 一、丹药（含带纹丹） ----------------------------------------------
+    if rec:
+        grade = str(rec.get("grade") or "")
+        impl = cfg.recipe_impl(rec) or str(rec.get("desc") or "")
+        sub = "丹药 · %s" % (grade or "无品阶")
+        if tier:
+            sub += " · %s" % cfg.danwen_prefix(tier)
+        if held:
+            sub += " · 背包 ×%d" % held
+        else:
+            sub += " · 背包暂无"
+
+        eff = [impl] if impl else []
+        lore = str(rec.get("desc") or "").strip()
+        if lore and lore != impl:
+            eff.append("药老言：%s" % lore)
+        if tier:
+            eff.append("这枚是带纹丹，服下本效之外另得赐福（见下段）")
+        groups.append({"name": "本效", "rows": eff})
+
+        # 升技材料/引火/养魂这三类根本没有带纹版（cfg.DANWEN_SKIP_EFFECTS），
+        # 卡面就不能给玩家画一个「打不出来的丹纹池」
+        dw_rows = _danwen_rows(rec) if cfg.danwen_allowed(rec) else []
+        if dw_rows:
+            groups.append({"name": "丹纹", "rows": dw_rows})
+
+        src_rows = []
+        need = rec.get("need") or {}
+        if need:
+            src_rows.append("炼制｜" + "、".join("%s×%d" % (k, int(v)) for k, v in need.items()))
+            rate, diff = cfg.craft_rate_for(int(p.get("alch", 0)), grade)
+            bit = "成丹率 %s（%s）" % (cfg.rate_cn(rate), cfg.alch_label(int(p.get("alch", 0))))
+            if diff > 0:
+                bit += "·越%d档" % diff
+            src_rows.append(bit)
+        if int(rec.get("buy", 0) or 0) > 0:
+            src_rows.append("宝库｜%d 金一枚" % int(rec["buy"]))
+        if not need and int(rec.get("buy", 0) or 0) > 0:
+            src_rows.append("此丹原著未载药方，本作只能金币购入")
+        groups.append({"name": "从何而来", "rows": src_rows or ["来历不详"]})
+        tip = ("服丹 %s 用掉一枚" % raw) if not tier else ("服丹 %s 本效+赐福一起生效" % raw)
+        tip += " · 发「查看 <物品名>」接着看别的"
+        return {"title": raw, "subtitle": sub, "groups": groups, "tip": tip}
+
+    # ---- 二、药材（宝库随身商店） ------------------------------------------
+    herb = cfg.HERB_BY_NAME.get(raw)
+    if herb:
+        desc = str(herb.get("desc") or "").strip()
+        # 药材的 desc 本身就是「它是什么」，不是另一套药效承诺 —— 只写一行，
+        # 前面挂商家口吻。早先既写 desc 又写「药老言：desc」，同一句话连印两遍
+        # （2026-11-25 截图自查抓到）。
+        groups.append({"name": "本效", "rows": [
+            "老药师言：%s" % desc] if desc else ["入药之物，无直接药效"]})
+        uses = _pills_using(raw)
+        src = ["宝库｜随身商店 %d 金一味" % int(herb.get("price", 0) or 0)]
+        if uses:
+            src.append("可用于 %d 味丹方：%s" % (len(uses), "、".join(uses[:6])
+                                              + ("…" if len(uses) > 6 else "")))
+        else:
+            src.append("暂未列入任何丹方（先囤着）")
+        groups.append({"name": "从何而来", "rows": src})
+        sub = "药材 · 宝库 %d 金" % int(herb.get("price", 0) or 0)
+        if held:
+            sub += " · 背包 ×%d" % held
+        return {"title": raw, "subtitle": sub, "groups": groups,
+                "tip": "买 <药材> <数量> 补货 · 炼药时按丹方自动扣"}
+
+    # ---- 三、天材地宝（可直接服用） ----------------------------------------
+    mat = cfg.MATERIAL_BY_NAME.get(raw)
+    if mat:
+        desc = str(mat.get("desc") or "").strip()
+        mtier = int(mat.get("tier", 0) or 0)
+        eff = []
+        val = int(mat.get("value") or 0)
+        if val > 0:
+            eff.append("服之：%s" % (cfg.effect_tag(mat.get("effect", ""))
+                                     or mat.get("effect") or "增益"))
+            eff.append("%s +%d（发「服丹 %s」服用）" % (
+                cfg.effect_tag(mat.get("effect", "")) or "增益", val, raw))
+        if desc:
+            eff.append("药老言：%s" % desc)
+        groups.append({"name": "本效", "rows": eff or ["天材地宝，入药为引"]})
+        src = []
+        if int(mat.get("price", 0) or 0) > 0:
+            src.append("宝库｜%d 金一份" % int(mat["price"]))
+        drop = cfg.MATERIAL_DROP_RATE.get(mtier)
+        if drop:
+            src.append("掉落｜%d 阶起魔兽有得掉（千分率 %d，约 %s）"
+                       % (mtier, int(drop), _per_mille(drop)))
+        uses = _pills_using(raw)
+        if uses:
+            src.append("可用于 %d 味丹方：%s" % (len(uses), "、".join(uses[:4])))
+        if raw in cfg.PUPPET_MATERIALS:
+            src.append("傀儡｜炼制傀儡要它（发「傀儡 配方」看配方）")
+        groups.append({"name": "从何而来", "rows": src or ["来历不详"]})
+        sub = "天材地宝 · %s阶" % (mtier or "?")
+        if held:
+            sub += " · 背包 ×%d" % held
+        return {"title": raw, "subtitle": sub, "groups": groups,
+                "tip": "服丹 %s 直接炼化 · 也可留着当丹方引子" % raw}
+
+    # ---- 四、系统杂项 -------------------------------------------------------
+    misc = cfg.MISC_ITEMS.get(raw)
+    if misc:
+        groups.append({"name": "本效", "rows": list(misc["rows"])})
+        groups.append({"name": "从何而来", "rows": [misc["kind"]]})
+        sub = misc["kind"] + ((" · 背包 ×%d" % held) if held else "")
+        return {"title": raw, "subtitle": sub, "groups": groups, "tip": misc["tip"]}
+
+    # 傀儡材料里有名字不在天材地宝表的（魔核按阶命名、躯体/残魂等）
+    if raw in cfg.PUPPET_MATERIALS or (raw.endswith("魔核") and len(raw) <= 12):
+        sub = "傀儡材料" + ((" · 背包 ×%d" % held) if held else "")
+        return {"title": raw, "subtitle": sub,
+                "groups": [{"name": "本效",
+                            "rows": ["傀儡的一件料，不入口；凑齐配方即开炉",
+                                     "品阶越高，成傀档位与魔核加成越好"]},
+                           {"name": "从何而来",
+                            "rows": ["傀儡遗迹 / 魔兽掉落（发「傀儡 遗迹」探）"]}],
+                "tip": "发「傀儡 配方」看整套配方 · 发「傀儡」看名录"}
+
+    return None
+
+
+async def render_item_detail(p: dict, name: str) -> bytes | None:
+    """「查看 <物品名>」出图入口；查无此物返回 None（调用方给文本引导）。"""
+    data = build_item_detail_data(p, name)
+    if not data:
+        return None
+    return await _render_list("doupo_item", data, CARD_ITEM_NAME, qq=p.get("qq"))
 
 
 async def render_craft_for(report: dict | None) -> bytes | None:

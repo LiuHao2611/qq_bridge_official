@@ -241,9 +241,10 @@ def test_panel_and_menu_expose_duel():
     check("菜单列出应战", "应战" in commands.menu_text())
     check("菜单列出拒战", "拒战" in commands.menu_text())
     # 2026-11-20：菜单扩到 52 条；2026-11-24 新增「宗门斗技」→ 53 条；
-    # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令）→ 54 条。
+    # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令）→ 54 条；
+    # 2026-11-25 新增「查看 <物品名>」物品详情 → 55 条。
     # 改口令务必同步 commands.MENU_GROUPS 与本处。
-    check("菜单条数 54", commands.menu_total() == 54, str(commands.menu_total()))
+    check("菜单条数 55", commands.menu_total() == 55, str(commands.menu_total()))
 
 
 def _run():
