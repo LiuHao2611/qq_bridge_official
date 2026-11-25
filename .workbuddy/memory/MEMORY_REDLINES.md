@@ -92,3 +92,10 @@
 🚨 **炼药卡 `desc` 只印 `cfg.recipe_impl`**：禁再拼〔功效标签〕/把握/越档/丹纹率（那是详情卡与「炼药」文本的活）。`RECIPES_PER_PAGE=14`；材料行必须**按「、」整项换行**（`Canvas.wrap` 按像素硬折会把「黑岩根×2」劈成「黑岩」+「根×2」）。
 ⚠️ **`core.py` 204648 B / `commands.py` 202304 B，离 200KB 红线只剩 152 / 2496 B**：任何一次编辑都会被 `.githooks/pre-commit` 拦死。下一步必须真拆（建议把 `core.fight()` ~670 行挪到 `battle_core.py`），**禁靠 --no-verify 或删注释凑数**。
 ⚠️ **`tools/phone_deploy.py` 临时区按相对路径落盘**：早先平铺 `/tmp/push/`，一次 push 两个 `__init__.py` 会互踩（L3 报「传输被破坏」，易误判成网络）；`mkdir` 必须用 `os.path.dirname`（`Path().parent` 在 Windows 给反斜杠）。
+
+## 18. 官方通道「按钮在同一次回复里只许出现一次」（2026-11-25，用户「机器人重复发送按钮问题，不要再出现」）
+🚨 **重复按钮事故（已修，禁改回去）**：用户截图 = 战斗文本挂「战斗回看/战斗评价/任务」，紧接着又一条标题「## 快捷指令」挂**同一组**按钮。根因：纯文本为修「客户端空白」已改成 `markdown + keyboard` 同段（`seg_kind="text_card"`，键盘在文本段上），而下面还留着旧降级条件 `has_buttons and (not wanted_card or ...)`——`wanted_card` 只在「有图+有口令+有按钮」时为真，**纯文本恰好为假** → 成立 → 又补发一条独立按钮段。
+🚨 **唯一判定口 `official.needs_standalone_keyboard(has_buttons, wanted_card, image_only_fallback, text_has_kb)`**：文本段挂上键盘即置 `text_has_kb=True`，之后一律不再发独立按钮段。**不要**把判定改回裸条件，也不要把「按钮段」挪到别处再补一遍。守门 `tests/test_official_no_dup_keyboard.py`（7/7，含三处变异反证：忽略 `text_has_kb` 立刻复现事故）。
+⚠️ **纯按钮回复不能误关**：无文本、无图的纯按钮消息仍须发独立按钮段（`text_has_kb=False` 分支），否则按钮直接消失——这比重复更糟。
+⚠️ **官通打点在 `logs/service.err.log`，不在 `service.log`**（`service.log` 只有 `official_event_arrived` 那类 print）。查发送链路一律 `grep official_sent service.err.log`；同一次回复两条就是 `seq=1 text_card` + `seq=2 keyboard` 的指纹。
+⚠️ **`at_user` 分支（群内 @人）不挂键盘**（mention 段与 markdown/keyboard 混段未实测），那里仍会跟一条独立按钮段——这是**必要**的两条，不是重复，别当 bug 修。
