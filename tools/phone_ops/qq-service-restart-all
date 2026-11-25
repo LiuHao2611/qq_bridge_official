@@ -1,0 +1,97 @@
+#!/bin/sh
+# qq-bridge 业务服务「强制全停 → 全启」唯一出口（2026-11-25）
+#
+# 为什么要这个脚本（用户原话）：
+#   「服务只要掉了，就先强制关闭所有服务，然后启动，不要走单独启动，避免出现问题」
+#   2026-11-25 20:0x 事故：phone_deploy push 走 `rc-service qq-bridge restart`
+#   （单独重启），恰好撞上 /etc/init.d/qq-bridge 首行被写坏（BACKUP_OK 顶掉
+#   shebang）→ Exec format error，服务没起来。全停全启能避开「单个服务脚本坏了
+#   就起不来」的问题，并保证两个业务服务的状态一致。
+#
+# 边界（红线，别改）：
+#   * 只动业务服务 qq-bridge + qq-doupo-agent。绝不碰 sshd/networkmanager/
+#     nftables/wifi-watchdogd —— 停了会失联、断网，看门狗自己也活不下去。
+#   * 绝不 reboot、绝不 rebind wifi、绝不 nmcli（那是 wifi-watchdogd 的活，
+#     且 rebind 会把 wlan0 玩消失）。
+#   * 全程 rc-service <svc> stop / start，**绝不用 restart**。
+#   * 反序停、正序启：agent 在 OpenRC 里 after qq-bridge，故停 agent→bridge，
+#     启 bridge→agent。
+#
+# 必须以 root 运行（看门狗由 OpenRC 以 root 拉起，满足）。pmos 手动跑会因
+# /run/*.pid 属主 root 而 rm/stop 失败 —— 开头自检拦住，避免半途把服务停死。
+#
+# 用法：sudo sh /usr/local/bin/qq-service-restart-all；日志 logger -t qq-svc-wd。
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LOG="logger -t qq-svc-wd"
+BRIDGE_PORT=8081
+AGENT_PORT=8765
+
+stamp() { date '+%Y-%m-%d %H:%M:%S'; }
+say() { $LOG "$*"; echo "[$(stamp)] $*"; }
+
+if [ "$(id -u)" != "0" ]; then
+    echo "ERROR: 必须以 root 运行（sudo sh $0），否则 stop/rm pidfile 会失败并把服务停死" >&2
+    exit 2
+fi
+
+port_open() {
+    netstat -tln 2>/dev/null | grep -q ":$1 "
+}
+
+# stop 之后兜底：若 pidfile 指向的进程还活着，kill -9；OpenRC 的 start 会自己
+# 处理 pidfile 残留，这里不手动 rm（手动 rm 反而可能让 start-stop-daemon 误判）。
+hard_kill_if_alive() {
+    pf="$1"
+    label="$2"
+    [ -f "$pf" ] || return 0
+    pid=$(cat "$pf" 2>/dev/null)
+    if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null; then
+        say "兜底 kill -9 $label pid=$pid（rc-service stop 后仍存活）"
+        kill -9 "$pid" 2>/dev/null
+        sleep 1
+    fi
+}
+
+say "===== 业务服务全停全启 开始 ====="
+
+# ---- 1. 反序停：先 agent 后 bridge ----
+say "停止 qq-doupo-agent"
+rc-service qq-doupo-agent stop >/dev/null 2>&1
+say "停止 qq-bridge"
+rc-service qq-bridge stop >/dev/null 2>&1
+sleep 2
+
+# ---- 2. kill -9 兜底（root 权限）----
+hard_kill_if_alive /run/qq-doupo-agent.pid "qq-doupo-agent"
+hard_kill_if_alive /run/qq-bridge.pid "qq-bridge"
+
+# ---- 3. 正序启：先 bridge 后 agent ----
+say "启动 qq-bridge"
+rc-service qq-bridge start >/dev/null 2>&1
+say "启动 qq-doupo-agent"
+rc-service qq-doupo-agent start >/dev/null 2>&1
+
+# ---- 4. 端口验证（最多 60s，每 3s 一次）----
+i=0
+while [ "$i" -lt 20 ]; do
+    b=1
+    a=1
+    port_open "$BRIDGE_PORT" && b=0
+    port_open "$AGENT_PORT" && a=0
+    if [ "$b" -eq 0 ] && [ "$a" -eq 0 ]; then
+        say "端口恢复：$BRIDGE_PORT + $AGENT_PORT 均 LISTEN（第 ${i} 次探测）"
+        say "===== 业务服务全停全启 成功 ====="
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 3
+done
+
+# 没起来：记全状态，交人工（不 reboot —— 红线）
+say "⚠️ 全启后端口未恢复：8081_open=$((1-b)) 8765_open=$((1-a))，交人工排查"
+ps -o pid,etime,args 2>/dev/null | grep -E 'venv/bin/python' | grep -v grep | while read -r line; do
+    say "  残留进程: $line"
+done
+say "===== 业务服务全停全启 失败（未 reboot）====="
+exit 1

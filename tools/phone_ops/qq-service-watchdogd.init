@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# qq-bridge 业务服务看门狗（OpenRC 常驻，2026-11-25）
+# 只管业务服务存活（8081 掉了 → qq-service-restart-all 全停全启），
+# 绝不 nmcli / rebind / reboot / 动基础设施服务（那是 wifi-watchdogd 的活）。
+name="qq-service-watchdogd"
+description="qq-bridge 业务服务存活守护（全停全启，非单独 restart）"
+
+command="/usr/local/bin/qq-service-watchdogd"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+respawn_delay=10
+respawn_max=0
+
+depend() {
+    need net
+    after qq-bridge qq-doupo-agent wifi-watchdogd
+}
+
+start_pre() {
+    checkpath --directory --owner root:root --mode 0755 /var/lib
+}

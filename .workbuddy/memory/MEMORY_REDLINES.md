@@ -127,3 +127,21 @@ echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec
 ⚠️ 排查顺序：`service.log` 看入站/matcher，`service.err.log` 看 `official_sent`/
 `channel_send_failed`/gateway；`buttons=入道,人物,修炼,战斗,宝库` = 降级丢了 card_key 的指纹，
 正常战斗回执应 `buttons=战斗回看,战斗评价,任务`。
+
+## 21. 业务服务看门狗：掉了就全停全启，绝不单独 restart（2026-11-25，用户「服务只要掉了，就先强制关闭所有服务，然后启动，不要走单独启动」）
+🚨 **重启唯一出口 `qq-service-restart-all`（root）**：反序停（qq-doupo-agent→qq-bridge）
+→ `hard_kill_if_alive` 兜底 → 正序启（qq-bridge→qq-doupo-agent）→ 验证 8081/8765 端口。
+**绝不 `rc-service <svc> restart`**（单独 restart 撞脚本坏 = Exec format error，服务起不来）、
+**绝不手动 rm pidfile**（OpenRC start 自己处理，手删反致 start-stop-daemon 误判）、
+**必须 root 自检**（pmos 手动跑 rm/stop 失败会把服务停死，实测踩过）。只动业务两服务，
+**绝不碰 sshd/networkmanager/nftables/wifi-watchdogd，绝不 reboot/rebind/nmcli**（停基础服务
+会失联断网，rebind 会把 wlan0 玩消失）。
+🚨 **看门狗 `qq-service-watchdogd`（OpenRC default 自启，root 常驻）**：判死只盯 **8081**
+（agent 8765 抖动不误杀 bot），10s 巡检、连续 3 轮判死、开机 90s 宽限、15min 重启冷却。
+**usb0 跳过判据必须是「有来自 172.16.42.x 的活跃 SSH」**（`netstat -tn|grep ':22 .*ESTAB.*172\.16\.42\.'`），
+**绝不能用 `ip addr show usb0|grep inet`** —— usb0 常态有 172.16.42.1/16 且 UP，那样看门狗
+永不重启（实测 20:21/20:22 连续跳过）。WiFi SSH（192.168.0.x）不触发跳过。
+🚨 资产在 `tools/phone_ops/`（三个脚本 + `test_service_watchdog.py` 9/9），手机装
+`/usr/local/bin/` + `/etc/init.d/`，**不在 `src/` 不影响 drift**。改看门狗必跑该守门 +
+真机受控演练（停 bot→看门狗 30s 内自动全停全启→端口恢复+Bot connected+READY）。
+日志 `grep qq-svc-wd /var/log/messages`（不是 service.log/err.log）。

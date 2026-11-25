@@ -1,0 +1,89 @@
+#!/bin/sh
+# qq-bridge 业务服务看门狗守护进程（2026-11-25，常驻巡检）
+#
+# 用户原话：「给看门狗加上自动重启，服务只要掉了，就先强制关闭所有服务，
+#            然后启动，不要走单独启动，避免出现问题」
+#
+# 和 wifi-watchdogd 的分工：
+#   * wifi-watchdogd 管链路（网关不通→nmcli up；wlan0 消失→reboot）
+#   * 本脚本管业务服务存活（8081 掉了→全停全启 qq-bridge + qq-doupo-agent）
+#   两者互不越界：本脚本**绝不** nmcli / rebind / reboot / 动基础设施服务。
+#
+# 判死口径：只盯 8081（bot 主服务）。理由——「群里发消息没人回」等价于 8081
+#   没了；agent 8765 是本机依赖、抖动不该误杀 bot。但重启动作是全停全启
+#   （qq-service-restart-all），两者一起重来，保证状态一致。
+# 为什么不用 OpenRC 自带 respawn：command_background 的 respawn 只认进程死，
+#   进程活着假死（如 gateway 拉失败后不再收消息）时它不动作；且单服务 restart
+#   在脚本坏掉时会失败（2026-11-25 Exec format error 事故）。
+#
+# 防抖三件套（缺一不可，否则会重启风暴）：
+#   1. 开机 90s 宽限：等服务/nmcli/DNS 自己起来
+#   2. 连续 3 轮判死（3×10s=30s）：单次探测抖动不动手
+#   3. 重启冷却 15min：重启完还没恢复也不反复折腾，留日志交人工
+#   4. usb0 在线跳过：有人插 USB 救急操作时不打断
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LOG="logger -t qq-svc-wd"
+PORT=8081
+INTERVAL=10
+DEAD_ROUNDS=3
+COOLDOWN=900                       # 15min
+LAST=/var/lib/qq-svc-wd.lastrestart
+RESTART=/usr/local/bin/qq-service-restart-all
+
+port_open() {
+    netstat -tln 2>/dev/null | grep -q ":$1 "
+}
+
+# 开机宽限
+sleep 90
+
+fails=0
+while true; do
+    if port_open "$PORT"; then
+        if [ "$fails" -ge "$DEAD_ROUNDS" ]; then
+            $LOG "8081 已恢复（此前连续失败 $fails 轮）"
+        fi
+        fails=0
+        sleep "$INTERVAL"
+        continue
+    fi
+
+    fails=$((fails + 1))
+
+    if [ "$fails" -lt "$DEAD_ROUNDS" ]; then
+        sleep "$INTERVAL"
+        continue
+    fi
+
+    # 连续 DEAD_ROUNDS 轮不通 → 进入处置判定
+    # usb0 在线的判据必须用「有来自 172.16.42.x 的活跃 SSH」——usb0 常态就有
+    # 172.16.42.1/16 且 state UP（RNDIS 常驻配置），用 `ip addr | grep inet`
+    # 会永远为真，看门狗永不重启（2026-11-25 实测踩过）。
+    if netstat -tn 2>/dev/null | grep -q ':22 .*ESTAB.*172\.16\.42\.'; then
+        $LOG "8081 不通 $fails 轮，但有人从 usb0(172.16.42.x) SSH 在操作，跳过重启（等人工）"
+        fails=0
+        sleep "$INTERVAL"
+        continue
+    fi
+
+    # 冷却窗口：15min 内重启过就不再动（防重启风暴）
+    now=$(date +%s)
+    last=$(cat "$LAST" 2>/dev/null || echo 0)
+    if [ $((now - last)) -lt "$COOLDOWN" ]; then
+        $LOG "8081 不通 $fails 轮，但 15min 内已重启过（剩 $((COOLDOWN - (now - last)))s），跳过"
+        fails=0
+        sleep "$INTERVAL"
+        continue
+    fi
+
+    # 执行全停全启（唯一出口），写冷却戳
+    $LOG "8081 连续 $fails 轮不通 → 触发业务服务全停全启"
+    echo "$now" > "$LAST"
+    sync
+    sh "$RESTART" >/dev/null 2>&1
+    rc=$?
+    $LOG "全停全启返回 rc=$rc"
+    fails=0
+    sleep "$INTERVAL"
+done
