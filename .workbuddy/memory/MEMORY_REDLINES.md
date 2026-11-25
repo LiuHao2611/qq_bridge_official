@@ -106,3 +106,24 @@
 🚨 **NPC 插话三件事**：`NPC_SPEAKERS`＝角色出处台账（说话人+逐字台词+出处三元组，出处不渲染），`CHAPTER_NPC`＝章节→说话人白名单（不许跨章借角色），只在 `war_tier ∈ {lose,narrow,crush}` 于 💥 后插一条 `🗣 说话人：台词`，顺风局静默。第 12 章**故意留空**——蝎龙族那句已作点睛，加回去会连出两遍（守门 `test_npc_only_in_hard_fights_and_no_duplicate`）。
 ⚠️ **三个池禁止重复**：取景 `CHAPTER_SCENE` / 点睛 `CHAPTER_QUOTE` / 插话 `NPC_SPEAKERS` 各司其职，同一句话不得在两个池出现。
 ⚠️ **deploy drift 检的是 `src/**/*.py` 全量**：测试文件也在这个树里，改了 `src/plugins/doupo/test_*.py` 也必须一起 push，否则 drift 报「旧版 1 个」。
+
+## 20. 战斗没反应：DNS/gateway + NetworkError 降级丢 card_key + 启动脚本污染（2026-11-25，用户「我发战斗没反应」）
+🚨 **启动必须先等 DNS 可解析**：重启时「默认路由已起、DNS 未就绪」→ QQ 适配器拉 gateway
+失败一次（`Failed to get gateway info`）后**不自愈**，消息从此进不来。`start_pre` 有 DNS
+守卫（只等不修：`getent hosts bots.qq.com`，18×3s）；**绝不**把 rebind/relogin/restart
+写进 connwatch（红线：detect+alert only）。新 bot 连上以日志 `Bot 1906371548 connected`
++ `[EventType.READY]` 为准，别只看进程在不在。
+🚨 **网络失败降级会丢战斗按钮**：`finish_text(card_key="fight_text")` 通道首发遇
+NetworkError → sent=False → 降级兜底桥 `_channel_send_text(text)` 没带 kcmd → 挂回主菜单
+按钮。修复在 `game_compat._channel_send_text`：网络类失败（NetworkError/ConnectError/
+Timeout/Try again/API request failed）**即时重试一次且保留同一 keyboard_cmd**；**业务失败
+（去重/配额/4005xxx）绝不重试**（会再撞 40054005）。重试由 `official.py::next_msg_seq`
+拿新 seq，不会撞车；首发 NetworkError 无 `official_sent` = 未送达，重试不双发。
+守门 `tests/test_official_text_bridge.py`（17/17，删重试打红 2 条）。
+🚨 **`/etc/init.d/qq-bridge` 首行必须 shebang**：曾被误写首行 `BACKUP_OK`（加固 DNS 时
+echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec format error`，进程还在但
+**下次必启不来**。改完启动脚本必查 `head -1`=`#!/sbin/openrc-run` + `sh -n` 语法 +
+`rc-service status`=started，三样缺一不可。
+⚠️ 排查顺序：`service.log` 看入站/matcher，`service.err.log` 看 `official_sent`/
+`channel_send_failed`/gateway；`buttons=入道,人物,修炼,战斗,宝库` = 降级丢了 card_key 的指纹，
+正常战斗回执应 `buttons=战斗回看,战斗评价,任务`。
