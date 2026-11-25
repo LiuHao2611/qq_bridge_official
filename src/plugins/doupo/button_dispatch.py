@@ -76,6 +76,8 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "炼药": ("cmd_recipes", "qq", "recipes"),
     # 2026-11-25 晚：查看丹药卡的「炼制此丹」按钮（custom 带参：炼制 破厄丹）。
     "炼制": ("cmd_craft", "qq_str", ""),
+    # 2026-11-25 自动爬塔确认按钮（custom 带参：自动爬塔 是/否）。
+    "自动爬塔": ("cmd_auto_tower", "qq_str", "auto_tower_prompt"),
     "服丹": ("cmd_use", "qq_str", ""),
     "背包": ("cmd_bag", "qq", "bag"),
     # 2026-11-18 傀儡：按钮点击走同一套 cmd_*，不另写业务逻辑
@@ -367,8 +369,13 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
                 pass
 
     # 文本回复（无图 / 出图失败 / 纯操作口令）
+    # 2026-11-25：card_key 非空时**连按钮一起发**。此前只发 text，导致
+    # 「提示型 card_key」（如 auto_tower_prompt，没有 render_* 可出图）点进去
+    # 只看到一段没有按钮的提示——玩家还得手打，等于白加按钮。
+    _kcmd = ("doupo:" + card_key) if card_key else ""
     try:
-        await get_channel(OFFICIAL).send(full_ctx, Outgoing(text=msg))
+        await get_channel(OFFICIAL).send(
+            full_ctx, Outgoing(text=msg, keyboard_cmd=_kcmd))
     except Exception as e:  # noqa: BLE001
         from nonebot.log import logger  # noqa: PLC0415
 

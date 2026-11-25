@@ -319,6 +319,127 @@ def test_naming_prefix_migration_and_no_collision():
     check("迁移：幂等（第二次无改动）", core.migrate_danwen_bag(p) == [], str(core.bag(p)))
 
 
+def test_parse_use_count_variants():
+    """2026-11-25 批量服丹：末尾数量各种写法都能剥出，丹名原样保留。"""
+    cases = {
+        "回灵丹": ("回灵丹", 1),
+        "回灵丹 10": ("回灵丹", 10),
+        "回灵丹×10": ("回灵丹", 10),
+        "回灵丹*10": ("回灵丹", 10),
+        "回灵丹10枚": ("回灵丹", 10),
+        "回灵丹 5颗": ("回灵丹", 5),
+        "回灵丹二纹": ("回灵丹二纹", 1),   # 中文纹数不是数量
+        "二纹破厄丹 5": ("二纹破厄丹", 5),
+        "破厄丹·二纹 3": ("破厄丹·二纹", 3),
+        "10": ("10", 1),                   # 纯数字不当数量
+    }
+    for raw, want in cases.items():
+        got = commands.parse_use_count(raw)
+        check("数量写法 %r" % raw, got == want, "got=%r want=%r" % (got, want))
+
+
+def test_batch_use_consumes_multiple():
+    """一次服丹 N 枚：背包真扣 N 枚、只存档一次口径、调侃按档出现。"""
+    # 醒神丹=修为类（exp），不会因满血提前停，适合测批量扣物。
+    exp_pill = next((n for n, r in cfg.RECIPE_BY_NAME.items()
+                     if r.get("effect") == "exp" and n == "醒神丹"), "")
+    if not exp_pill:
+        return
+    p = _fresh({exp_pill: 10})
+    out = asyncio.run(commands.cmd_use(MemStore(p), "x", "%s 5" % exp_pill))
+    check("批量服丹扣 5 枚", core.count_item(p, exp_pill) == 5, str(core.bag(p)))
+    check("批量服丹回执写枚数", "5 枚" in out, out[:160])
+    check("批量 5 枚有调侃", "嗑糖" in out or "捋须" in out, out[:200])
+    # 只想要 5 枚但包里只有 3 枚 → 全吃光、说清楚实际枚数
+    p2 = _fresh({exp_pill: 3})
+    out2 = asyncio.run(commands.cmd_use(MemStore(p2), "x", "%s 8" % exp_pill))
+    check("货不足→吃光", core.count_item(p2, exp_pill) == 0, str(core.bag(p2)))
+    check("货不足→回执说实际数", "只服下 3 枚" in out2, out2[:200])
+
+
+def test_batch_single_count_unchanged():
+    """单枚写法行为逐字不变（回归：老玩法不能被批量改造破坏）。"""
+    if not BASE:
+        return
+    p = _fresh({BASE: 1})
+    out = asyncio.run(commands.cmd_use(MemStore(p), "x", BASE))
+    check("单枚仍写「服下」不写「连服」", "服下" in out and "连服" not in out, out[:120])
+    check("单枚无调侃（2 枚起）", "捋须" not in out and "嗑糖" not in out, out[:120])
+
+
+def test_batch_danwen_timed_not_stacked():
+    """批量吃多枚带纹丹：限时增益时间不按枚数叠加（同源刷新取最长）。
+
+    底层 temp_buff.add 对同源同键刷新不叠（见 test_doupo_temp_buff.py）；这里
+    守「批量循环每枚都走 use_item」不会绕过那道闸——同一 (src,key) 只留一条，
+    时长不超过单枚时长。
+    """
+    danwen = cfg.danwen_name(BASE, 1) if BASE else ""
+    if not danwen:
+        return
+    p = _fresh({danwen: 6})
+    asyncio.run(commands.cmd_use(MemStore(p), "x", "%s 4" % danwen))
+    buffs = [b for b in (p.get("temp_buffs") or []) if isinstance(b, dict)]
+    # 同一 (src,key) 只能有一条（同源刷新去重），绝不给 4 枚攒 4 条
+    seen = set()
+    dup = False
+    for b in buffs:
+        k = (b.get("src"), b.get("k"))
+        if k in seen:
+            dup = True
+        seen.add(k)
+    check("批量带纹丹同源增益不叠条数", not dup, str(buffs))
+    # 每条时长 = until-start，不超过 30 分钟（一纹 B03/B04/B05 原始时长 30min）
+    over = [b for b in buffs if int(b.get("until", 0)) - int(b.get("start", 0)) > 30 * 60]
+    check("批量带纹丹时长不按枚数累加", not over, str(buffs))
+
+
+def test_batch_cap_guards_typo():
+    """硬顶只防手抖刷屏：一次写 100000 也不会真的循环十万次。"""
+    src = open(os.path.join(PLUGINS_DIR, "doupo", "commands.py"), encoding="utf-8").read()
+    check("批量服丹有硬顶常量", "PILL_USE_BATCH_CAP" in src
+          and "min(int(count), cfg.PILL_USE_BATCH_CAP)" in src, "缺硬顶")
+
+
+def test_mixed_split_guards_danwen_phrase():
+    """混吃拆段的保守性：「回灵丹 二纹」绝不能被当成两种丹药。
+
+    这是本功能最大的回归风险——纹数词是**后缀**而不是独立丹药。拆错就会
+    「吃一枚回灵丹 + 报无此丹药 二纹」，玩家看着像口令坏了。
+    """
+    if not BASE:
+        return
+    segs = commands._split_use_segments("%s 二纹" % BASE)
+    check("纹数写法不拆段", segs == [], str(segs))
+    check("未知词整体不拆",
+          commands._split_use_segments("%s 瞎写的东西" % BASE) == [],
+          str(commands._split_use_segments("%s 瞎写的东西" % BASE)))
+    check("单丹名不拆段", commands._split_use_segments("%s 5" % BASE) == [],
+          str(commands._split_use_segments("%s 5" % BASE)))
+    # 只有「每段都是真丹名」才拆
+    two = commands._split_use_segments("%s %s" % (BASE, BASE))
+    check("两个真丹名会拆段", len(two) == 2, str(two))
+    check("数量挂在上一段", commands._split_use_segments("%s 3 %s" % (BASE, BASE))
+          == [(BASE, 3), (BASE, 1)],
+          str(commands._split_use_segments("%s 3 %s" % (BASE, BASE))))
+
+
+def test_batch_mixed_different_pills():
+    """混着吃：「服丹 醒神丹 2 回灵丹」两段各按自己的数量扣物、各出回执。"""
+    exp_pill = next((n for n, r in cfg.RECIPE_BY_NAME.items()
+                     if r.get("effect") == "exp" and n == "醒神丹"), "")
+    if not exp_pill or not BASE:
+        return
+    p = _fresh({exp_pill: 5, BASE: 3})
+    out = asyncio.run(commands.cmd_use(
+        MemStore(p), "x", "%s 2 %s" % (exp_pill, BASE)))
+    check("混吃·第一段扣 2 枚", core.count_item(p, exp_pill) == 3,
+          str(core.bag(p)))
+    check("混吃·第二段扣 1 枚", core.count_item(p, BASE) == 2, str(core.bag(p)))
+    check("混吃·两段都有回执", out.count("💊") >= 2 or out.count("✨") >= 2,
+          out[:200])
+
+
 def _run():
     fns = [(k, v) for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

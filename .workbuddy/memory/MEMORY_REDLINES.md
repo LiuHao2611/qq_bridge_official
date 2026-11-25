@@ -126,7 +126,7 @@ echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec
 `rc-service status`=started，三样缺一不可。
 ⚠️ 排查顺序：`service.log` 看入站/matcher，`service.err.log` 看 `official_sent`/
 `channel_send_failed`/gateway；`buttons=入道,人物,修炼,战斗,宝库` = 降级丢了 card_key 的指纹，
-正常战斗回执应 `buttons=战斗回看,战斗评价,任务`。
+正常战斗回执应 `buttons=战斗回看,战斗评价,继续战斗,任务`（2026-11-25 晚加了「继续战斗」，见 §22）。
 
 ## 21. 业务服务看门狗：掉了就全停全启，绝不单独 restart（2026-11-25，用户「服务只要掉了，就先强制关闭所有服务，然后启动，不要走单独启动」）
 🚨 **重启唯一出口 `qq-service-restart-all`（root）**：反序停（qq-doupo-agent→qq-bridge）
@@ -145,3 +145,40 @@ echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec
 `/usr/local/bin/` + `/etc/init.d/`，**不在 `src/` 不影响 drift**。改看门狗必跑该守门 +
 真机受控演练（停 bot→看门狗 30s 内自动全停全启→端口恢复+Bot connected+READY）。
 日志 `grep qq-svc-wd /var/log/messages`（不是 service.log/err.log）。
+
+## 22. 每个回复按类型配对应按钮，绝不批量塞主菜单（2026-11-25，用户「处理好每一个回复内容下面的按钮，无论是卡片还是纯文字，别让我再强调这一点」）
+🚨 **用户已明确强调过、不要再犯**：不能所有回复都挂同一组主菜单按钮（`入道,人物,修炼,战斗,宝库`），
+也不给每张卡塞「帮助/菜单」。每张卡/每类纯文字回执只挂**该语境的下一步功能按钮**。
+- **唯一派生源** `doupo_buttons.py`：`CARD_ACTIONS`（每卡功能族，组合两两不同）+ `CARD_ACTIONS_PAIRS`
+  （label 覆盖，如 cmd=「战斗」显示成「继续战斗」）+ `REPLY_CARD_KEY`/`reply_card_key_for()`
+  （入站口令首词→回执 card_key）+ `item:<丹名>` 动态按钮（丹药→炼制此丹/买主材料/炼药/背包）。
+- **纯文字收口**在 `game_compat.py` 兜底桥 `QQBot.send`：从入站 plaintext 派生 `doupo:<card_key>` 传通道，
+  一处覆盖全部 `matcher.finish(str)`，**不要逐个改 47 处 handler**。查看卡出口传 `item:<丹名>`。
+- **新按钮必须同时补三处**否则点击无反应：① `CARD_ACTIONS`（+`CARD_SELF` 虚拟 self）；
+  ② `button_dispatch._PLAN`（含 custom 带参 head 如「炼制」）；③ 测试 expected 表。
+  带参按钮链路已通：`doupo:cbtn:` → qq_interaction → `dispatch_custom` → `cmd_craft/cmd_buy(name)`。
+- **守门**：`tests/test_doupo_buttons.py`（20 项，含入站映射/label/动态按钮/兜底桥派生）、
+  `tests/test_official_text_bridge.py`（18 项）。改这块必跑两文件 + 真变异反证（删功能守门必须打红）。
+- ⚠️ 本机 `py -m pytest tests/` 全量有 55 failed/39 errors，全是 py3.13+pytest9 本地环境问题
+  （HEAD 基线同样红，worktree 对比证实），**不要误判为本次改动回归**；改动相关守门单独跑必绿。
+
+## §23 斗技序号 / 批量服丹 / 自动爬塔（2026-11-25 晚，用户三连要求）
+
+- **上阵序号唯一真值源 = `core.learned_no_map`**（只含已领悟技，「斗技」卡连续序号：
+  ①已上阵四槽 ②其余按三阶）。**宗门卡（`build_roster_data`）序号必须永远 None**——
+  宗门池含未解锁技会跳号，玩家照号上阵必错位（本次 BUG 根因）。
+  `card.build_learned_data` 与 `cmd_loadout` **不得各写一份 sorted**，否则再次错位（守门会抓）。
+  学习成功必须回执「它在「斗技」卡是 N 号」（`core.learned_no_of`）。
+- **`roster_no_map` 只许用于宗门卡展示/历史兼容，上阵链路禁止再用**。
+- **混吃拆分必须保守**：`_split_use_segments` 只要有一段对不上已知物品名就**整串不拆**，
+  退回单丹解析——`服丹 回灵丹 二纹` 里的「二纹」是后缀不是丹名，拆错等于口令坏了。
+  批量服丹硬顶 `cfg.PILL_USE_BATCH_CAP` 只防手抖，**不是业务限制**（用户「不限制数量」）。
+- **电梯已彻底删除**（matcher / `cmd_tower_elevator` / `td.elevator_cost` / 两个费用常量），
+  **爬塔默认从 `tower_checkpoint + 1` 层开**，不许改回第 1 层（`cmd_tower` 与 `cmd_auto_tower` 同口径）。
+- **自动爬塔**：裸口令只回确认提示 + `card_key="auto_tower_prompt"`（`doupo_buttons` 特判两个
+  custom 按钮），点击走 `doupo:cbtn:自动爬塔 是/否` → `_PLAN` → `cmd_auto_tower`。
+  「否」= 不吃加成 + `chest_bonus` 掉落补偿；单次上限 `AUTO_TOWER_MAX_FLOORS` 防死循环刷屏。
+- **守门清单（改这三块必跑）**：`src/plugins/doupo/test_roster_card.py` + `test_skill_display.py`（34）、
+  `test_use_danwen.py`（85，自跑 runner **才是正确跑法**，`-p _pytest_stub_plugin` 下变异抓不到）、
+  `test_commands.py`（125）、`tests/test_doupo_tower.py`（21）、`tests/test_doupo_buttons.py`（21）。
+- **变异反证只用 /tmp 备份还原，绝对禁止 `git checkout --`**（会把整文件未提交改动全撤销）。

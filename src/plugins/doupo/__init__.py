@@ -415,17 +415,26 @@ async def _(event: Event):
                       await commands.cmd_tower_settle(store, str(event.user_id)))
 
 
-# 电梯（2026-11-17）：花金币直达上次止步层，满状态重打，旧层奖励不重复。
-tower_elevator = on_regex(_pat(r"(?:爬塔电梯|电梯|坐电梯)"), priority=PRI,
-                          block=True, rule=_mode_is("doupo"))
+# 自动爬塔（2026-11-25 用户取代电梯）：发口令→挂【随机加成】【无加成】按钮→点一下
+# 一路爬到力竭。PRI-1 保证先于普通「爬塔」matcher（虽然「自动爬塔」不以「爬塔」开头，
+# 仍提高优先级防未来口令冲突）。
+auto_tower = on_regex(_pat(r"自动爬塔"), priority=PRI - 1, block=True,
+                      rule=_mode_is("doupo"))
 
 
-@tower_elevator.handle()
+@auto_tower.handle()
 async def _(event: Event):
     event = view(event)
-    await _need_group(event, tower_elevator)
-    await finish_text(tower_elevator, event,
-                      await commands.cmd_tower_elevator(store, str(event.user_id)))
+    await _need_group(event, auto_tower)
+    qq = str(event.user_id)
+    # 带参（按钮点击拼出的「自动爬塔 是/否」）直接跑；裸口令给确认提示+按钮。
+    arg = _arg(event, "自动爬塔").strip()
+    if arg:
+        await finish_text(auto_tower, event, await commands.cmd_auto_tower(store, qq, arg))
+        return
+    p = await store.get_player(qq) or {}
+    await finish_text(auto_tower, event, commands.auto_tower_prompt(p),
+                      card_key="auto_tower_prompt")
 
 
 # 周副本（2026-11-17）：7 层一命通关 / 周一快照难度 / 失败全清
@@ -532,8 +541,8 @@ async def _(event: Event):
     msg = await commands.cmd_faction_skills(store, qq)
     if msg == commands.NOT_ENTERED:
         await faction_skills_cmd.finish(msg)
-    # 本门名录基本固定，出 roster 卡（与「斗技」合并卡同模板，序号口径同源
-    # core.roster_no_map —— 「上阵 1 3 5 7」的编号只认这张卡的序号圆）
+    # 本门名录基本固定，出 roster 卡（与「斗技」合并卡同模板）。
+    # 2026-11-25：本卡不再画上阵序号；序号只在「斗技」卡（core.learned_no_map）。
     png = None
     try:
         p = await store.get_player(qq)
@@ -1222,9 +1231,7 @@ register_keywords("doupo", [
     "塔状态",
     "塔结算",
     "收手",
-    "电梯",
-    "爬塔电梯",
-    "坐电梯",
+    "自动爬塔",
     "周副本",
     "周本",
     "周塔",

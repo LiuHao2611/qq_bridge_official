@@ -229,7 +229,7 @@ CARD_ACTIONS = {
     "task_submit": ("任务", "领主线", "战斗"),                  # 支线交任务回执
     "battle_text": ("战斗回看", "战斗", "任务"),                # 战斗评价纯文字
     "review_text": ("战斗评价", "战斗", "任务"),                # 战斗回看纯文字
-    "tower_text": ("塔层", "塔结算", "战斗"),                   # 爬塔回执
+    "tower_text": ("塔层", "塔结算", "自动爬塔", "战斗"),        # 爬塔回执
     "weekly_text": ("周本状态", "战斗", "人物"),                # 周副本回执
     "cult_text": ("战斗", "突破", "人物"),                      # 修炼/突破回执
     "equip_text": ("强化", "人物", "战斗"),                     # 装备/强化回执
@@ -265,7 +265,8 @@ CARD_ACTIONS_PAIRS: dict[str, tuple[tuple[str, str], ...]] = {
         ("看任务", "任务"), ("继续战斗", "战斗"), ("修炼", "修炼"),
     ),
     "tower_text": (
-        ("看塔层", "塔层"), ("塔结算", "塔结算"), ("继续战斗", "战斗"),
+        ("看塔层", "塔层"), ("塔结算", "塔结算"),
+        ("自动爬塔", "自动爬塔"), ("继续战斗", "战斗"),
     ),
 }
 
@@ -278,7 +279,6 @@ REPLY_CARD_KEY: dict[str, str] = {
     "交任务": "task_submit", "接任务": "task_submit",
     "战斗评价": "battle_text", "战斗回看": "review_text",
     "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
-    "电梯": "tower_text",
     "周副本": "weekly_text", "周本状态": "weekly_text",
     "修炼": "cult_text", "突破": "cult_text", "入塔": "cult_text",
     "出塔": "cult_text", "火能": "cult_text",
@@ -392,6 +392,14 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
     # card_key = "item:<丹名>" → 按该丹配方生成带参按钮；非丹药走普通 item。
     if k.startswith("item:"):
         return _item_detail_buttons(k[len("item:"):].strip())
+    # 2026-11-25 自动爬塔确认卡：两个带参按钮（随机加成/无加成）。
+    # 不经 CARD_ACTIONS 的零编造守门（data 是 custom 哨兵，非 canonical 口令）；
+    # head「自动爬塔」在 button_dispatch._PLAN 登记，点击走 dispatch_custom 带参。
+    if k == "auto_tower_prompt":
+        return (
+            Btn("随机加成", DOUPO_CUSTOM_PREFIX + "自动爬塔 是", False),
+            Btn("无加成·掉落高", DOUPO_CUSTOM_PREFIX + "自动爬塔 否", False),
+        )
 
     acts = CARD_ACTIONS.get(k)
     if not acts:

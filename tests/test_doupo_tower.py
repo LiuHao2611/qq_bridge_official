@@ -295,17 +295,9 @@ def test_effect_label_aggregation():
 
 
 # ---------------------------------------------------------------------------
-# 电梯 + 增量奖励（2026-11-17 用户「不重复获得之前挑战过层数的奖励」）
+# 增量奖励（2026-11-17 用户「不重复获得之前挑战过层数的奖励」）
+# 2026-11-25 电梯已删，但水位线（tower_paid_floor）机制保留，仍必须防重复领。
 # ---------------------------------------------------------------------------
-def test_elevator_cost_scales_with_floor():
-    """电梯费随层数单调递增、占累计奖励固定比例、有下限。"""
-    c10, c20, c40 = td.elevator_cost(10), td.elevator_cost(20), td.elevator_cost(40)
-    assert c10 == max(td.ELEVATOR_MIN_GOLD,
-                      int(td.clear_reward(10)["gold"] * td.ELEVATOR_GOLD_RATIO))
-    assert c10 < c20 < c40
-    assert td.elevator_cost(1) >= td.ELEVATOR_MIN_GOLD
-
-
 def test_incremental_reward_no_double_pay():
     """分段（电梯重打）领奖总额 == 一口气领奖，绝不重复/缩水。"""
     # 首轮到 10 层
@@ -336,8 +328,8 @@ def test_chest_skips_already_paid_floor():
     assert core.tower_open_chest(p, {"floor": 10}, rng=lambda: 0.0, floor=11) != []
 
 
-def test_elevator_starts_full_state_at_checkpoint():
-    """电梯 begin(floor=cp-1)：起点层数正确、临时增益全清（满状态）。"""
+def test_new_session_starts_from_checkpoint():
+    """2026-11-25 去掉电梯：新会话 begin(floor=checkpoint) = 满状态从止步层下一层开打。"""
     tmpdir = tempfile.mkdtemp(prefix="elev_store_")
     s = ts.TowerStore(ttl=60, path=os.path.join(tmpdir, "tower_session.json"))
     st = s.begin("q", floor=9)
@@ -345,6 +337,129 @@ def test_elevator_starts_full_state_at_checkpoint():
     assert st["temp_hp"] is None and st["temp_mp"] is None
     assert st["temp_bonus"] == {} and st["temp_effect_items"] == []
     assert st["pending_loot"] is None and not st["settled"]
+
+
+def test_auto_tower_removes_elevator_surface():
+    """prove-it 反例：电梯口令/费用函数必须彻底消失，防止被顺手加回来。"""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "plugins",
+                            "doupo", "__init__.py"), encoding="utf-8").read()
+    assert "tower_elevator" not in src, "电梯 matcher 又回来了"
+    assert "自动爬塔" in src, "自动爬塔 matcher 缺失"
+    ds = open(os.path.join(os.path.dirname(__file__), "..", "src", "plugins",
+                           "doupo", "tower_data.py"), encoding="utf-8").read()
+    assert "def elevator_cost" not in ds, "elevator_cost 未删除"
+
+
+def test_chest_bonus_raises_drop_rate():
+    """无加成自动爬塔的掉落补偿：chest_bonus 必须真的抬高宝箱中奖率。
+
+    normal 层基准 0.25；bonus=0.6 → 0.40。取 rng=0.30 时：
+    普通模式不中，加成模式必中。默认 0 时行为不变（逐字节等价）。
+    """
+    def _rng_seq(first):
+        seq = [first, 0.0, 0.5, 0.9]
+        it = iter(seq)
+        return lambda: next(it, 0.0)
+
+    p = _player(50)
+    assert td.chest_rate(4) < 0.30, "测试前提：第4层基准宝箱率应低于 0.30"
+    assert core.tower_open_chest(_player(50), {}, rng=_rng_seq(0.30), floor=4) == []
+    assert core.tower_open_chest(_player(50), {}, rng=_rng_seq(0.30), floor=4,
+                                 chest_bonus=0.6) != [], "加成没生效"
+    # 默认参数（不传）必须与改造前一致：0.26 > 0.25 → 不开
+    assert core.tower_open_chest(_player(50), {}, rng=_rng_seq(0.26), floor=4) == []
+
+
+class _MemStore:
+    def __init__(self, p):
+        self.p = p
+
+    async def get_player(self, qq):
+        return self.p
+
+    async def put_player(self, p):
+        self.p = p
+
+
+def test_auto_tower_runs_from_checkpoint_and_settles():
+    """自动爬塔：从 tower_checkpoint 的下一层开打、打到力竭自动结算、清会话。
+
+    prove-it：若默认又改回第 1 层重来，`start` 断言必红；若不结算，层数奖励白丢。
+    """
+    import asyncio
+    from doupo import commands
+
+    p = _player(70)
+    p["tower_checkpoint"] = 12
+    p["tower_paid_floor"] = 12
+    store = _MemStore(p)
+    ts.STORE.clear("qq_auto")
+    out = asyncio.run(commands.cmd_auto_tower(store, "qq_auto", "否"))
+    assert "从第 13 层出发" in out, out[:200]
+    assert "自动爬塔（无加成·掉落提升）" in out, out[:200]
+    assert ts.STORE.get("qq_auto") is None, "自动爬塔后会话没清理"
+    # 结算把水位线推到实际打到的最深层（至少不打回 12 层以下）
+    assert int(store.p["tower_paid_floor"]) >= 12
+
+
+def test_auto_tower_wires_chest_bonus_by_mode():
+    """wiring 守门：cmd_auto_tower 必须在「无加成」模式真的把 chest_bonus 传下去。
+
+    只测 core.tower_open_chest 本体是不够的（2026-11-25 变异实测：把
+    ``no_buff_bonus`` 改成 0.0 时那条测试仍然绿）。这里用 spy 拦真实调用点。
+    """
+    import asyncio
+    from doupo import commands
+
+    seen: list[float] = []
+    orig = core.tower_open_chest
+
+    def spy(p, st, rng=None, floor=None, chest_bonus=0.0):
+        seen.append(float(chest_bonus))
+        return orig(p, st, rng=rng, floor=floor, chest_bonus=chest_bonus)
+
+    core.tower_open_chest = spy
+    try:
+        for mode, want_positive in (("否", True), ("是", False)):
+            ts.STORE.clear("qw_" + mode)
+            seen.clear()
+            asyncio.run(commands.cmd_auto_tower(_MemStore(_player(70)), "qw_" + mode, mode))
+            assert seen, "该模式一次宝箱都没判定，无从验证 wiring（模式=%s）" % mode
+            got_positive = max(seen) > 0
+            assert got_positive == want_positive, (
+                "模式 %s 的 chest_bonus 传错：%s" % (mode, seen))
+    finally:
+        core.tower_open_chest = orig
+        ts.STORE.clear("qw_是")
+        ts.STORE.clear("qw_否")
+
+
+def test_auto_tower_empty_mode_returns_prompt():
+    """空参（爬塔回执上【自动爬塔】按钮点进来的路径）必须回确认提示，不是「用法」冷场。"""
+    import asyncio
+    from doupo import commands
+
+    p = _player(70)
+    p["tower_checkpoint"] = 7
+    out = asyncio.run(commands.cmd_auto_tower(_MemStore(p), "qp", ""))
+    assert "自动爬塔" in out and "随机加成" in out and "无加成" in out, out[:200]
+    assert "从第 8 层" in out, "提示里的起始层数不对：%s" % out[:120]
+    assert "用法" not in out
+    assert ts.STORE.get("qp") is None, "只回提示不该开会话"
+
+
+def test_auto_tower_rejects_when_session_pending():
+    """有未结算会话时不叠加开打，给出明确指引。"""
+    import asyncio
+    from doupo import commands
+
+    p = _player(70)
+    store = _MemStore(p)
+    ts.STORE.clear("qq_auto2")
+    ts.STORE.begin("qq_auto2", floor=3)
+    out = asyncio.run(commands.cmd_auto_tower(store, "qq_auto2", "是"))
+    assert "未结算" in out or "先「塔结算」" in out, out[:160]
+    ts.STORE.clear("qq_auto2")
 
 
 def _main():

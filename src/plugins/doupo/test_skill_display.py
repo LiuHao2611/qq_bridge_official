@@ -95,26 +95,32 @@ def test_merged_card_excludes_unlearned_faction_skills():
 
 
 def test_merged_card_cmd_text_has_both_sections():
-    """纯文本兜底同样分「已上阵」「已领悟」，并提示上阵编号看「宗门斗技」。"""
+    """纯文本兜底同样分「已上阵」「已领悟」，上阵序号以本卡为准（2026-11-25）。"""
     p, _ = _cross_faction_player()
     out = asyncio.run(commands.cmd_skills(MemStore(p), "95001"))
     assert "已上阵" in out and "已领悟" in out, out[:200]
-    assert "宗门斗技" in out, "缺上阵编号指引"
+    assert "上阵编号" in out or "上阵 1 3 5 7" in out, "缺上阵序号指引"
     assert "斗技 全部" not in out, "「斗技 全部」子命令已取消，文案不该再出现"
+    # 已领悟技带连续序号（learned_no_map 口径），且序号从 1 起
+    no_map = core.learned_no_map(p)
+    assert no_map and 1 in no_map, "应有 1 号技"
+    assert "1. " in out, "纯文本没画出上阵序号：%s" % out[:200]
     for e in core.loadout_entries(p):
         assert e["name"] in out, "已上阵技 %s 没列出来" % e["name"]
 
 
 def test_faction_cmd_is_pure_faction_pool():
-    """「宗门斗技」列本宗池（含未解锁），并保留上阵序号口径。"""
+    """「宗门斗技」列本宗池（含未解锁），不再给上阵序号（2026-11-25）。"""
     p, _ = _cross_faction_player()
     out = asyncio.run(commands.cmd_faction_skills(MemStore(p), "95001"))
     assert "本门斗技" in out, "「宗门斗技」标题应是本门口径"
     pool = core.skill_pool(p)
     assert pool, "探针宗门应有可学技"
     assert any(e["name"] in out for e in pool), "「宗门斗技」没列出本宗技"
-    assert "上阵 1 3 5 7" in out, "缺上阵序号指引"
-    # 本宗池序号仍由 roster_no_map 提供（上阵 1 3 5 7 的唯一编号源）
+    # 序号指引改到「斗技」卡，宗门卡文案只说去那里看
+    assert "斗技" in out and ("序号" in out or "上阵 1 3 5 7" in out), \
+        "缺上阵序号去向指引"
+    # 宗门卡不再画序号（本宗全池含未解锁，序号会跳号误导）
     d = card.build_roster_data(p)
-    assert [r["no"] for r in d["rows"]] == list(range(1, len(d["rows"]) + 1)), \
-        "宗门斗技卡序号必须连续，供「上阵 1 3 5 7」使用"
+    assert all(r["no"] is None for r in d["rows"]), \
+        "宗门卡不该再有序号：%s" % [r["no"] for r in d["rows"]]

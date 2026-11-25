@@ -372,8 +372,8 @@ MENU_GROUPS = (
         # ast.literal_eval 静态解析它；写成 "…%d 秒" % cfg.CHOICE_TTL 会让 BinOp
         # 解析失败（4 条按钮门禁直接 ValueError）。改口径先改那条门禁。
         ("爬塔", "试炼之塔：无限层冲榜，每10层守塔者，宝箱极低概率掉神兵；"
-                 "战利品直接回 1/2/3（1 分钟内）"),
-        ("电梯", "花金币直达上次止步层，满状态重打；旧层已领奖励不重复"),
+                 "默认从上次止步层接着爬；战利品直接回 1/2/3（1 分钟内）"),
+        ("自动爬塔", "一路爬到力竭：随机加成（每层随机选战利品）或无加成（掉落更高）"),
         ("塔层", "查看爬塔进度：层数 / 气血 / 增益 / 距下个守塔者"),
         ("塔结算", "收手结算本轮爬塔奖励（死亡也会自动结算）"),
         ("周副本", "7层一命通关；周一快照锁定难度，失败奖励全清含神兵"),
@@ -381,12 +381,12 @@ MENU_GROUPS = (
     )),
     ("养成 · 变强", (
         ("强化", "强化当前武器：等级对任何武器生效；玄重尺十级觉醒异火恒古尺"),
-        ("斗技", "一张卡看完：已上阵四槽 + 已领悟全部斗技（含转宗保留的他宗技）"),
-        ("宗门斗技", "看当前所属宗门的斗技池（本门传承+通用，含未解锁、上阵编号）"),
+        ("斗技", "一张卡看完：已上阵四槽 + 已领悟全部斗技（含转宗保留的他宗技），带连续上阵序号"),
+        ("宗门斗技", "看当前所属宗门的斗技池（本门传承+通用，含未解锁）；上阵序号见「斗技」卡"),
         ("斗技详情 狂狮怒罡", "带技名看完整说明；只发「斗技详情」也列出本宗全部斗技"),
         ("学斗技", "达等级+战力后随机领悟一门未学斗技（花金币）；也可「学习 <技名>」点名领悟，入道只给 1 门"),
         ("升级 龙吟碎", "用焚血散升斗技，每级伤害 +20%"),
-        ("上阵 1 3 5 7", "按「宗门斗技」名录卡序号选四槽；也可打技名，异火主动技同样能上阵"),
+        ("上阵 1 3 5 7", "按「斗技」卡序号选四槽；也可打技名，异火主动技同样能上阵"),
         ("宗门", "看本门与可转宗门（进阶池 lv40 / 隐世池 lv90）"),
         ("转宗 迦南学院", "改换门庭，重配四槽（不发该派入道物品）"),
         ("异火", "看 5 种异火的主动技 / 被动、来历与喂养进度"),
@@ -402,7 +402,7 @@ MENU_GROUPS = (
         ("买 血灵草 2", "买 2 份血灵草"),
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
         ("炼制 回灵丹", "开炉炼丹；「炼制 回灵丹 5次」连炼5炉，失败得药渣"),
-        ("服丹 回灵丹", "服用丹药；带纹丹写成「服丹 二纹破厄丹」"),
+        ("服丹 回灵丹", "服用丹药，可连服「服丹 回灵丹 10」或混着吃；带纹丹写成「服丹 二纹破厄丹」"),
         ("查看 破厄丹", "看物品详情：本效、丹纹各档概率与赐福、从何而来"),
         # 2026-11-25：背包已改「不翻页、一卡到底」，旧文案还写着「24 格一页 / 背包2 翻页」，
         # 玩家照着发「背包2」只会拿到同一张满包卡 —— 菜单不许承诺做不到的事。
@@ -552,8 +552,8 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("斗技", (
         "「斗技」= 一张卡看完我的斗技：已上阵四槽 + 已领悟全部"
-        "（含转宗后依原著「技艺不失」保留的他宗技）；"
-        "「宗门斗技」= 当前宗门的斗技池（本门传承+通用，含未解锁、上阵编号）",
+        "（含转宗后依原著「技艺不失」保留的他宗技），带连续上阵序号；"
+        "「宗门斗技」= 当前宗门的斗技池（本门传承+通用，含未解锁），上阵序号见「斗技」卡",
         "三阶四槽：",
         "阶位分三档 —— 普通（黄阶/玄阶）· 高阶（地阶/天阶）· 特殊（秘法/血脉/体质/异火）",
         "上阵最多 4 门，三阶任意搭配（后期可四门全特殊）",
@@ -562,7 +562,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "斗气不够放任何一门 → 强制武器普攻，伤害大减且持续掉血",
         "升一级伤害 +20%（耗焚血散，最高 5 级）；同名技跨宗共享等级",
         "入道只领悟 1 门低阶技，其余靠「学斗技」逐个领悟：达解锁等级+战力门槛、花金币，随机得一门未学技",
-        "领悟的技要用「上阵 <技名>」或「上阵 1 3 5 7」（「宗门斗技」名录卡序号）放进四槽才会自动释放；未领悟的技不能上阵",
+        "领悟的技要用「上阵 <技名>」或「上阵 1 3 5 7」（「斗技」卡序号）放进四槽才会自动释放；未领悟的技不能上阵",
         "解锁按阶位：黄/玄 lv1 ｜ 地阶 20/30/40 ｜ 天阶 50/60/70 ｜ 秘法 40 ｜ 体质血脉 50 ｜ 异火 60",
         "完整说明见「斗技详情 <技名>」（施展流程 + 数值 + 来历）",
     )),
@@ -1097,7 +1097,7 @@ async def cmd_skills(store, qq) -> str:
       ① 已上阵：四槽真实出战技（含等级）；
       ② 已领悟：其余已学技，按三阶分组，含转宗保留的他宗技；
       ③ 异火技：已收服但未上阵的主动技（收服即会）。
-    「宗门斗技」仍单独看本宗池 + 上阵编号，两者职责不重叠。
+    「宗门斗技」仍单独看本宗池（无序号），上阵序号以本卡为准，两者职责不重叠。
     """
     p = await _player(store, qq)
     if not p:
@@ -1105,6 +1105,8 @@ async def cmd_skills(store, qq) -> str:
     learned = core.learned_skill_pool(p)
     lo = core.loadout_entries(p)
     lo_names = {e["name"] for e in lo}
+    # 2026-11-25：纯文本与「斗技」卡共用上阵序号真值源 learned_no_map。
+    no_of = {n: no for no, n in core.learned_no_map(p).items()}
     fac_name = p.get("faction_name") or "无宗门"
     n_ben = sum(1 for e in learned if e.get("origin") == "本宗")
     n_other = sum(1 for e in learned if e.get("origin") == "他宗")
@@ -1121,9 +1123,9 @@ async def cmd_skills(store, qq) -> str:
         out.append("〔已上阵〕")
         for e in lo:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
-            out.append(f"　{_tag(e)}{e['name']} Lv{lv}（{e['tier']}）")
+            out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}（{e['tier']}）")
 
-    # ② 其余已领悟，按三阶分组（与「宗门斗技」同序）
+    # ② 其余已领悟，按三阶分组（序号与「斗技」卡同源）
     for tier in cfg.SKILL_TIERS:
         rows = [e for e in learned if e["tier"] == tier
                 and e["name"] not in lo_names and e.get("origin") != "异火"]
@@ -1132,7 +1134,7 @@ async def cmd_skills(store, qq) -> str:
         out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·mp_max")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
-            out.append(f"　{_tag(e)}{e['name']} Lv{lv}")
+            out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}")
 
     # ③ 已收服异火技（收服即会；已上阵的不重复列，避免同一门出现两次）
     flames = [e for e in learned
@@ -1144,7 +1146,7 @@ async def cmd_skills(store, qq) -> str:
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·可学）")
 
     out.append("")
-    out.append(f"　当前宗门【{fac_name}】；本门传承与上阵编号见「宗门斗技」")
+    out.append(f"　当前宗门【{fac_name}】；上面序号即上阵编号（上阵 1 3 5 7）")
     out.append("　〔他宗〕= 转宗前领悟、依原著「技艺已学不会忘」保留的斗技")
     out.append(f"　升一级伤害 +20%，消耗 {cfg.SKILL_UP_ITEM}；用法：升级 <技名> / 上阵 <4 技名>")
     return "\n".join(out)
@@ -1154,8 +1156,9 @@ async def cmd_faction_skills(store, qq) -> str:
     """「宗门斗技」= 当前所属宗门的技能池（含未解锁），2026-11-24 新增。
 
     与「斗技」（已上阵 + 已领悟合并卡）互补：这条**只**看本门传承 + 通用 +
-    已收服异火技，数据走 core.skill_pool（本宗池）；卡上的序号圆是
-    「上阵 1 3 5 7」的唯一编号源，故合并卡不能替代它。
+    已收服异火技，数据走 core.skill_pool（本宗池）。
+    2026-11-25 起本卡**不再给上阵序号**（本宗全池含未解锁、序号会跳号）；
+    上阵序号唯一真值源是「斗技」卡的 core.learned_no_map。
     """
     p = await _player(store, qq)
     if not p:
@@ -1184,7 +1187,7 @@ async def cmd_faction_skills(store, qq) -> str:
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
     out.append("")
     out.append("　我领悟的全部斗技（含转宗保留的他宗技）见「斗技」")
-    out.append("　「宗门斗技」出本门名录卡，序号即上阵编号（上阵 1 3 5 7）")
+    out.append("　上阵序号见「斗技」卡（上阵 1 3 5 7）；本卡看本门有哪些技")
     return "\n".join(out)
 
 
@@ -1420,11 +1423,14 @@ async def cmd_insight(store, qq) -> str:
         f"✨ 福至心灵——领悟了【{res['name']}】（{res['tier']}斗技）！",
         f"　耗金 {res['cost']}，已领悟 {res['count']} 门。",
     ]
+    # 2026-11-25 用户「每次学习斗技后都提醒对应序号」：新序号 = 「斗技」卡连续序号。
+    no = core.learned_no_of(p, res["name"])
+    slot_hint = f"它在「斗技」卡是 {no} 号" if no is not None else f"技名【{res['name']}】"
     if len(learned) < cfg.LOADOUT_SIZE:
         need = cfg.LOADOUT_SIZE - len(learned)
-        out.append(f"　四槽还有 {need} 个空位，发「上阵 {res['name']}」把它带上场。")
+        out.append(f"　四槽还有 {need} 个空位，{slot_hint}，发「上阵 {res['name']}」带上场。")
     else:
-        out.append("　四槽已满，可用「上阵 1 3 5 7」（名录卡序号）调整。")
+        out.append(f"　四槽已满，{slot_hint}，可用「上阵 {no if no is not None else res['name']}」替换一门。")
     return "\n".join(x for x in out if x)
 
 
@@ -1469,7 +1475,12 @@ async def cmd_learn_named(store, qq, name) -> str:
         f"✨ 福至心灵——领悟了【{res['name']}】（{res['tier']}斗技）！",
         f"　耗金 {res['cost']}，已领悟 {res['count']} 门。",
     ]
-    if len(learned) < cfg.LOADOUT_SIZE:
+    # 2026-11-25 用户「每次学习斗技后都提醒对应序号，方便操作」：
+    # 新序号口径 = 「斗技」（我的斗技）卡连续序号（learned_no_map/learned_no_of）。
+    no = core.learned_no_of(p, res["name"])
+    if no is not None:
+        out.append(f"　它在「斗技」卡是 {no} 号，发「上阵 {no}」或「上阵 {res['name']}」带上场。")
+    else:
         out.append(f"　发「上阵 {res['name']}」把它带上场。")
     return "\n".join(x for x in out if x)
 
@@ -1482,10 +1493,11 @@ async def cmd_loadout(store, qq, args) -> str:
     pool = [e for e in core.skill_pool(p) if e["unlocked"]]
     raw = (args or "").replace("，", ",").replace("、", ",").replace("/", ",").replace(" ", ",")
     names = [x.strip() for x in raw.split(",") if x.strip()]
-    # 名录卡序号 → 技名（2026-11-16 用户「加序号方便输出上阵口令」）：
-    # 序号口径与 doupo_roster 卡上的圆标号严格同源（core.roster_no_map）。
-    # 纯数字 token 先翻译成技名，再走下面既有的解锁/去重校验，未解锁照样被拒。
-    no_map = core.roster_no_map(p)
+    # 2026-11-25 用户根因修复：上阵序号改为「我的斗技」卡连续序号（只含已领悟
+    # 技、无跳号），与 card.build_learned_data 严格同源 core.learned_no_map。
+    # 旧的 roster_no_map 用本宗全池（含未解锁）编号 → 玩家照宗门卡序号上阵必错位。
+    # 纯数字 token 先翻译成技名，再走下面既有的解锁/去重校验。
+    no_map = core.learned_no_map(p)
     # 序号 token 兼容多种用户写法：3 / 技3 / 按3 / 第3 / 3号 / 技3号。
     # 「技N」来自旧提示「上阵 技1 技2 技3 技4」与菜单卡历史文案；用户照着打
     # 或点按钮拼出「技3」都必须能上阵，不能当成技名去找（2026-11-16 实测事故）。
@@ -1501,19 +1513,18 @@ async def cmd_loadout(store, qq, args) -> str:
     names = translated
     if not names:
         cur = core.loadout_entries(p)
-        # 🚨 2026-11-25 用户「上阵 11 14 就不行了」：旧文案把 skill_pool（已解锁）**全部**
-        # 写进「可上阵」，其中含「可学但未领悟」的技——用户照着序号打必然被拒，看着
-        # 就像口令坏了。这里按 is_equippable 分成「可上阵（已领悟）」与「待领悟」两档，
-        # 序号仍与名录卡严格同源（enumerate 顺序不变，只是分组显示）。
+        # 2026-11-25 用户根因修复：序号只用「我的斗技」卡的连续编号（no_map，
+        # 只含已领悟技）。旧版 enumerate(本宗全池) 把未解锁/未领悟技也编号，
+        # 玩家照着打就会被拒、看着像口令坏了。可上阵序号严格取 no_map。
+        ready = [f"{no}.{nm}" for no, nm in no_map.items()]
+        # 待领悟的本宗技不参与上阵，仅列名字（不给序号，避免误导照着打）。
         learned = set(core.equippable_names(p))
-        pool_all = core.skill_pool_sorted(p)
-        ready = [f"{i}.{e['name']}" for i, e in enumerate(pool_all, 1) if e["name"] in learned]
-        todo = [f"{i}.{e['name']}" for i, e in enumerate(pool_all, 1) if e["name"] not in learned]
+        todo = [e["name"] for e in core.skill_pool_sorted(p) if e["name"] not in learned]
         lines = ["当前上阵：" + ("、".join(f"{e['name']}[{e['tier']}]" for e in cur) or "（空）"),
                  "可上阵（已领悟）：" + ("、".join(ready) or "（无）")]
         if todo:
             lines.append("待领悟（先发「学习 <技名>」）：" + "、".join(todo))
-        lines.append(f"用法：上阵 1 3 5 7（名录卡序号）或 <技名>（最多 {cfg.LOADOUT_SIZE} 门）")
+        lines.append(f"用法：上阵 1 3 5 7（「斗技」卡序号）或 <技名>（最多 {cfg.LOADOUT_SIZE} 门）")
         return "\n".join(lines)
     chosen = []
     pool_names = [e["name"] for e in pool]
@@ -1533,15 +1544,12 @@ async def cmd_loadout(store, qq, args) -> str:
     if len(chosen) > cfg.LOADOUT_SIZE:
         return f"最多上阵 {cfg.LOADOUT_SIZE} 门，你给了 {len(chosen)} 门。"
     # 未领悟的技不能上阵——明确提示，不要静默过滤成默认四槽。
-    # 用户照名录卡序号选时，「可学」态（已解锁未领悟）最常见，必须讲清下一步。
+    # 2026-11-25：序号口径已改为「我的斗技」卡（只含已领悟），未领悟技本就没有
+    # 序号，这里只列技名 + 下一步「学习 <技名>」，不再误导去找名录卡号。
     owned = core.equippable_names(p)
     unlearned = [n for n in chosen if n not in owned]
     if unlearned:
-        tips = []
-        for n in unlearned:
-            no = next((i for i, nm in no_map.items() if nm == n), None)
-            tips.append(f"{n}（名录卡 {no} 号）" if no else n)
-        return ("还没领悟：" + "、".join(tips) + "。先发「学斗技」或「学习 "
+        return ("还没领悟：" + "、".join(unlearned) + "。先发「学斗技」或「学习 "
                 + unlearned[0] + "」领悟后再上阵。")
     core.set_loadout(p, chosen)
     await store.put_player(p)
@@ -1994,7 +2002,7 @@ async def cmd_bag(store, qq) -> str:
         if name in known or shown in known:
             out.append(f"　　　{known.get(name) or known[shown]}")
     out.append("")
-    out.append("　用法：服丹 回灵丹　｜　查看 回灵丹 看详情　｜　"
+    out.append("　用法：服丹 回灵丹　｜　连服 服丹 回灵丹 10　｜　查看 回灵丹 看详情　｜　"
                "锁定 回灵丹（锁定后战斗不会自动服用）")
     return "\n".join(out)
 
@@ -2027,6 +2035,33 @@ _TIER_WORDS = (("三纹", 3), ("二纹", 2), ("一纹", 1), ("丹纹", 1),
                ("3纹", 3), ("2纹", 2), ("1纹", 1))
 
 
+#: 服丹数量写法（2026-11-25 用户「一次吃多个不限制数量」）：
+#:   服丹 回灵丹 10 / 回灵丹×10 / 回灵丹*10 / 回灵丹10枚 / 回灵丹 10颗
+#: 只认末尾的阿拉伯数字（丹名本身无阿拉伯数字，已核验），前面是可分隔可不分隔的丹名。
+#: 纹数词是中文（一/二/三纹），不与数字冲突。解析出的数量交给 cmd_use 循环服用。
+_USE_COUNT_RE = re.compile(r"^(.*?)[\s×xX*＊]*(?:×|x|X|\*)?\s*(\d+)\s*(?:枚|颗|粒|个|份)?$")
+
+
+def parse_use_count(raw: str) -> tuple[str, int]:
+    """从服丹参数里剥出「数量」，返回 ``(丹名部分, 数量)``。
+
+    无数量写法（如「回灵丹」「回灵丹二纹」）→ 数量 1，丹名原样返回（去尾空白）。
+    上限由调用方决定（用户「不限制数量」，仅设防手抖的硬顶避免一次刷屏）。
+    """
+    s = str(raw or "").strip()
+    m = _USE_COUNT_RE.match(s)
+    if not m:
+        return s, 1
+    name_part = (m.group(1) or "").strip(" \t×xX*＊")
+    if not name_part:
+        return s, 1  # 纯数字（如误发「服丹 10」）不当数量，交给下层报无此丹
+    try:
+        n = int(m.group(2))
+    except (ValueError, TypeError):
+        return s, 1
+    return name_part, max(1, n)
+
+
 def _norm_item_text(s: str) -> str:
     """物品名归一化：各种「点」→ ·，去空格/横线/括号，压掉重复的 ·。"""
     t = str(s or "").strip()
@@ -2038,6 +2073,56 @@ def _norm_item_text(s: str) -> str:
     while "··" in t:
         t = t.replace("··", "·")
     return t.strip("·")
+
+
+#: 只作「纹数后缀」出现的词：混吃拆分时拼回上一个丹名，绝不当独立丹药。
+_WEN_ONLY = ("一纹", "二纹", "三纹", "四纹", "五纹", "六纹", "七纹", "八纹", "九纹",
+             "丹纹", "1纹", "2纹", "3纹", "4纹", "5纹", "6纹", "7纹", "8纹", "9纹")
+
+
+def _known_use_names() -> set[str]:
+    """服丹可认的物品名集合（归一化后），用于混吃拆分时的「这段是不是真丹名」判定。
+
+    带纹丹名已由 config 生成好放进 ``DANWEN_RECIPE_NAMES``（含各档位），无需再拼。
+    """
+    names: set[str] = set()
+    for n in list(cfg.RECIPE_NAMES) + list(cfg.RECIPE_ALIAS) \
+            + list(cfg.MATERIAL_NAMES) + list(cfg.DANWEN_RECIPE_NAMES):
+        names.add(_norm_item_text(n))
+    names.discard("")
+    return names
+
+
+def _split_use_segments(raw: str) -> list[tuple[str, int]]:
+    """把「服丹 回灵丹 10 回春散 破厄丹」拆成 ``[("回灵丹",10), ("回春散",1), ...]``。
+
+    **保守到宁可整串不拆**：只要有一段对不上已知物品名（如「回灵丹 二纹」里的
+    「二纹」），就返回空列表，让调用方退回原来的单丹整串解析——混吃是增值功能，
+    绝不能把既有的纹数写法、模糊匹配写法搞坏。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    parts = [x for x in re.split(r"[\s、，,]+", s) if x]
+    if len(parts) <= 1:
+        return []
+    known = _known_use_names()
+    groups: list[list] = []  # [[名字, 数量], ...]
+    for tok in parts:
+        if re.fullmatch(r"\d+", tok):
+            if groups:
+                groups[-1][1] = max(1, int(tok))
+            continue
+        if tok in _WEN_ONLY and groups:
+            groups[-1][0] = str(groups[-1][0]) + tok
+            continue
+        if _norm_item_text(tok) in known:
+            groups.append([tok, 1])
+            continue
+        return []  # 有一段认不出 → 整体不拆（保护未知/模糊写法）
+    if len(groups) < 2:
+        return []
+    return [(str(g[0]), int(g[1])) for g in groups]
 
 
 def resolve_owned_item(p, raw: str) -> tuple[str, bool]:
@@ -2353,8 +2438,28 @@ async def cmd_use(store, qq, name) -> str:
         return NOT_ENTERED
     name = (name or "").strip()
     if not name:
-        return ("用法：服丹 回灵丹\n"
+        return ("用法：服丹 回灵丹（可「服丹 回灵丹 10」一次连服十枚）\n"
+                "　混着吃：服丹 回灵丹 10 回春散 破厄丹（空格/顿号分隔）\n"
                 "　带纹丹：服丹 回灵丹·二纹　或　服丹 回灵丹 二纹（一/二/三纹）")
+    # 2026-11-25 用户「一次可以吃多个丹药，不限制数量」：
+    # ① 多种混吃（空格/顿号分隔，每段后可跟数量）→ 逐段结算；
+    # ② 单种连服（「回灵丹 10」= 十枚）→ 循环同一种。
+    segs = _split_use_segments(name)
+    if len(segs) >= 2:
+        outs = []
+        for seg_name, seg_cnt in segs:
+            outs.append(await _use_one(store, qq, p, seg_name, seg_cnt))
+        await store.put_player(p)
+        return "\n".join(outs)
+    seg_name, seg_cnt = segs[0] if segs else parse_use_count(name)
+    out = await _use_one(store, qq, p, seg_name, seg_cnt)
+    await store.put_player(p)
+    return out
+
+
+async def _use_one(store, qq, p, name: str, count: int) -> str:
+    """单种丹药连服 ``count`` 枚（混吃时每段走一次本函数，口径零分叉）。"""
+    count = max(1, min(int(count), cfg.PILL_USE_BATCH_CAP))  # 硬顶仅防手抖刷屏
     # 2026-11-25：背包显示名剥掉了纹数（用户要求名称不变、纹数走角标），
     # 玩家照卡面打「聚气散」只能吃到不带纹那枚。这里先按「背包里真有的」解析。
     owned, auto_danwen = resolve_owned_item(p, name)
@@ -2372,43 +2477,64 @@ async def cmd_use(store, qq, name) -> str:
         return "无此丹药。"
     # 「一阶限 N 枚」只对破境类丹药生效（原著抗性），普通丹药读库没意义。
     rec = cfg.RECIPE_BY_NAME.get(hit) or {}
-    used = None
-    if rec.get("effect") == "breakthrough":
-        used = await store.pill_used_counts(str(qq), hit)
-    res = core.use_item(p, hit, used_counts=used)
-    if res.get("mark_used") is not None:
-        await store.mark_pill_used(str(qq), hit, int(res["mark_used"]))
+    is_break = rec.get("effect") == "breakthrough"
+    # 2026-11-25 用户「一次吃多个不限制数量」：循环连服，逐枚结算。
+    # 每枚都走同一套 core.use_item（药效/扣物/丹纹赐福/抗性口径零分叉）。
+    # 提前停的条件：没货了(none) / 满血满气(full) / 非口服(notuse/need_puppet)——
+    # 这些 core 都**拦在扣物之前**，停了不浪费；抗性(resisted)丹已扣则继续下一枚。
+    succeeded = 0
+    last_msg = ""
+    stop_reason = ""
+    for _ in range(count):
+        used = await store.pill_used_counts(str(qq), hit) if is_break else None
+        res = core.use_item(p, hit, used_counts=used)
+        if res.get("mark_used") is not None:
+            await store.mark_pill_used(str(qq), hit, int(res["mark_used"]))
+        if not res.get("ok"):
+            reason = res.get("reason")
+            if reason in ("none", "full", "notuse", "need_puppet"):
+                stop_reason = reason
+                break
+            # resisted / 其它：药已扣、有回执文案，记下后继续（连服抗性丹会连扣）
+            last_msg = res.get("msg") or last_msg
+            continue
+        succeeded += 1
+        last_msg = res.get("msg") or last_msg
     await store.put_player(p)
-    if not res.get("ok"):
-        if res.get("reason") == "none":
+
+    # 一枚都没成功：按最后那次失败原因给出明确去向（与单枚版口径一致）。
+    if succeeded == 0:
+        if stop_reason == "none":
             return f"你没有【{hit}】。去「炼制 {hit}」或「宝库」看看。"
-        if res.get("reason") == "resisted":
-            # 丹药已被扣掉（原著就是「白白浪费」），必须让玩家看见这件事。
-            return f"💊 服下【{hit}】，{res.get('msg')}"
-        if res.get("reason") == "full":
-            # 2026-11-23：满血/满气时**不扣物**（core 拦在扣物之前），要让玩家看见
-            # 「丹还在」，而不是收到一句「无法服用」以为丢了一枚。
+        if stop_reason == "full":
             return (f"💚 气血斗气都是满的 —— 【{hit}】还在包里，"
                     f"受了伤再服才不浪费。")
-        if res.get("reason") == "need_puppet":
-            # P3 养魂：养魂涎不是口服丹。**一枚都没扣**（拦在扣物之前），
-            # 这里必须把「丹还在」和「该去哪用」都说清楚。
+        if stop_reason == "need_puppet":
             return ("🧿 【%s】要渡进傀儡体内，不能口服 —— 丹还在你包里。\n"
                     "　发「傀儡 养魂」把它渡给出战傀儡：每枚 +%d 灵魂强度，"
                     "上限 %d。" % (hit, int(cfg.PUPPET_SOUL_FEED_GAIN),
                                    int(cfg.PUPPET_SOUL_FEED_MAX)))
-        if res.get("reason") == "notuse":
-            # 2026-11-23 修 P0 吞丹：焚血散是升斗技的材料，**一枚都没扣**（拦在
-            # 扣物之前）。旧版落到下面那句只回 msg，玩家不知道丹还在，还会以为被骗。
+        if stop_reason == "notuse":
             return ("🧪 【%s】不是口服之物 —— 丹还在你包里。\n"
                     "　发「升级 技能名」把它用在斗技上（每级 1 份，最高 5 级）。" % hit)
-        return res.get("msg") or "无法服用。"
+        return last_msg or "无法服用。"
+
     note = ""
     if auto_danwen:
         note = "\n　（包里没有不带纹的，这枚带纹丹直接服下了）"
+    # 丹纹赐福的限时增益不累加由底层 temp_buff.add 保证（同名同源刷新取最长，
+    # 不乘枚数）；连服多枚不会把增益时长叠起来——见 tests/test_doupo_temp_buff。
+    head = f"💊 连服【{hit}】{succeeded} 枚" if succeeded > 1 else f"💊 服下【{hit}】"
+    body = last_msg
+    if succeeded > 1 and count > succeeded:
+        # 想多吃但没货/满了，说清楚实际只吃了几枚
+        body += f"\n　（本想吃 {count} 枚，只服下 {succeeded} 枚）"
+    guzzle = txt.pill_guzzle(succeeded)
+    if guzzle:
+        body += "\n　" + guzzle
     if hit in cfg.MATERIAL_BY_NAME:
-        return f"✨ {res['msg']}{note}"
-    return f"💊 服下【{hit}】，{res['msg']}{note}"
+        return f"✨ 炼化 {succeeded} 份【{hit}】，{body}{note}"
+    return f"{head}，{body}{note}"
 
 
 # ---------------------------------------------------------------------------
@@ -2906,9 +3032,14 @@ async def cmd_tower(store, qq, arg="") -> str:
         header = _expired_settle_line(p, qq)
         if header:
             header += "\n"
-        st = ts.STORE.begin(qq)
-        next_floor = 1
-        header += f"🗼 【试炼之塔】开启！历史最高 {int(p.get('tower_best', 0))} 层\n"
+        # 2026-11-25 用户「去掉电梯，默认从最后一次爬塔的层数开始」：
+        # 新会话从上次止步层 checkpoint 的下一层开，不再每次从第 1 层重来。
+        # begin(floor=cp) 表示"已通过 cp 层"，tower_floor 下一层就是 cp+1。
+        cp = max(0, int(p.get("tower_checkpoint", 0)))
+        st = ts.STORE.begin(qq, floor=cp)
+        next_floor = cp + 1
+        header += (f"🗼 【试炼之塔】从第 {next_floor} 层开始！"
+                   f"历史最高 {int(p.get('tower_best', 0))} 层\n")
     else:
         if st.get("pending_loot"):
             return ("请先选战利品：直接回复 1 / 2 / 3（还剩 %d 秒，超时作废）。"
@@ -2979,13 +3110,10 @@ async def cmd_tower(store, qq, arg="") -> str:
             f"　结算：+{res['gold']} 金币、+{res['exp']} 修为" + _loot_txt
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
         ]
-        # 电梯提示（2026-11-17）：止步层 > 1 才值得坐；已领过的层不重复给奖励。
+        # 2026-11-25 去掉电梯：默认从上次止步层的下一层再冲。
         cp = int(p.get("tower_checkpoint", 0))
-        if cp > 1:
-            cost = td.elevator_cost(cp)
-            lines.append(f"　🛗 发「电梯」花 {cost} 金币直达第 {cp} 层"
-                         f"（满状态；旧层已领的奖励不再重复）。")
-        lines.append("　发「爬塔」从第 1 层再冲。")
+        lines.append(f"　发「爬塔」从第 {cp + 1} 层再冲；"
+                     "或「自动爬塔」一路爬到力竭。")
     if warn:
         lines.insert(0, warn.rstrip("\n"))
     await store.put_player(p)
@@ -3071,6 +3199,7 @@ async def cmd_tower_status(store, qq) -> str:
                     "　发「爬塔」开始新一轮。")
         return (f"🗼 试炼之塔 · 历史最高 {best} 层\n"
                 "　发「爬塔」开始攀登；无限层、每10层一位守塔强者。\n"
+                "　懒得手打就发「自动爬塔」，一路冲到力竭。\n"
                 "　武器从宝箱极低概率掉落，可「装备 <名>」替换玄重尺。\n"
                 "　进度已存档（重启不丢）；闲置 %d 小时才自动结算。"
                 % (ts.DEFAULT_TTL // 3600))
@@ -3093,7 +3222,7 @@ async def cmd_tower_status(store, qq) -> str:
     elif expired:
         lines.append("　⏰ 战利品已超时作废（限 %d 秒），该层奖励已失去。" % cfg.CHOICE_TTL)
     else:
-        lines.append("　发「爬塔」继续；「塔结算」收手领奖。")
+        lines.append("　发「爬塔」继续；「自动爬塔」一路冲到力竭；「塔结算」收手领奖。")
     return "\n".join(lines)
 
 
@@ -3120,37 +3249,125 @@ async def cmd_tower_settle(store, qq) -> str:
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
 
 
-async def cmd_tower_elevator(store, qq) -> str:
-    """电梯（2026-11-17）：花金币直达上次止步层，满状态重打，旧层奖励不重复。
+#: 自动爬塔单次最多连打层数（2026-11-25）：防止强者永远打不输导致死循环刷屏。
+#: 到顶后自动收手结算，玩家可再发「自动爬塔」接着冲。
+AUTO_TOWER_MAX_FLOORS = 100
+#: 「无加成自动爬塔」的宝箱率补偿倍率增量（难度更高→掉落更高）。
+AUTO_TOWER_NO_BUFF_CHEST_BONUS = 0.6
 
-    硬约束：
-      * 必须有止步层（checkpoint > 1），否则没意义；
-      * 当前不能有未结算会话（防止叠加刷层）；
-      * 金币必须够，不够明说差额，不扣不进；
-    扣费与开会话在同一处完成，put_player 落盘后才回包。
+
+def auto_tower_prompt(p) -> str:
+    """自动爬塔的确认提示（裸口令与爬塔回执上的【自动爬塔】按钮共用同一段文案）。
+
+    文案只说玩法，不带任何开发向说明（沉浸感红线）。
+    """
+    cp = max(0, int((p or {}).get("tower_checkpoint", 0)))
+    return ("🤖 自动爬塔：从第 %d 层一路爬到力竭，不用每层手打。\n"
+            "　【随机加成】= 每层自动随机选一个三选一战利品；\n"
+            "　【无加成】= 不吃战利品硬闯，宝箱掉落率更高。\n"
+            "　点下面按钮开始（也可回「自动爬塔 是/否」）：" % (cp + 1))
+
+
+async def cmd_auto_tower(store, qq, mode: str) -> str:
+    """自动爬塔（2026-11-25 用户）：一路爬到力竭，不用每层手打「爬塔」+选 1/2/3。
+
+    ``mode``：
+      * ``random``/``是`` —— 每层自动**随机选一个**三选一战利品（有加成）；
+      * ``none``/``否``  —— 完全**不吃**战利品加成，但宝箱掉落率提高作补偿。
+
+    与手动爬塔共用同一套 ``core.tower_floor`` / ``tower_open_chest`` /
+    ``tower_settle`` / ``_apply_loot``，玩法零分叉；区别只在「谁按 1/2/3」和
+    无加成模式的掉落补偿。默认从 ``tower_checkpoint``（上次止步层）的下一层开，
+    不再从第 1 层重来（用户「去掉电梯，默认从最后一次爬塔层数开始」）。
     """
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
+    # 当前有未结算会话（含待选战利品）→ 先让手动流程收尾，避免叠加刷层
+    st = ts.STORE.get(str(qq))
+    if st is not None:
+        if st.get("pending_loot"):
+            return "有一层战利品待选（回 1/2/3），先选完再自动爬。"
+        return "当前还有未结算的爬塔进度，请先「塔结算」收手，再自动爬塔。"
+    mode = str(mode or "").strip()
+    use_buff = mode in ("random", "是", "yes", "y", "1")
+    if mode not in ("random", "none", "是", "否", "yes", "no", "y", "n", "1", "2"):
+        # 空参（爬塔回执上的【自动爬塔】按钮 / 误写）→ 回确认提示，别只丢一句用法。
+        return auto_tower_prompt(p)
+    no_buff_bonus = AUTO_TOWER_NO_BUFF_CHEST_BONUS if not use_buff else 0.0
+
+    # 默认从上次止步层的下一层开始（用户要求取代电梯）
     cp = max(0, int(p.get("tower_checkpoint", 0)))
-    if cp <= 1:
-        return ("🛗 还没有可直达的层数——先「爬塔」打到第 2 层及以上，"
-                "失败或收手后就能坐电梯了。")
-    if ts.STORE.get(str(qq)) is not None:
-        return "当前还有未结算的爬塔进度，请先「爬塔」继续或「塔结算」收手，再坐电梯。"
-    cost = td.elevator_cost(cp)
-    gold = int(p.get("gold", 0))
-    if gold < cost:
-        return f"🛗 直达第 {cp} 层需 {cost} 金币，你还差 {cost - gold} 金币。"
-    p["gold"] = gold - cost
-    paid = max(0, int(p.get("tower_paid_floor", 0)))
-    # 从 cp-1 起（下一层就是止步层 cp）；满状态：temp_* 全空，增益清空。
-    st = ts.STORE.begin(qq, floor=cp - 1)
+    start = cp + 1
+    header = _expired_settle_line(p, qq)
+    st = ts.STORE.begin(qq, floor=cp)
+    rng = ts.STORE.rng(qq)
+    _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+    mode_tag = "随机加成" if use_buff else "无加成·掉落提升"
+
+    cleared = 0
+    chests = 0
+    weapons: list[str] = []
+    last_floor = cp
+    hit_cap = False
+    for _ in range(AUTO_TOWER_MAX_FLOORS):
+        r = core.tower_floor(p, st, rng,
+                             temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st),
+                             puppet=_pu, formation_n=_pu_n,
+                             puppet_flame_mult=_pu_fm)
+        await _finalize_battle(
+            p, qq, r, "爬塔", opponent=f"第{r['floor']}层 {r['name']}",
+            extra={"floor": int(r["floor"]), "kind_tag": str(r.get("kind") or "")},
+            puppet=_pu,
+        )
+        st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
+        last_floor = int(r["floor"])
+        if not r["win"]:
+            break
+        st["floor"] = last_floor
+        cleared += 1
+        # 宝箱（无加成模式掉率提升）
+        chest = core.tower_open_chest(p, st, rng, floor=last_floor,
+                                      chest_bonus=no_buff_bonus)
+        if chest:
+            st.setdefault("chests", []).extend(
+                [{"floor": last_floor, **c} for c in chest])
+            chests += len(chest)
+            weapons += [c["name"] for c in chest if c["type"] == "weapon"]
+        # 战利品：随机模式自动选一个；无加成模式整段跳过
+        if use_buff:
+            choices = td.roll_loot_choices(rng)
+            if choices:
+                pick_idx = int(rng() * len(choices)) % len(choices)
+                loot = choices[pick_idx]
+                _apply_loot(p, st, loot)
+                st["loot_taken"].append(loot["key"])
+    else:
+        hit_cap = True  # 打满上限仍未力竭
+
+    # 收手结算（自动模式无论力竭/到顶都结算一次，避免层数与奖励白丢）
+    res = core.tower_settle(p, st)
+    ts.STORE.clear(qq)
     await store.put_player(p)
-    reuse = "；第 %d 层及以下的奖励已领过，重打不再发" % paid if paid >= cp - 1 else ""
-    return (f"🛗 花 {cost} 金币直达第 {cp} 层！满状态挑战"
-            f"（气血/斗气全满，无上轮增益）{reuse}。\n"
-            f"　发「爬塔」迎战第 {cp} 层。")
+
+    lines = []
+    if header:
+        lines.append(header.rstrip("\n"))
+    lines.append(f"🤖 自动爬塔（{mode_tag}）结束：从第 {start} 层出发，"
+                 + ("连闯 %d 层" % cleared if cleared else "未过关"))
+    if hit_cap:
+        lines.append(f"　已达单次上限 {AUTO_TOWER_MAX_FLOORS} 层，自动收手结算。")
+    else:
+        lines.append(txt.tower_down(res["floors"]))
+    lines.append(f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
+                 + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
+    if chests:
+        lines.append(f"　🎁 宝箱 {chests} 次"
+                     + ("，开出神兵：" + "、".join(weapons) if weapons else ""))
+    if not use_buff:
+        lines.append("　（无加成硬闯，宝箱掉落已提高）")
+    lines.append("　发「自动爬塔」再冲一轮；「斗技/人物」看当前状态。")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

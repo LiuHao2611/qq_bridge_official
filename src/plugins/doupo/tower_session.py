@@ -37,7 +37,8 @@ DEFAULT_LOOT_TTL = 60.0
 def new_state(qq, seed=None, floor: int = 0) -> dict:
     """开一轮新塔的初始会话状态。
 
-    :param floor: 起始**已通过层数**（电梯直达时 = checkpoint-1，满状态从该层打）。
+    :param floor: 起始**已通过层数**（「爬塔」「自动爬塔」传 tower_checkpoint，
+                  即从上次止步层的下一层开打，满状态；2026-11-25 电梯已删除）。
                   默认 0 = 从第 1 层重开。只影响层数起点，临时增益一律清空。
     """
     s = seed

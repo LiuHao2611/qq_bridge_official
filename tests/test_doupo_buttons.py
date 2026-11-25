@@ -43,6 +43,10 @@ _DISPATCH_PY = _DOUPO / "button_dispatch.py"
 
 _MENU_CMDS = frozenset({"斗破菜单", "斗破口令", "修仙菜单", "帮助"})
 
+#: 不在 CARD_ACTIONS 表里、由 buttons_for_card 特判返回的「提示卡」。
+#: 目前只有自动爬塔确认卡（两个 custom 带参按钮），必须真能拿到按钮才算合格。
+_SPECIAL_CARD_KEYS = frozenset({"auto_tower_prompt"})
+
 
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -149,7 +153,8 @@ def test_baseline_sane():
     2026-11-16 新增「学斗技」口令（入道只领悟 1 门、逐一学习），基准由 29→30；
     同日新增无惩罚切磋（切磋/应战/拒战），基准 30→33。
     2026-11-17 新增爬塔副本（爬塔/塔层/塔结算）与装备，基准 33→37。
-    2026-11-17 新增电梯 / 周副本 / 周本状态，基准 37→40。
+    2026-11-17 新增电梯 / 周副本 / 周本状态，基准 37→40。✦2026-11-25 电梯整条换成
+    「自动爬塔」（用户「去掉电梯」），条数一换一，仍 40。
     2026-11-17 新增战斗回看 / 战斗评价，基准 40→42。
     2026-11-19 新增「收服」主动收服入口（三层投放补齐），基准 51→52。
     数量断言跟随 MENU_GROUPS 独立 AST，避免功能新增后基准漏同步导致假红。
@@ -163,8 +168,8 @@ def test_baseline_sane():
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "收服", "养火", "宝库", "买", "炼药", "炼制", "服丹",
                  "背包", "任务", "接任务", "交任务", "领主线", "排行", "抢",
-                 "切磋", "应战", "拒战", "爬塔", "塔层", "塔结算", "装备", "送",
-                 "电梯", "周副本", "周本状态", "战斗回看", "战斗评价",
+                 "切磋", "应战", "拒战", "爬塔", "自动爬塔", "塔层", "塔结算", "装备", "送",
+                 "周副本", "周本状态", "战斗回看", "战斗评价",
                  "锁定", "解锁", "入塔", "出塔", "火能", "换卡", "主题"):
         assert must in real, "基准缺关键口令：%s" % must
     # 实现派生必须与独立基准逐字一致（漏一条都 FAIL）
@@ -237,7 +242,7 @@ def test_each_card_buttons_are_relevant_family():
         "task_submit": {"任务", "领主线", "战斗"},
         "battle_text": {"战斗回看", "战斗", "任务"},
         "review_text": {"战斗评价", "战斗", "任务"},
-        "tower_text": {"塔层", "塔结算", "战斗"},
+        "tower_text": {"塔层", "塔结算", "自动爬塔", "战斗"},
         "weekly_text": {"周本状态", "战斗", "人物"},
         "cult_text": {"战斗", "突破", "人物"},
         "equip_text": {"强化", "人物", "战斗"},
@@ -277,15 +282,22 @@ def test_every_button_is_dispatchable():
             # 2026-11-18 起傀儡遗迹用它把战况并进卡，而不是另发一条文字。
             assert shape in ("qq", "qq_str", "gid", "enter", "ruin"), \
                 "按钮 %r 参数形态非法：%s" % (c, shape)
-            # card_key 非空时必须真的是本模块认知的卡片
+            # card_key 非空时必须真的是本模块认知的卡片。
+            # 例外：特判卡（如 auto_tower_prompt 在 buttons_for_card 里直接返回
+            # 两个 custom 带参按钮）不在 CARD_ACTIONS 表里，但必须有按钮，否则
+            # 等于发了一条没有按钮的提示。
             if card_key:
-                assert card_key in db.CARD_ACTIONS, \
-                    "按钮 %r 的出卡 key %r 不在 CARD_ACTIONS" % (c, card_key)
+                if card_key in _SPECIAL_CARD_KEYS:
+                    assert db.buttons_for_card(card_key), \
+                        "特判卡 %r 没有任何按钮（提示卡会变成死胡同）" % card_key
+                else:
+                    assert card_key in db.CARD_ACTIONS, \
+                        "按钮 %r 的出卡 key %r 不在 CARD_ACTIONS" % (c, card_key)
     # plan 不得混入非按钮口令（防止反向污染）。
     # 例外：custom 带参按钮的 head（如「炼制 破厄丹」拆出「炼制」）不在静态
     # CARD_ACTIONS 里——它是查看丹药卡的动态按钮，走 dispatch_custom 带参分发。
     # 白名单只收这类「带参动作的 head」，且必须真在 _item_detail_buttons 用到。
-    _CUSTOM_ARG_HEADS = {"炼制"}
+    _CUSTOM_ARG_HEADS = {"炼制", "自动爬塔"}
     extra = set(plan) - set(db.ALL_BUTTON_CMDS) - _CUSTOM_ARG_HEADS
     assert not extra, "dispatch plan 混入非按钮口令：%s" % sorted(extra)
     for head in _CUSTOM_ARG_HEADS:
@@ -309,6 +321,10 @@ def test_card_renderer_shapes_match_dispatch():
     dispatch_src = _DISPATCH_PY.read_text(encoding="utf-8")
     bad = []
     for key in sorted({v[2] for v in _baseline_dispatch_plan().values() if v[2]}):
+        # 提示型 card_key（如 auto_tower_prompt）本来就不出图，只挂 custom 按钮，
+        # 不参与 render_* 形状校验；但仍必须有按钮（由 test_auto_tower_prompt_buttons 守）。
+        if key in _SPECIAL_CARD_KEYS:
+            continue
         args = shapes.get(key)
         if args is None:
             bad.append("%s: 没有 render_%s" % (key, key))
@@ -452,7 +468,7 @@ def test_reply_card_key_for_inbound_mapping():
         "交任务": "task_submit", "接任务": "task_submit",
         "战斗评价": "battle_text", "战斗回看": "review_text",
         "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
-        "电梯": "tower_text", "周副本": "weekly_text", "周本状态": "weekly_text",
+        "周副本": "weekly_text", "周本状态": "weekly_text",
         "修炼": "cult_text", "突破": "cult_text",
         "上阵": "skill_text", "学斗技": "skill_text",
         "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
@@ -520,6 +536,20 @@ def test_item_detail_dynamic_buttons():
         assert got == list(db.CARD_ACTIONS["item"]), \
             "%s 应回落通用按钮：%s" % (k, got)
         assert not any(c.startswith(db.DOUPO_CUSTOM_PREFIX) for c in got)
+
+
+def test_auto_tower_prompt_buttons():
+    """自动爬塔提示卡：两个 custom 带参按钮（随机加成=是 / 无加成=否），点击即开打。"""
+    btns = db.buttons_for_card("auto_tower_prompt")
+    assert len(btns) == 2, "自动爬塔提示必须有 2 个按钮：%s" % [b.label for b in btns]
+    cmds = [b.cmd for b in btns]
+    assert cmds == [db.DOUPO_CUSTOM_PREFIX + "自动爬塔 是",
+                    db.DOUPO_CUSTOM_PREFIX + "自动爬塔 否"], cmds
+    labels = [b.label for b in btns]
+    assert "随机加成" in labels[0] and "无加成" in labels[1], labels
+    assert all(0 < len(x) <= 10 for x in labels), "按钮文字过长会被截断：%s" % labels
+    # 裸 card_key 不能误挂（没这一步就是通用卡按钮，点了不会开打）
+    assert db.buttons_for_card("auto_tower_prompt") != db.buttons_for_card("tower_text")
 
 
 def test_bridge_derives_card_key_from_inbound():
@@ -621,6 +651,18 @@ def test_source_contract_finish_card_used():
     assert 'image_seg(event, gif' in src, "入道动图出图方式被误改"
 
 
+def test_source_contract_button_text_fallback_keeps_keyboard():
+    """按钮回执的纯文本兜底也必须挂键盘（否则点进去是没有按钮的死提示）。
+
+    2026-11-25 实测缺口：dispatch_button 文本分支只发 ``Outgoing(text=msg)``，
+    提示型 card_key（auto_tower_prompt 没有 render_*）会退化成「有字没按钮」。
+    """
+    src = (_DISPATCH_PY).read_text(encoding="utf-8")
+    assert "keyboard_cmd=_kcmd" in src, "文本兜底没把键盘一起发（提示卡会变死胡同）"
+    assert '_kcmd = ("doupo:" + card_key) if card_key else ""' in src, \
+        "keyboard 口令未按 doupo:<card_key> 组装"
+
+
 def test_source_contract_interaction_routes_doupo():
     """qq_interaction 必须先识别斗破口令再走 game_tools（否则点击无反应）。"""
     src = (_CH / "qq_interaction.py").read_text(encoding="utf-8")
@@ -653,9 +695,11 @@ if __name__ == "__main__":
         test_reply_card_key_for_inbound_mapping,
         test_label_overlay_continue_battle,
         test_item_detail_dynamic_buttons,
+        test_auto_tower_prompt_buttons,
         test_bridge_derives_card_key_from_inbound,
         test_injection_guards,
         test_source_contract_finish_card_used,
+        test_source_contract_button_text_fallback_keeps_keyboard,
         test_source_contract_interaction_routes_doupo,
     ]
     passed = failed = 0

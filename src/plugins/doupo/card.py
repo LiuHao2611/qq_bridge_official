@@ -504,9 +504,9 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
     #: 合并卡模板把 meta 末尾的 ``LvN`` 换成 5 段等级条（亮 N 段 + 暗 5-N 段）。
     #: 结构化字段给模板和测试用；纯文本兜底仍保留 ``LvN`` 字样。
     return {
-        # 全局序号（1-based，按卡片显示顺序 = core.skill_pool_sorted）。
-        # 玩家可直接发「上阵 1 3 5 7」按序号上阵，无需手打技名。
-        # 合并卡里他宗技不在本宗池、无序号，传 None 即不画圆。
+        # 全局序号（1-based）= core.learned_no_map 的编号（**只含已领悟技**，
+        # 「斗技」卡自己的连续顺序）。玩家发「上阵 1 3 5 7」按此号上阵，
+        # 序号不再挂在宗门卡上（2026-11-25 用户：宗门卡序号导致上阵错位）。
         "no": no,
         "name": name,
         "badge": e["tier"][0],
@@ -563,13 +563,14 @@ def build_roster_data(p: dict) -> dict:
     ``rows`` 仍保留扁平结构，供纯文本兜底与既有测试消费。
     """
     sk = p.get("skills") or {}
-    # 序号必须与「上阵 1 3 5」的数字口径严格同源——统一走 core.skill_pool_sorted
-    # （三阶稳定排序），不再在此另写一份 sorted，避免卡片序号与上阵序号错位。
+    # 2026-11-25 用户：去掉宗门斗技卡序号——本宗全池含未解锁技，序号跳号会让
+    # 玩家照着上阵时错位。序号改由「斗技」（我的斗技）卡给出（learned_no_map，
+    # 只含已领悟技、连续无空洞）。本卡不再传 no，_roster_row 收到 None 不画序号圆。
     pool_sorted = core.skill_pool_sorted(p)
 
     rows: list[dict] = []
     by_tier: dict[str, list[dict]] = {}
-    for no, e in enumerate(pool_sorted, 1):
+    for e in pool_sorted:
         unlocked = bool(e.get("unlocked"))
         equipped = bool(e.get("equipped"))
         # 两列版的状态 pill 只有 ~52px 宽，「未解锁 lv50」会撑爆块宽，
@@ -580,7 +581,7 @@ def build_roster_data(p: dict) -> dict:
             state, state_kind = "可学", "learn"
         else:
             state, state_kind = "未解锁", "lock"
-        row = _roster_row(e, no, sk, state, state_kind, show_lv=False)
+        row = _roster_row(e, None, sk, state, state_kind, show_lv=False)
         rows.append(row)
         by_tier.setdefault(e["tier"], []).append(row)
 
@@ -606,12 +607,12 @@ def build_roster_data(p: dict) -> dict:
                      f"上阵 {on}/{cfg.LOADOUT_SIZE}"),
         "groups": groups,
         "rows": rows,
-        "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看招式来历",
+        "tip": "发「斗技」看我的斗技与对应的上阵序号 ｜ 斗技详情 <技名> 看招式来历",
     }
 
 
 async def render_roster(p: dict) -> bytes | None:
-    """「宗门斗技」出图：本宗全部斗技名录卡（按阶位分组 + 上阵序号）。"""
+    """「宗门斗技」出图：本宗全部斗技名录卡（按阶位分组；2026-11-25 起不再画上阵序号）。"""
     return await _render_list("doupo_roster", build_roster_data(p), "斗破本宗斗技", qq=p.get("qq"))
 
 
@@ -623,11 +624,12 @@ def build_learned_data(p: dict) -> dict:
     要发两次口令。故本卡两个区块：
       ① 已上阵（state=上阵/on）：四槽真实出战技，含等级与完整数值；
       ② 已领悟（state=已领悟/learn）：其余已学技，按阶位分组，含转宗保留的他宗技。
-    「宗门斗技」仍单独一张（本宗池 + 上阵序号），两者职责不重叠。
+    「宗门斗技」仍单独一张（只列本宗池，**不带上阵序号**），两者职责不重叠。
     """
     sk = p.get("skills") or {}
-    # 本宗池序号（「上阵 1 3 5」的唯一编号源）；他宗技不在池里 → None，不画圆。
-    no_by_name = {name: no for no, name in core.roster_no_map(p).items()}
+    # 2026-11-25 起「上阵 N」序号 = 本卡连续序号（只含已领悟技，无跳号）。
+    # 与 cmd_loadout 共用 core.learned_no_map 唯一真值源，改动任一侧守门会抓。
+    no_by_name = {name: no for no, name in core.learned_no_map(p).items()}
     # 四槽 entry 不带 unlocked 字段（loadout_entries 只保证是能上阵的技）；
     # 不补的话 _roster_row 会误判"未解锁"，副行印出「Lv1 lv1 解锁」重复信息。
     lo = [dict(e, unlocked=True) for e in core.loadout_entries(p)]
@@ -684,7 +686,7 @@ def build_learned_data(p: dict) -> dict:
                      f"（本宗 {n_ben} / 他宗 {n_other} / 通用 {n_common}）"),
         "groups": groups,
         "rows": rows,
-        "tip": "上阵编号见「宗门斗技」｜上阵 <技名>｜斗技详情 <技名> 看招式来历",
+        "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看招式来历",
     }
 
 

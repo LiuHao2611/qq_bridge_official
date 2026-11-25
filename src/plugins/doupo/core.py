@@ -1362,11 +1362,49 @@ def roster_no_map(p) -> dict[int, str]:
     """名录卡序号 → 技名（1-based，与卡片显示顺序严格同源）。
 
     card.build_roster_data 的 ``no`` 与 doupo_roster 卡上的序号圆，都来自
-    skill_pool_sorted 的同一顺序；这里把该顺序编成 {1: name, 2: name, ...}，
-    供「上阵 1 3 5 7」按号选技。序号含未解锁项（卡片也画未解锁），
-    上阵解锁校验由 cmd_loadout 照旧执行。
+    skill_pool_sorted 的同一顺序；这里把该顺序编成 {1: name, 2: name, ...}。
+    ⚠️ 2026-11-25 起「上阵 N」**不再用这张表**——宗门池含未解锁技，序号会
+    跳号，玩家照着上阵必然错位。上阵改用 :func:`learned_no_map`（我的斗技卡
+    连续序号）。本函数保留仅为「宗门斗技」卡的展示/历史测试兼容。
     """
     return {i: e["name"] for i, e in enumerate(skill_pool_sorted(p), 1)}
+
+
+def learned_no_map(p) -> dict[int, str]:
+    """「我的斗技」卡连续序号 → 技名（2026-11-25 上阵序号唯一真值源）。
+
+    用户根因：学了斗技却无法按序号上阵——旧口径 ``roster_no_map`` 用本宗
+    **全池（含未解锁）**编号，序号跳号；玩家在宗门卡记的号，和真正能上阵的
+    技对不上。改为只给「已领悟/可上阵」的技编号，且与 card.build_learned_data
+    的显示顺序严格一致：① 已上阵四槽（出战顺序）在前；② 其余已领悟按三阶
+    稳定排序。序号连续无空洞，玩家「上阵 N」直达。
+
+    这是 ``build_learned_data`` 与 ``cmd_loadout`` 的共享真值源，任何一侧
+    不得另写一份 sorted——否则卡片序号与上阵序号再次错位（守门会抓）。
+    """
+    lo = loadout_entries(p)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for e in lo:  # ① 已上阵四槽优先，顺序即出战顺序
+        n = e["name"]
+        if n not in seen:
+            seen.add(n)
+            ordered.append(n)
+    for e in learned_skill_pool(p):  # ② 其余已领悟，三阶稳定排序
+        n = e["name"]
+        if n not in seen:
+            seen.add(n)
+            ordered.append(n)
+    return {i: n for i, n in enumerate(ordered, 1)}
+
+
+def learned_no_of(p, name: str) -> int | None:
+    """技名 → 「我的斗技」卡序号（学习成功后提示序号用；找不到返 None）。"""
+    target = str(name or "").strip()
+    for no, n in learned_no_map(p).items():
+        if n == target:
+            return no
+    return None
 
 
 def loadout_entries(p) -> list[dict]:
@@ -1990,19 +2028,24 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
     }
 
 
-def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None) -> list[dict]:
+def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None,
+                     chest_bonus: float = 0.0) -> list[dict]:
     """本层开宝箱：判定宝箱 → 判定武器 → 入背包/持有表。返回掉落记录。
 
     ``floor`` 必须是**刚打完的这一层**。不能默认读 ``st['floor']``：
     胜利后调用方已把通过层数推进到本层，若再读 st 会按下一层判定（曾经错位一层，
     导致第 10 层 Boss 宝箱按第 11 层算、武器解锁层提前）。
+
+    ``chest_bonus``（2026-11-25 自动爬塔）：宝箱率的额外倍率增量，如 0.5 表示
+    宝箱率 ×1.5。用于「无加成自动爬塔」——不吃三选一加成=难度更高，用更高掉落
+    补偿。默认 0 时行为与改造前逐字节一致。
     """
     floor = int(floor if floor is not None else st.get("floor", 0))
-    # 电梯重打旧层不再出宝箱（2026-11-17 用户「不重复获得之前挑战过层数的奖励」）：
-    # 已结算水位线 <= floor 的层，其宝箱（材料/武器）在首轮已经领过。
+    # 已结算水位线 <= floor 的层，其宝箱在首轮已经领过（重打旧层不重复给）。
     if floor <= max(0, int(p.get("tower_paid_floor", 0))):
         return []
-    if rng() >= td.chest_rate(floor):
+    rate = min(1.0, float(td.chest_rate(floor)) * (1.0 + max(0.0, float(chest_bonus))))
+    if rng() >= rate:
         return []
     out = []
     owned = set(owned_weapons(p))

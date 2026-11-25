@@ -472,38 +472,46 @@ def test_roster_data_is_json_friendly():
 
 # ---------------------------------------------------------------------------
 def test_roster_numbers_are_continuous_and_same_source():
-    """名录每行有连续全局序号 1..N，且与 core.roster_no_map 严格同源。"""
+    """2026-11-25：宗门卡**不再有序号**；连续序号改在「我的斗技」卡。
+
+    旧口径（本宗全池含未解锁）序号跳号，玩家照着上阵必错位。新口径序号只在
+    build_learned_data，且与 core.learned_no_map 严格同源。
+    """
     p = _p()
-    data = card.build_roster_data(p)
-    nos = [r["no"] for r in data["rows"]]
-    assert nos == list(range(1, len(data["rows"]) + 1)), "序号不连续：%s" % nos
-    # 分组内的序号也必须与扁平 rows 一致（卡片按分组画，序号不能重编）
-    grouped = [r["no"] for g in data["groups"] for r in g["rows"]]
+    roster = card.build_roster_data(p)
+    # 宗门卡所有行 no=None（_roster_row 收到 None 不画序号圆）
+    assert all(r["no"] is None for r in roster["rows"]), \
+        "宗门卡不该再画上阵序号：%s" % [r["no"] for r in roster["rows"]]
+    # 「我的斗技」卡序号连续 1..N
+    learned = card.build_learned_data(p)
+    nos = [r["no"] for r in learned["rows"]]
+    assert nos == list(range(1, len(learned["rows"]) + 1)), "我的斗技序号不连续：%s" % nos
+    grouped = [r["no"] for g in learned["groups"] for r in g["rows"]]
     assert grouped == nos, "分组序号与扁平序号错位：%s vs %s" % (grouped, nos)
-    # 与 core 的序号→技名映射同源
-    no_map = core.roster_no_map(p)
-    assert all(no_map[r["no"]] == r["name"] for r in data["rows"]), "序号映射与卡片错位"
+    no_map = core.learned_no_map(p)
+    assert all(no_map[r["no"]] == r["name"] for r in learned["rows"]), "序号映射与卡片错位"
 
 
 def test_roster_number_equals_sorted_pool():
-    """序号 = core.skill_pool_sorted 顺序（上阵序号/卡片序号唯一真源）。"""
+    """新口径：序号 = learned_no_map（只含已领悟技），不再是 skill_pool_sorted。"""
     p = _p()
-    rows = card.build_roster_data(p)["rows"]
-    sorted_pool = core.skill_pool_sorted(p)
-    assert len(rows) == len(sorted_pool)
-    for r, e in zip(rows, sorted_pool):
-        assert r["no"] == sorted_pool.index(e) + 1 and r["name"] == e["name"], (
-            "序号未跟随 skill_pool_sorted：%s" % r["name"])
+    rows = card.build_learned_data(p)["rows"]
+    no_map = core.learned_no_map(p)
+    assert len(rows) == len(no_map)
+    for r in rows:
+        assert no_map[r["no"]] == r["name"], (
+            "序号未跟随 learned_no_map：%s" % r["name"])
+    # 序号只含已领悟技：不在 no_map 里的本宗未领悟技不该出现在本卡
+    owned = set(core.equippable_names(p))
+    assert all(r["name"] in owned for r in rows), "我的斗技卡混入了未领悟技"
 
 
 def test_loadout_by_roster_number():
-    """用户诉求核心：照名录卡序号发「上阵 N ...」能正确上阵对应**已领悟**技。"""
+    """用户诉求核心：照「斗技」卡序号发「上阵 N ...」能正确上阵对应已领悟技。"""
     from doupo import commands
     p = _p()
-    no_map = core.roster_no_map(p)
-    # 只有已领悟的技能真正上阵（新档只领悟入门技）；用它的序号验证映射。
-    owned = core.equippable_names(p)
-    learned_nos = [n for n, name in no_map.items() if name in owned][:cfg.LOADOUT_SIZE]
+    no_map = core.learned_no_map(p)  # 2026-11-25 新口径：只含已领悟技
+    learned_nos = list(no_map)[:cfg.LOADOUT_SIZE]
     assert learned_nos, "测试前提：至少有 1 门已领悟技"
     args = " ".join(str(n) for n in learned_nos)
     store = _MemStore(p)
@@ -514,17 +522,34 @@ def test_loadout_by_roster_number():
     assert "已上阵" in out, out[:120]
 
 
-def test_loadout_number_unlearned_rejected_explicitly():
-    """未领悟技的序号必须明确提示先学，不能静默换成默认四槽。"""
+def test_learned_no_map_excludes_unlearned():
+    """2026-11-25 根因守门：上阵序号只给已领悟技，绝不含未领悟/未解锁技。
+
+    旧口径 roster_no_map 用本宗全池（含未解锁）编号 → 序号跳号 → 玩家照着
+    上阵被拒。新口径 learned_no_map 必须只含已领悟技、连续无空洞。
+    """
+    p = _p()
+    learned = set(core.equippable_names(p))
+    no_map = core.learned_no_map(p)
+    assert list(no_map) == list(range(1, len(no_map) + 1)), "序号不连续"
+    assert all(nm in learned for nm in no_map.values()), \
+        "learned_no_map 混入了未领悟技：%s" % [n for n in no_map.values() if n not in learned]
+    # 对比：旧口径 roster_no_map 确实含未领悟技（证明这次修复有实际意义）
+    old = core.roster_no_map(p)
+    assert any(nm not in learned for nm in old.values()), \
+        "夹具应至少有 1 门未领悟技，否则测不出新旧口径差异"
+
+
+def test_loadout_number_unlearned_name_rejected_explicitly():
+    """新口径下序号全是已领悟技；只有技名点名未领悟技时才提示先学。"""
     from doupo import commands
     p = _p()
-    no_map = core.roster_no_map(p)
     owned = core.equippable_names(p)
-    unlearned_no = next((n for n, name in no_map.items() if name not in owned), None)
-    assert unlearned_no, "测试前提：至少有 1 门未领悟技"
+    unlearned = next((e["name"] for e in core.skill_pool(p) if e["name"] not in owned), None)
+    assert unlearned, "测试前提：至少有 1 门未领悟技"
     store = _MemStore(p)
     before = list(store.p.get("loadout") or [])
-    out = asyncio.run(commands.cmd_loadout(store, "10001", str(unlearned_no)))
+    out = asyncio.run(commands.cmd_loadout(store, "10001", unlearned))
     assert "还没领悟" in out, out[:160]
     assert list(store.p.get("loadout") or []) == before, "被拒却改了上阵"
     assert "学斗技" in out or "学习" in out, "没给出下一步指引：%s" % out[:160]
@@ -538,9 +563,8 @@ def test_loadout_accepts_jin_prefix_number():
     """
     from doupo import commands
     p = _p()
-    no_map = core.roster_no_map(p)
-    owned = core.equippable_names(p)
-    nums = [n for n, name in no_map.items() if name in owned][:cfg.LOADOUT_SIZE]
+    no_map = core.learned_no_map(p)
+    nums = list(no_map)[:cfg.LOADOUT_SIZE]
     assert len(nums) >= 1, "测试前提：至少 1 门已领悟技"
     want = [no_map[n] for n in nums]
     variants = [
@@ -569,10 +593,10 @@ def test_no_stale_jin_hint_in_user_facing_text():
 
 
 def test_loadout_number_out_of_range_rejected():
-    """越界序号（卡片上不存在）不能上阵，且给出明确提示。"""
+    """越界序号（我的斗技卡上不存在）不能上阵，且给出明确提示。"""
     from doupo import commands
     p = _p()
-    max_no = len(core.skill_pool_sorted(p))
+    max_no = len(core.learned_no_map(p))
     before = [e["name"] for e in core.loadout_entries(p)]
     out = asyncio.run(commands.cmd_loadout(_MemStore(p), "10001", str(max_no + 99)))
     after = [e["name"] for e in core.loadout_entries(p)]
@@ -583,7 +607,7 @@ def test_loadout_number_out_of_range_rejected():
 def test_roster_no_guard_detects_regression():
     """prove-it：反例（无 no / 序号从 0 起 / 序号与映射错位）必须被判红。"""
     p = _p()
-    data = card.build_roster_data(p)
+    data = card.build_learned_data(p)  # 2026-11-25 序号改在「我的斗技」卡
     nos = [r["no"] for r in data["rows"]]
     # A. 去掉 no 字段的坏数据必须被识别
     bad_rows = [{k: v for k, v in r.items() if k != "no"} for r in data["rows"]]
@@ -591,7 +615,7 @@ def test_roster_no_guard_detects_regression():
     # B. 从 0 起的序号必须被识别
     assert nos[0] == 1 and 0 not in nos, "检测失效：0 起编号没识别"
     # C. 把映射故意错位一格，判据必须报错（否则说明校验是空转）
-    no_map = core.roster_no_map(p)
+    no_map = core.learned_no_map(p)
     assert all(no_map[r["no"]] == r["name"] for r in data["rows"]), "正常映射应通过"
     shifted = {k: no_map.get(k + 1, "") for k in no_map}  # 错位一格
     caught = any(shifted.get(r["no"]) != r["name"] for r in data["rows"])
@@ -618,10 +642,13 @@ def test_loadout_text_splits_learned_and_todo():
     assert "待领悟" in out, out[:200]
     ready_line = next(ln for ln in out.splitlines() if ln.startswith("可上阵（已领悟）"))
     todo_line = next(ln for ln in out.splitlines() if ln.startswith("待领悟"))
-    for i, e in enumerate(pool, 1):
-        if e["name"] in learned:
-            assert f"{i}.{e['name']}" in ready_line, "已领悟技丢了：%s" % e["name"]
-        else:
+    # 2026-11-25 新口径：已领悟技的序号来自 learned_no_map（连续、只含已领悟），
+    # 不再是 enumerate(本宗全池)。未领悟技连序号都不给，只列名字。
+    no_map = core.learned_no_map(p)
+    for no, nm in no_map.items():
+        assert f"{no}.{nm}" in ready_line, "已领悟技丢了：%s" % nm
+    for e in pool:
+        if e["name"] not in learned:
             assert e["name"] not in ready_line, "未领悟技混进可上阵：%s" % e["name"]
             assert e["name"] in todo_line, "未领悟技没进待领悟：%s" % e["name"]
     # 旧文案（无分组的「可上阵：」）必须彻底消失，避免又退回误导版
