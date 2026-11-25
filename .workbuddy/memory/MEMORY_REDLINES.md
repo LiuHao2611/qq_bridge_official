@@ -99,3 +99,10 @@
 ⚠️ **纯按钮回复不能误关**：无文本、无图的纯按钮消息仍须发独立按钮段（`text_has_kb=False` 分支），否则按钮直接消失——这比重复更糟。
 ⚠️ **官通打点在 `logs/service.err.log`，不在 `service.log`**（`service.log` 只有 `official_event_arrived` 那类 print）。查发送链路一律 `grep official_sent service.err.log`；同一次回复两条就是 `seq=1 text_card` + `seq=2 keyboard` 的指纹。
 ⚠️ **`at_user` 分支（群内 @人）不挂键盘**（mention 段与 markdown/keyboard 混段未实测），那里仍会跟一条独立按钮段——这是**必要**的两条，不是重复，别当 bug 修。
+
+## 19. 战斗播报：去章号 + 13 章台词 + NPC 插话（2026-11-25，用户「去掉第几章节的声明，然后继续把没做完的做完」）
+🚨 **战报首行不许出现章号**：`chapter_line` 只渲染 `📍 区域　妖物 lvX`；`ch` 形参**保留但绝不参与渲染**。任务面板（📜 任务）不在范围、仍写「第 N 章」，别误删。守门 `test_battle_head_has_no_chapter_number`（含源码 AST 变异反证）。
+🚨 **13 章逐字台词全覆盖，出处只留数据表**：`CHAPTER_QUOTE` 13 章齐，出处在第二列、绝不进玩家可见文案。新句必须 `tmp/novel/q.py` 逐字反查命中，不许硬截叙述凑数。⚠️ `quote_line` 的 seed 轮换回落旁白是**原设计**（不是没做完），`special=True`（苦战/败局）才必出台词。
+🚨 **NPC 插话三件事**：`NPC_SPEAKERS`＝角色出处台账（说话人+逐字台词+出处三元组，出处不渲染），`CHAPTER_NPC`＝章节→说话人白名单（不许跨章借角色），只在 `war_tier ∈ {lose,narrow,crush}` 于 💥 后插一条 `🗣 说话人：台词`，顺风局静默。第 12 章**故意留空**——蝎龙族那句已作点睛，加回去会连出两遍（守门 `test_npc_only_in_hard_fights_and_no_duplicate`）。
+⚠️ **三个池禁止重复**：取景 `CHAPTER_SCENE` / 点睛 `CHAPTER_QUOTE` / 插话 `NPC_SPEAKERS` 各司其职，同一句话不得在两个池出现。
+⚠️ **deploy drift 检的是 `src/**/*.py` 全量**：测试文件也在这个树里，改了 `src/plugins/doupo/test_*.py` 也必须一起 push，否则 drift 报「旧版 1 个」。
