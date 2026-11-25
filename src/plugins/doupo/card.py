@@ -1071,15 +1071,19 @@ def build_battle_data(last_battle: dict) -> dict:
     return br.build_data(last_battle or {})
 
 
-async def render_battle(last_battle: dict) -> list[bytes]:
+async def render_battle(last_battle: dict, qq: str | None = None) -> list[bytes]:
     """「战斗回看」出图：返回**每页** PNG（短战报就一页，长战报按回合分页）。
 
     分页口径见 ``pic.templates.doupo_battle.split_pages``：切点只在回合边界，
     首页保留结算区，续页只留胜负徽标 + 逐招明细（顶部印「第 x/N 页 · 回合 a-b」）。
     出图失败返回 ``[]``，调用方回纯文本兜底（完整逐招不丢）。
+
+    2026-11-25 主题修复：``qq`` 必须透传给 ``_render_pages``（否则个人主题
+    口令对战斗回看卡无效——只跟随全局默认），由 ``tools/check_card_theme.py``
+    静态闸门守。
     """
     return await _render_pages("doupo_battle", build_battle_data(last_battle),
-                              CARD_BATTLE_NAME)
+                              CARD_BATTLE_NAME, qq=qq)
 
 
 # ---------------------------------------------------------------------------
@@ -1159,11 +1163,16 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
     return out
 
 
-async def render_puppet(roster: list, elig: dict, p: dict | None = None) -> bytes | None:
-    """「傀儡」出图：名录卡；未拥有时渲染五道资格，绝不降级为纯文字空回。"""
+async def render_puppet(roster: list, elig: dict, p: dict | None = None,
+                        qq: str | None = None) -> bytes | None:
+    """「傀儡」出图：名录卡；未拥有时渲染五道资格，绝不降级为纯文字空回。
+
+    2026-11-25 主题修复：新增 ``qq`` 显式参数（兼容旧调用从 ``p`` 里取）。
+    按钮分发没有 ``p`` 时，靠 ``render_puppet_for(qq)`` 把 qq 传进来。
+    """
     return await _render_list("doupo_puppet",
                               build_puppet_data(roster, elig, p), CARD_PUPPET_NAME,
-                              qq=(p or {}).get("qq"))
+                              qq=qq or (p or {}).get("qq"))
 
 
 CARD_RUIN_NAME = "斗破傀儡遗迹"
@@ -1291,10 +1300,14 @@ def _fmt_hp(v) -> str:
         return "0"
 
 
-async def render_ruin(state: dict, day: str = "", report: dict | None = None) -> bytes | None:
-    """「傀儡遗迹」出图：战况 + 三段进度卡，与战报文字同源（同一 stage 水位线）。"""
+async def render_ruin(state: dict, day: str = "", report: dict | None = None,
+                      qq: str | None = None) -> bytes | None:
+    """「傀儡遗迹」出图：战况 + 三段进度卡，与战报文字同源（同一 stage 水位线）。
+
+    2026-11-25 主题修复：``qq`` 必须透传，否则个人主题口令对遗迹卡无效。
+    """
     return await _render_list("doupo_ruin", build_ruin_data(state, day, report),
-                              CARD_RUIN_NAME)
+                              CARD_RUIN_NAME, qq=qq)
 
 
 CARD_CRAFT_NAME = "斗破傀儡炼制"
@@ -1557,16 +1570,18 @@ async def render_item_detail(p: dict, name: str) -> bytes | None:
     return await _render_list("doupo_item", data, CARD_ITEM_NAME, qq=p.get("qq"))
 
 
-async def render_craft_for(report: dict | None) -> bytes | None:
+async def render_craft_for(report: dict | None, qq: str | None = None) -> bytes | None:
     """「炼制傀儡」出图入口：只吃命令层写下的 report，不另查库。
 
     返回 None 表示「这一炉没有成傀数据」——调用方此时应发文本回执，不要拿
     DEMO 占位卡糊过去（那会让玩家以为炼成了）。
+
+    2026-11-25 主题修复：``qq`` 必须透传，否则个人主题口令对成傀卡无效。
     """
     data = build_craft_data(report)
     if not data:
         return None
-    return await _render_list("doupo_craft", data, CARD_CRAFT_NAME)
+    return await _render_list("doupo_craft", data, CARD_CRAFT_NAME, qq=qq)
 
 
 # ---------------------------------------------------------------------------
@@ -1593,7 +1608,7 @@ async def render_puppet_for(qq: str, p: dict | None = None, pstore=None) -> byte
     store = _puppet_store(pstore)
     roster = await store.list_puppets(str(qq))
     elig = await store.eligibility(str(qq))
-    return await render_puppet(roster, elig, p)
+    return await render_puppet(roster, elig, p, qq=str(qq))
 
 
 async def render_ruin_for(qq: str, day: str = "", pstore=None,
@@ -1607,4 +1622,4 @@ async def render_ruin_for(qq: str, day: str = "", pstore=None,
         from datetime import date  # noqa: PLC0415
         day = date.today().isoformat()
     state = await store.ruin_state(str(qq), day)
-    return await render_ruin(state, day, report)
+    return await render_ruin(state, day, report, qq=str(qq))

@@ -328,7 +328,7 @@ async def _(event: Event):
     pages: list[bytes] = []
     if isinstance(last, dict) and last.get("log"):
         try:
-            pages = await card.render_battle(last)
+            pages = await card.render_battle(last, qq=uid)
         except Exception as e:  # noqa: BLE001 — 出图异常必须有文本兜底，不许静默
             logger.warning("战斗回看卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if pages:
@@ -1046,7 +1046,7 @@ async def _(event: Event):
         png = None
         if rep.get("ok"):
             try:
-                png = await card.render_craft_for(rep)
+                png = await card.render_craft_for(rep, qq=qq)
             except Exception as e:  # noqa: BLE001
                 logger.error("傀儡炼制卡渲染失败（拒绝静默降级）：%s: %s",
                              type(e).__name__, e)
