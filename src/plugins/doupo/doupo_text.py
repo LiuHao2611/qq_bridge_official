@@ -514,10 +514,6 @@ def mock_line(seed: int = 0) -> str:
     return "🥀 " + _pick(MOCK_LINES, seed)
 
 
-def rally_line(seed: int = 0) -> str:
-    return "✊ " + _pick(RALLY_LINES, seed)
-
-
 def quote_line(ch: int, seed: int = 0, special: bool = False) -> str:
     """点睛行：本章逐字台词，没核到就回落通用旁白。
 
@@ -530,7 +526,6 @@ def quote_line(ch: int, seed: int = 0, special: bool = False) -> str:
         text = str(pool[int(seed) % len(pool)][0])
         return f"　「{text}」"
     return "　" + _pick(QUOTE_FALLBACK, seed)
-
 
 
 def battle_hero_aid() -> str:
@@ -789,7 +784,7 @@ CALL_SAMPLES: tuple[str, ...] = (
     climax_line("crush", 0), climax_line("lose", 1),
     drop_glory_line(["黑岩根"], 0), drop_glory_line(["白参"], 1),
     drop_glory_line(["冰晶石"], 2), drop_glory_line([], 0),
-    mock_line(0), mock_line(3), rally_line(0), rally_line(1),
+    mock_line(0), mock_line(3), battle_defeat(0), battle_defeat(1),
     quote_line(1, 0), quote_line(8, 0), quote_line(13, 0), quote_line(5, 0),
     battle_hero_aid(),
     battle_ready("四星斗者"),
