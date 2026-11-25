@@ -949,6 +949,12 @@ async def cmd_fight(store, qq) -> str:
                                 tier=str(high.get("tier") or ""),
                                 move=str(high.get("move") or high.get("kind") or ""),
                                 after=txt.climax_line(_wt, _seed)))
+    # 2026-11-25 收尾：NPC 插话（角色出处台账 + 说话人绑定，设计文档 §4.2）。
+    # 只在险战（苦战/越级/败局）出、一场最多一条；顺风局静默，既不刷屏也不吃
+    # 350 字骨架预算。说话人只从本章白名单取，出处不进玩家可见文案。
+    _npc = txt.npc_line(_ch, _seed, _wt)
+    if _npc:
+        lines.append(_npc)
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
     # 2026-11-25 傀儡助阵行（用户「或者高阶傀儡」）：只在傀儡真的出手时出现。

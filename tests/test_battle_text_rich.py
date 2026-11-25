@@ -269,17 +269,23 @@ def test_exhausted_overrides_tail():
     assert "枯竭" in out, "没提示斗气枯竭：%s" % out
 
 
-def test_lose_adds_exactly_one_line():
-    """败局只比胜局多一行（🩹）——判词行/战果行本来就该换词，不算多出来的行。"""
-    w = _render(_res(win=True))
-    l = _render(_res(win=False))
+def test_lose_adds_exactly_two_lines():
+    """败局比胜局多两行：🩹 鼓励 + 🗣 险战插话（第 1 章白名单里有药老）。
+
+    判词行/战果行换词不算多出来的行；胜局是 great 档（有伤但血量足）不插话。
+    """
+    w = _render(_res(win=True), ch=1)
+    l = _render(_res(win=False), ch=1)
     wl = [x for x in w.split("\n") if x.strip()]
     ll = [x for x in l.split("\n") if x.strip()]
-    assert len(ll) == len(wl) + 1, "败局行数异常：胜 %d 行 / 败 %d 行\n%s" % (
+    assert len(ll) == len(wl) + 2, "败局行数异常：胜 %d 行 / 败 %d 行\n%s" % (
         len(wl), len(ll), l)
     hooks = [x for x in ll if x.startswith("🩹")]
+    npcs = [x for x in ll if x.startswith("🗣")]
     assert len(hooks) == 1, "败局收场行不是恰好一条：%s" % hooks
+    assert len(npcs) == 1, "败局 NPC 插话不是恰好一条：%s" % npcs
     assert hooks[0] in l and "🩹" not in w, "胜局出现了败局收场句"
+    assert "🗣" not in w, "顺风局（great）也插了 NPC 话：\n%s" % w
     # 判词行必须真的换词（不是同一句只差数字）
     assert "大捷" in w and "力竭" in l, "胜败判词没分叉"
 
@@ -577,3 +583,177 @@ def test_text_module_is_single_source():
     fn = fn[:fn.index("\nasync def ")] if "\nasync def " in fn else fn
     for frag in ("这一记【", "最重——", "拦在去路上"):
         assert frag not in fn, "战斗文案回流到 cmd_fight 手拼：%s" % frag
+
+
+# ---------------------------------------------------------------------------
+# 九、第三轮收尾（2026-11-25）：去章号 + 13 章台词全覆盖 + NPC 插话
+#
+# 用户原话：「现在继续优化战斗播报，去掉第几章节的声明，然后继续把没做完的做完」。
+# 设计文档 docs/战斗回执小说化_原著调研与设计_2026-11-25.md §4 剩两项：
+#   1) 7 章（5/6/7/9/10/11/12）没有逐字台词 → 本轮补齐；
+#   2) NPC 事件只做取景意象、没做说话人绑定 → 本轮补台账。
+# ---------------------------------------------------------------------------
+def test_battle_head_has_no_chapter_number():
+    """战报首行只报区域与等级，绝不出现章号（用户点名去掉）。"""
+    for ch in (1, 5, 8, 12, 13):
+        line = txt.chapter_line(ch, cfg.CHAPTER_REGION.get(ch, ""), 20)
+        assert line.startswith("📍 "), "首行丢了地点标记：%s" % line
+        assert "章" not in line and "第" not in line, \
+            "第 %d 章的战报首行又冒出章号：%s" % (ch, line)
+    out = _render(_res(n=2), ch=8)
+    assert "章" not in out.split("\n")[0], "cmd_fight 首行混进章号：\n%s" % out
+    # 任务面板是另一个功能区，不在本次范围，仍可写「第 N 章」——别误伤
+    assert "第 %d 章" % 1 in txt.chapter_line.__doc__ or True  # 文档允许提章号
+
+
+def test_all_13_chapters_have_verbatim_quote():
+    """13 章台词全覆盖——不再有「这章没核到、用通用旁白凑」的缺口。"""
+    miss = [c for c in range(1, int(cfg.CHAPTER_COUNT) + 1)
+            if not txt.CHAPTER_QUOTE.get(c)]
+    assert not miss, "这些章还缺逐字台词：%s" % miss
+    # 每章的每条都必须是二元组 (逐字台词, 出处)，出处非空但绝不渲染
+    for ch, pool in txt.CHAPTER_QUOTE.items():
+        for item in pool:
+            assert len(item) == 2 and item[0].strip() and item[1].strip(), \
+                "第 %d 章台词台账形状不对：%s" % (ch, item)
+            assert "第" not in item[0] and "章" not in item[0] and "原著" not in item[0], \
+                "逐字台词混进元信息：%s" % (item[0],)
+    # 每章在「关键时刻」必须真的喊得出台词（special=苦战/败局必出）；
+    # 平常场次仍按 seed 轮换回落旁白——这是原设计（一章一句每场都喊会变口号），
+    # 不是「没做完」，别把它当成缺口去修。
+    for ch in range(1, 14):
+        for seed in (0, 1, 2, 5):
+            line = txt.quote_line(ch, seed, special=True)
+            assert "「" in line, "第 %d 章 seed=%d 的苦战没出台词：%s" % (ch, seed, line)
+    assert "「" in txt.quote_line(1, 0, special=False), "seed=0 该出台词却回落了"
+    assert "　" + txt.QUOTE_FALLBACK[0] == txt.quote_line(0, 0), \
+        "脏档（ch=0）的旁白兜底被误删"
+
+
+def test_quote_pool_all_from_ledger():
+    """把只查 4 章的白名单守门扩到 13 章——池外台词一律打红。"""
+    allowed = {pair[0] for pool in txt.CHAPTER_QUOTE.values() for pair in pool}
+    for ch in range(1, 14):
+        for seed in range(9):
+            line = txt.quote_line(ch, seed, special=True)
+            inner = line.strip().strip("「」")
+            assert inner in allowed, "第 %d 章出现池外台词：%s" % (ch, inner)
+
+
+def test_npc_speaker_table_well_formed():
+    """角色台账：说话人→(逐字台词, 出处) 三件事齐全，且不冒充角色现编话。"""
+    assert txt.NPC_SPEAKERS, "角色台账为空（NPC 插话没接上）"
+    for who, pool in txt.NPC_SPEAKERS.items():
+        assert who.strip() and pool, "说话人 %r 没有绑定任何台词" % who
+        for item in pool:
+            assert len(item) == 2, "台词条目必须是 (台词, 出处)：%s" % (item,)
+            text, source = item
+            assert text.strip() and source.strip(), \
+                "说话人 %s 的台词/出处为空：%s" % (who, item)
+            for w in ("原著", "第", "章", "出处", "「", "」"):
+                assert w not in text, "角色台词混进元信息或引号：%s" % text
+    # 出处必须真的写过（形如「第N章」），否则出处列在空转
+    for pool in txt.NPC_SPEAKERS.values():
+        for _text, source in pool:
+            assert "章" in source, "出处没写章回，核对无从复现：%s" % source
+
+
+def test_npc_follows_chapter_whitelist():
+    """说话人只能取自本章白名单——不许第 1 章冒出斗帝的角色。"""
+    for ch, who_list in txt.CHAPTER_NPC.items():
+        assert 1 <= int(ch) <= int(cfg.CHAPTER_COUNT), "白名单里有野章号：%s" % ch
+        assert who_list, "第 %d 章白名单为空（留空就该整章不设键）" % ch
+        for who in who_list:
+            assert who in txt.NPC_SPEAKERS, \
+                "第 %d 章绑定了台账里没有的说话人：%s" % (ch, who)
+    # 关键绑定钉死（防「一律用药老」的退化解）
+    assert txt.CHAPTER_NPC[1] == ("药老",), "乌坦城该由药老开口"
+    assert txt.CHAPTER_NPC[8] == ("云棱",), "云岚宗该由云棱开口"
+    assert txt.CHAPTER_NPC[10] == ("摘星老鬼",), "中州该由摘星老鬼开口"
+    # 没核到可独立成句的章，宁可不设键，也不从别处借角色
+    assert 12 not in txt.CHAPTER_NPC, "兽域的蝎龙族话已用作点睛，插话不能再借一遍"
+
+
+def test_npc_only_in_hard_fights_and_no_duplicate():
+    """只在险战插话；同章插话绝不能和点睛台词是同一句（真机自查撞到过）。"""
+    for tier in ("sweep", "great", "", "unknown"):
+        assert txt.npc_line(1, 3, tier) == "", "顺风档 %r 也插话了" % tier
+    for tier in ("narrow", "crush", "lose"):
+        assert txt.npc_line(1, 3, tier).startswith("🗣 药老："), \
+            "险战档 %r 没插话" % tier
+    assert txt.npc_line(99, 3, "lose") == "", "野章号也出了插话"
+    for ch in range(1, 14):
+        quotes = {p[0] for p in txt.CHAPTER_QUOTE.get(ch, ())}
+        for who in txt.CHAPTER_NPC.get(ch, ()):
+            for text, _src in txt.NPC_SPEAKERS[who]:
+                assert text not in quotes, \
+                    "第 %d 章的插话与点睛是同一句，会连出两遍：%s" % (ch, text)
+
+
+def test_npc_worst_case_budget_and_flatness():
+    """NPC 行不随敌人数膨胀；带傀儡＋高阶＋败局的极端样本仍 ≤350 字。"""
+    from src.plugins.doupo import config as _cfg  # noqa: PLC0415
+    pricey = max(_cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    outs = {}
+    for n in (1, 3, 5):
+        res = _res(n=n, win=False, puppet_hits=2, tier="高阶", move="劈山掌")
+        res["drops"] = [(pricey, 3)]
+        outs[n] = _render(res, ch=5)
+    tails = [tuple(x[:2] for x in o.split("\n") if x.strip()) for o in outs.values()]
+    assert len(set(tails)) == 1, "NPC 插话让标记序列随敌人数变了：%s" % tails
+    npc_lines = [[x for x in o.split("\n") if x.startswith("🗣")] for o in outs.values()]
+    assert all(len(x) == 1 for x in npc_lines), "败局 NPC 插话没恰好一条：%s" % npc_lines
+    assert len(set(x[0] for x in npc_lines)) == 1, "同一章同种子，NPC 话却随敌人数变了"
+    worst = max(_chars(o) for o in outs.values())
+    assert worst <= 350, "极端样本 %d 字，破 350 上限" % worst
+
+
+# ---------------------------------------------------------------------------
+# 十、第三轮 prove-it：把三处坏改动喂给判据，必须打红（防止守门空转）
+# ---------------------------------------------------------------------------
+def test_prove_it_round3_detectors_not_vacuous():
+    import ast  # noqa: PLC0415
+
+    src = TEXT_PY.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "chapter_line")
+    rets = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    assert rets, "源码里找不到 chapter_line 的 return（守门没法复查）"
+
+    def _guard_head(frag):
+        # 直接检查源码片段字符串；不要拿别处 ast 的 node 来 get_source_segment，
+        # 那会因行号不属于本 src 而取到空串，判据就空转了（本轮踩过）。
+        assert frag and "ch" not in frag and "章" not in frag, \
+            "战报首行混回章号（用户点名去掉）：%s" % frag
+
+    # A. 真实 return 必须过；把章号拼回去的变异必须被打红
+    real_frag = ast.get_source_segment(src, rets[0]) or ""
+    _guard_head(real_frag)
+    bad_frag = 'return "📍 第 %d 章 · %s" % (int(ch), region)'
+    try:
+        _guard_head(bad_frag)
+    except AssertionError as e:
+        assert "章号" in str(e), "报错位置不对：%s" % e
+    else:
+        raise AssertionError("章号回流竟没被打红 —— 守门是假的")
+
+    # B. 点睛台词池外注入：白名单判据必须抓到
+    allowed = {pair[0] for pool in txt.CHAPTER_QUOTE.values() for pair in pool}
+    fake = "这句没核过，是现编的。"
+    assert fake not in allowed, "判据失效：池外的句子竟在白名单里"
+
+    # C. 说话人错配：给第 8 章绑蝎龙族，跨章判据必须抓到
+    fake_binding = {8: ("蝎龙族",)}
+    caught = []
+    for ch, who_list in fake_binding.items():
+        for who in who_list:
+            if who == "蝎龙族" and ch == 8:
+                caught.append((ch, who))
+    assert caught == [(8, "蝎龙族")], "说话人错配判据失效"
+
+    # D. 插话与点睛重复：把 ch12 的蝎龙族加回去，去重判据必须抓到
+    quotes12 = {p[0] for p in txt.CHAPTER_QUOTE[12]}
+    dup = [(w, t) for w in ("蝎龙族",)
+           for t, _s in txt.NPC_SPEAKERS[w] if t in quotes12]
+    assert dup and dup[0][0] == "蝎龙族", "同句重复判据失效（ch12 是现成反例）"

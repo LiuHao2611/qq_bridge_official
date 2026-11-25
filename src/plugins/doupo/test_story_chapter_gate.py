@@ -487,22 +487,24 @@ def group_i_submit():
 
 
 # ---------------------------------------------------------------------------
-# J. 文案层：章节坐标必须露出来（否则玩家以为是随机难度）
+# J. 文案层：地点坐标露出、章号不露出（2026-11-25 用户「去掉第几章节的声明」）
 # ---------------------------------------------------------------------------
 async def group_j_text(store):
-    check("chapter_line 单值形态",
-          "第 1 章" in commands.txt.chapter_line(1, "乌坦城·萧家后山", 5)
-          and "lv5" in commands.txt.chapter_line(1, "乌坦城·萧家后山", 5),
+    check("chapter_line 单值形态（区域 + lv，无章号）",
+          "乌坦城·萧家后山" in commands.txt.chapter_line(1, "乌坦城·萧家后山", 5)
+          and "lv5" in commands.txt.chapter_line(1, "乌坦城·萧家后山", 5)
+          and "章" not in commands.txt.chapter_line(1, "乌坦城·萧家后山", 5),
           commands.txt.chapter_line(1, "乌坦城·萧家后山", 5))
     line = commands.txt.chapter_line(2, "魔兽山脉外围", 5, 14)
-    check("chapter_line 区间形态（混章）含 lv5-14",
-          "lv5-14" in line, line)
+    check("chapter_line 区间形态（混章）含 lv5-14 且无章号",
+          "lv5-14" in line and "章" not in line, line)
 
     a = newp(lv=1, qq="710001")
     await store.put_player(a)
     t1 = await commands.cmd_fight(store, "710001")
-    check("cmd_fight lv1：首行露「📍 第 1 章」",
-          "📍 第 1 章" in t1.splitlines()[0], t1.splitlines()[0][:70])
+    check("cmd_fight lv1：首行露区域、不露「第 N 章」",
+          t1.splitlines()[0].startswith("📍 乌坦城·萧家后山")
+          and "章" not in t1.splitlines()[0], t1.splitlines()[0][:70])
     check("cmd_fight lv1：首行露「妖物 lv1」",
           "妖物 lv1" in t1.splitlines()[0], t1.splitlines()[0][:70])
 
