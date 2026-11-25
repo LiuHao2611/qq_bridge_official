@@ -90,6 +90,33 @@ def _import_qq():
     )
 
 
+def needs_standalone_keyboard(has_buttons: bool, wanted_card: bool,
+                              image_only_fallback: bool,
+                              text_has_kb: bool) -> bool:
+    """要不要**再单独发一条**「## 快捷指令」按钮消息（按钮在一条回复里只许出现一次）。
+
+    🚨 2026-11-25 重复按钮事故的唯一判定口。用户截图：一条战斗文本下方挂着
+    「战斗回看/战斗评价/任务」，紧接着又冒出一条标题为「## 快捷指令」的消息，
+    挂着**同一组**按钮。线上日志铁证（同一 msg_id 下 seq 连号，同一次口令）：
+
+        kind=text_card msg_seq=1 buttons=战斗回看,战斗评价,任务
+        kind=keyboard  msg_seq=2 buttons=战斗回看,战斗评价,任务
+
+    根因：纯文本口令（无图）在文本段里**已经把键盘挂上了**（``seg_kind="text_card"``，
+    2026-11-25 第四轮为了修「纯文本不到」而加的），而下面还有旧的条件
+    ``has_buttons and (not wanted_card or ...)``——纯文本恰好 ``wanted_card=False``
+    → 条件成立 → 又补发一条独立按钮段。于是同一次回复两条消息、同一组按钮。
+
+    收窄成一句话：**按钮不能在同一次回复里出现两次**。
+      * ``text_has_kb``            → 文本段已带键盘，绝不再发（本次事故）
+      * 无文本的纯按钮（未挂键盘）  → 仍要独立按钮段，否则按钮会消失
+      * 图+按钮卡 image_only 降级  → 用户硬要求「图与按钮不分开发」，也不发
+    """
+    if not has_buttons or text_has_kb:
+        return False
+    return not wanted_card or not image_only_fallback
+
+
 def _build_button_segment(cmd: str, _QQMessage, _QQSegment):
     """把当前口令变成一条「快捷命令按钮」消息段（markdown + keyboard 同段）。
 
@@ -353,6 +380,10 @@ class OfficialChannel(Channel):
         # （msg_type=2），用户端就是**一条**消息；失败则降级回「图片条 + 按钮条」。
         segments: list[tuple] = []
         btn_labels: list[str] = []
+        # 🚨 2026-11-25 重复按钮事故：文本段一旦自己挂了键盘（seg_kind="text_card"），
+        # 下面就绝不能再补发独立按钮段。这里记状态，判定统一走
+        # needs_standalone_keyboard()（唯一判定口，改动请连带守门测试）。
+        text_has_kb = False
 
         # btn_cmd 优先取 Outgoing 显式字段，其次取 ctx（warframe/主流程入口注入），
         # 否则按 out.text 首词兜底。
@@ -420,6 +451,7 @@ class OfficialChannel(Channel):
                         if kb_model is not None:
                             seg += QQSegment.keyboard(kb_model)
                             seg_kind = "text_card"
+                            text_has_kb = True
                     except Exception as e:  # noqa: BLE001 — 挂键盘失败只退回纯文本，绝不阻断
                         log.warning(jlog("official_text_keyboard_failed",
                                          error=type(e).__name__, cmd=kb_key))
@@ -475,7 +507,11 @@ class OfficialChannel(Channel):
             # image_only 模式只发图片、不另发按钮段（用户端只见一条纯图卡）。
             # 仅当「非图+按钮卡」或显式 two_messages 回退模式才在降级里发按钮段。
             # 保留 has_buttons 字面守卫：零按钮卡任何模式都不发空按钮段。
-            if has_buttons and (not wanted_card or not _MERGE_FALLBACK_IMAGE_ONLY):
+            # 🚨 2026-11-25：判定收敛进 needs_standalone_keyboard()——文本段已挂键盘
+            # （text_has_kb）时一律不发，否则用户端会出现「文本挂按钮 + 快捷指令挂
+            # 同一组按钮」的两条消息（线上 seq=1 text_card / seq=2 keyboard 铁证）。
+            if needs_standalone_keyboard(has_buttons, wanted_card,
+                                         _MERGE_FALLBACK_IMAGE_ONLY, text_has_kb):
                 btn_seg, btn_labels = _build_button_segment(btn_cmd, QQMessage, QQSegment)
                 if btn_seg is not None:
                     segments.append((btn_seg, "keyboard"))
