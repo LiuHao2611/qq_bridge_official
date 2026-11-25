@@ -510,7 +510,7 @@ async def _channel_send_text(raw: Any, text: str, keyboard_cmd: str = "") -> boo
 
 
 async def finish_text(matcher: Any, event: Any, text: str,
-                      file_name: str = "") -> None:
+                      file_name: str = "", card_key: str = "") -> None:
     """发一条纯文本回复（官方通道统一经 OfficialChannel，NapCat 走原生）。
 
     ## 两次改动的来龙去脉
@@ -520,6 +520,11 @@ async def finish_text(matcher: Any, event: Any, text: str,
     * 2026-11-25（「上阵 / 学习 / 锁定 / 主题」打字没反应）：原生纯文本在官方
       通道被平台静默吞掉（无回执无报错），实测只有经通道的文本能到 → 改成
       **官方通道一律走通道**，不再看是否 arm 按钮；异常仍降级原生。
+    * 2026-11-25（战斗口令重构）：新增 ``card_key`` —— 纯文本也能挂功能按钮
+      （用户 Q2 拍板「文本和按钮一起发」）。传 ``"fight_text"`` 即由
+      ``CARD_ACTIONS["fight_text"]`` 派生「战斗回看 / 战斗评价 / 任务」三键，
+      与文本**同一条**下发（官方 markdown + keyboard 同段）。空串 → 维持旧行为
+      （走 `_KB_FALLBACKS` 的兜底菜单键）。
 
     ``event`` 可传 EvView 或原始事件；``text`` 已是完整回复文本。
     """
@@ -551,6 +556,11 @@ async def finish_text(matcher: Any, event: Any, text: str,
         except Exception:  # noqa: BLE001 — 按钮增强失败不影响文本
             quiz_ctx_token = None
             kcmd = ""
+
+    # 2026-11-25 纯文本功能按钮（用户 Q2）：与竞猜按钮互斥——竞猜优先，
+    # 做题时不该混进「战斗回看」。kcmd 走 "doupo:<card_key>" 与出图卡同一套派生。
+    if not kcmd and card_key:
+        kcmd = "doupo:" + str(card_key).strip()
 
     # 2026-11-25 主修复：**一律走通道**（含无按钮的普通文本），原生纯文本到不了用户。
     sent = False

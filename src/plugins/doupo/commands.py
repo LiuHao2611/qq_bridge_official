@@ -822,14 +822,18 @@ async def cmd_fight(store, qq) -> str:
         return txt.battle_cd(left)
 
     # 一场遭遇 1~5 个敌人（魔兽 / 悍匪 / 原著反派），逐个调用单敌内核 fight。
-    # 难度仍按玩家等级反解，不会出现越级秒杀；斗气跨战结转（见底转普攻）、
+    # 2026-11-25 起难度由**章节**决定（G2）：只抽已开通章的怪，怪实例化到
+    # min(玩家等级, 该怪所属章基准)，玩家等级抬不高它；斗气跨战结转（见底转普攻）、
     # 气血结转+小幅回复。回满斗气只能靠突破/升级。
     # 2026-11-19 自动服药：锁定物品绝不参与（用户硬要求）。
     locked = await store.item_locks(str(qq))
     # 出战傀儡（2026-11-20 第二轮）：野外遭遇是最主要的刷怪入口，必须带。
     _pu, _pu_n, _pu_fm = await _puppet_ctx(qq, p)
+    # 2026-11-25 章节门禁（用户拍板 Q1=A / G2=怪等级按章节走）：
+    # 只抽已开通章的怪，怪等级 = min(玩家等级, 该章基准)，修为预算按怪等级算。
+    _ch = core.ensure_story_chapter(p)
     res = core.encounter(p, locked=locked, puppet=_pu, formation_n=_pu_n,
-                         puppet_flame_mult=_pu_fm)
+                         puppet_flame_mult=_pu_fm, chapter=_ch)
     # 2026-11-17：统一「战斗结束」落盘点。普通回包仍只给高光，完整 log 只落盘，
     # 玩家主动「战斗回看」时才展开，绝不把 1~5 敌的中间回合塞进普通回包。
     await _finalize_battle(
@@ -893,7 +897,12 @@ async def cmd_fight(store, qq) -> str:
     # 2026-11-20 结算重排（用户「结算展示乱七八糟」）：固定三段、顺序恒定，
     # 不再用 insert() 往中间插行打乱结构。①战果 ②代价 ③机缘（仅触发时出现）。
     # 2026-11-23：首行/高光/战果/代价改由 doupo_text 出句，保留原有锚点词。
+    # 2026-11-25 章节门禁：本场实际敌人等级区间（回低章刷怪时可能混档，
+    # 如既有 lv5 的嗜血鼠、也有本章 lv68 的怪，用区间表示更诚实）。
+    _mlvs = [int(x.get("lv") or 0) for x in detail if int(x.get("lv") or 0) > 0]
+    _mlo, _mhi = (min(_mlvs), max(_mlvs)) if _mlvs else (0, 0)
     lines = [
+        txt.chapter_line(_ch, cfg.CHAPTER_REGION.get(_ch, ""), _mlo, _mhi),
         txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed),
     ]
     # 2026-11-24 限时增益：药力还有余就得在战报里露一行，否则玩家以为丹白吃了。
@@ -2332,7 +2341,9 @@ async def cmd_tasks(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    out = ["📜 任务"]
+    _sc = core.ensure_story_chapter(p)
+    out = ["📜 任务　📍 第 %d 章 · %s"
+           % (_sc, cfg.CHAPTER_REGION.get(_sc, ""))]
     m = core.current_main(p)
     if m:
         # 2026-11-20：进度必须走 core.main_value —— 武器类是「状态要求」，
@@ -2340,6 +2351,12 @@ async def cmd_tasks(store, qq) -> str:
         cur = core.main_value(p)
         out.append(f"【主线·{m['name']}】{m['desc']}")
         out.append(f"　进度 {cur}/{m['target']}　{_bar(cur, m['target'])}")
+        # 2026-11-25 章节门槛：交任务必须达到本章境界上限，明写出来别让玩家干试。
+        _need = int(m.get("require_lv") or 0)
+        if _need:
+            _lv_now = int(p["lv"])
+            _mark = "✓已达" if _lv_now >= _need else "（当前 %s）" % cfg.full_realm(_lv_now)
+            out.append(f"　境界要求 {cfg.full_realm(_need)}　{_mark}")
         rw = m["reward"]
         out.append(f"　奖励：{rw['gold']} 金 / {rw['exp']} 修为 / 机缘 +{rw['luck']}")
     else:
@@ -2397,16 +2414,30 @@ async def cmd_main_submit(store, qq) -> str:
     if not res.get("ok"):
         if res.get("reason") == "done":
             return "主线已全部完成，你已是此界巅峰。"
+        if res.get("reason") == "lv":
+            # 2026-11-25 章节门槛：任务达成但境界不够，明确告诉玩家还差什么。
+            _t = res["task"]
+            return (f"主线【{_t['name']}】已达成，但修为未到——\n"
+                    f"　需【{cfg.full_realm(int(res['need_lv']))}】"
+                    f"（当前【{cfg.full_realm(int(res['lv']))}】）\n"
+                    "　先发「战斗」历练，境界到了再交。")
         t = res["task"]
         return f"主线未完成：{t['name']}（{res.get('progress', 0)}/{t['target']}）"
     rw = res["reward"]
     # 2026-11-20：主线提交必须落库（此前只在内存改 p —— 支线在 2026-11-19 修过同一个错，
     # 主线漏了：交完主线不重启还好，一重启章节回退、奖励蒸发）。
     await store.put_player(p)
+    _ch = int(res.get("story_chapter") or 1)
     msg = (f"🏅 主线【{res['task']['name']}】完成！\n"
-           f"　金币 +{rw['gold']}　修为 +{rw['exp']}　机缘 +{rw['luck']}")
+           f"　金币 +{rw['gold']}　修为 +{rw['exp']}　机缘 +{rw['luck']}\n"
+           f"🗺️ 第 {_ch} 章开通 · {cfg.CHAPTER_REGION.get(_ch, '')}"
+           f"（此地妖物 lv{cfg.chapter_base_lv(_ch)}）")
     if res.get("next"):
-        msg += f"\n📖 下一章：{res['next']['name']} —— {res['next']['desc']}"
+        _nx = res["next"]
+        msg += f"\n📖 下一章：{_nx['name']} —— {_nx['desc']}"
+        _nlv = int(_nx.get("require_lv") or 0)
+        if _nlv:
+            msg += f"（需 {cfg.full_realm(_nlv)}）"
     else:
         msg += "\n🎉 主线全部走完。"
     return msg

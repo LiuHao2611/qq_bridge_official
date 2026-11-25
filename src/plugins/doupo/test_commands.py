@@ -411,13 +411,23 @@ async def main():
     r = await commands.cmd_task_submit(store, A)
     check("交任务 未达标被挡", "尚未完成" in r, r[:60])
     r = await commands.cmd_main_submit(store, A)
-    check("领主线 未达标被挡", "未完成" in r or "完成" in r, r[:60])
+    # 2026-11-25：门槛分两种（进度不足 / 进度够但境界不够），都算「被挡」；
+    # 唯一硬判据是**没有出现完成标志 🏅**（出现即等于发了奖励）。
+    check("领主线 未达标被挡",
+          "🏅" not in r and ("未完成" in r or "修为未到" in r), r[:60])
 
     # 主线提交必须**落库**（2026-11-20：旧版只改内存 p，重启章节回退、奖励蒸发）。
     # 验证方式：另起一个 Store 从同一文件读回，不信内存里那个 dict。
     pa = await store.get_player(A)
     if int(pa.get("main_idx", 0)) < len(cfg.MAIN_TASKS):
-        pa["main_progress"] = int(cfg.MAIN_TASKS[int(pa["main_idx"])]["target"])
+        _mt = cfg.MAIN_TASKS[int(pa["main_idx"])]
+        pa["main_progress"] = int(_mt["target"])
+        # 2026-11-25 章节门槛（用户拍板 G1=A）：交任务须达本章境界上限，
+        # 故先把等级提到 require_lv 再交；「不够必须挡」由 test_core 的反证守。
+        if _mt.get("require_lv"):
+            pa["lv"] = int(_mt["require_lv"])
+            pa["hp"] = core.stats(pa)["体力"]
+            pa["mp"] = core.mp_max(pa)
         await store.put_player(pa)
         before_idx = int(pa.get("main_idx", 0))
         before_gold = int(pa.get("gold", 0))

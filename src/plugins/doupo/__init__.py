@@ -361,7 +361,8 @@ fight = on_regex(_pat(r"(?:战斗|打怪|历练|出战)"), priority=PRI, block=T
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, fight)
-    await finish_text(fight, event, await commands.cmd_fight(store, str(event.user_id)))
+    await finish_text(fight, event, await commands.cmd_fight(store, str(event.user_id)),
+                      card_key="fight_text")
 
 
 # ---------------------------------------------------------------------------

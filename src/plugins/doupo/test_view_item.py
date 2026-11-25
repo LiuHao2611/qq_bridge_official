@@ -286,7 +286,9 @@ def test_render_and_wiring():
     check("结构：物品详情卡有下钻按钮", '"item": ("服丹"' in bt)
     pic = (pathlib.Path(__file__).resolve().parents[1]
            / "qq_bridge" / "pic" / "__init__.py").read_text(encoding="utf-8")
-    check("结构：doupo_item 模板已注册", '"doupo_item": _doupo_craft.build' in pic)
+    # 2026-11-25：物品详情卡改用专属模板 doupo_item（去气泡/序号圈、解包硬边框），
+    # 不再复用 doupo_craft。这里守的是「注册到的是专属模板」而不是旧复用。
+    check("结构：doupo_item 模板已注册", '"doupo_item": _doupo_item.build' in pic)
 
 
 def test_danwen_tier_table_shape():

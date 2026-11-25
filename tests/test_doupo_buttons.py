@@ -214,6 +214,9 @@ def test_each_card_buttons_are_relevant_family():
         "craft": {"傀儡", "傀儡遗迹", "战斗"},
         # 2026-11-25 物品详情卡（看完详情：吃掉 / 去炼 / 再逛）
         "item": {"服丹", "炼药", "宝库", "背包"},
+        # 2026-11-25 战斗**纯文本**回包按钮组（用户 Q2：文本+按钮同条）。
+        # 与上面的 "battle"（战斗回看卡）刻意分开：那张卡只挂「战斗评价」。
+        "fight_text": {"战斗回看", "战斗评价", "任务"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (

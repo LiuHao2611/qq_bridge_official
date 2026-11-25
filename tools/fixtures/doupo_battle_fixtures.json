@@ -1,0 +1,1016 @@
+{
+ "fx_lv40": {
+  "battle": {
+   "kind": "遭遇",
+   "log": [
+    {
+     "crit": true,
+     "def_cut": 1571,
+     "dmg": 13865,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 0,
+     "foe_hp_before": 3721,
+     "heal_ratio": 0.0,
+     "hp_after": 16800,
+     "hp_before": 16800,
+     "index": 1,
+     "kind": "风火木壁",
+     "move": "风火木壁",
+     "mp_after": 5280,
+     "mp_before": 6600,
+     "mp_cost": 1320,
+     "notes": [
+      "定身"
+     ],
+     "raw": 10815,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "crit": false,
+     "def_cut": 1571,
+     "dmg": 9243,
+     "foe": "岩蛇",
+     "foe_hp_after": 0,
+     "foe_hp_before": 3534,
+     "heal_ratio": 0.0,
+     "hp_after": 16800,
+     "hp_before": 16800,
+     "index": 2,
+     "kind": "风火木壁",
+     "move": "风火木壁",
+     "mp_after": 3960,
+     "mp_before": 5280,
+     "mp_cost": 1320,
+     "notes": [
+      "定身"
+     ],
+     "raw": 10815,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    }
+   ],
+   "opponent": "嗜血鼠、岩蛇",
+   "player": {
+    "hp": 16800,
+    "hp_max": 16800,
+    "lv": 40,
+    "mp": 3960,
+    "mp_max": 6600,
+    "name": "夹3",
+    "power": 29205
+   },
+   "rounds": 2,
+   "summary": {
+    "auto_pills": {
+     "hp": 0,
+     "mp": 0
+    },
+    "drops": [
+     [
+      "回气丹",
+      1
+     ]
+    ],
+    "end_reason": "kill",
+    "end_text": "击杀对手",
+    "enemies": [
+     "嗜血鼠",
+     "岩蛇"
+    ],
+    "enemy_count": 2,
+    "exhausted": false,
+    "exp": 213,
+    "extra": {},
+    "foe_hp_end": 0,
+    "foe_hp_max": 3534,
+    "fortune": false,
+    "gold": 439,
+    "hero_aid": null,
+    "hp_p": null,
+    "hp_v": null,
+    "taken": 0
+   },
+   "ts": 1795588482.0366533,
+   "version": 1,
+   "win": true
+  },
+  "qq": "780000003"
+ },
+ "fx_lv5": {
+  "battle": {
+   "kind": "遭遇",
+   "log": [
+    {
+     "crit": false,
+     "def_cut": 130,
+     "dmg": 769,
+     "foe": "岩蛇",
+     "foe_hp_after": 2952,
+     "foe_hp_before": 3721,
+     "heal_ratio": 0.0,
+     "hp_after": 1200,
+     "hp_before": 1200,
+     "index": 1,
+     "kind": "裂爪击",
+     "move": "裂爪击",
+     "mp_after": 600,
+     "mp_before": 750,
+     "mp_cost": 150,
+     "notes": [
+      "流血3%×2"
+     ],
+     "raw": 900,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "dmg": 23,
+     "dot": true,
+     "foe": "岩蛇",
+     "foe_hp_after": 2929,
+     "hp_after": 1200,
+     "index": 2,
+     "kind": "持续伤害",
+     "move": "持续伤害",
+     "mp_after": 600,
+     "notes": [
+      "流血3%=23"
+     ],
+     "round": 1
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 310,
+     "crit": false,
+     "def_cut": 101,
+     "dmg": 209,
+     "foe": "岩蛇",
+     "foe_hp_after": 2929,
+     "hp_after": 991,
+     "index": 3,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 600,
+     "round": 1,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 130,
+     "dmg": 769,
+     "foe": "岩蛇",
+     "foe_hp_after": 2160,
+     "foe_hp_before": 2929,
+     "heal_ratio": 0.0,
+     "hp_after": 991,
+     "hp_before": 991,
+     "index": 4,
+     "kind": "裂爪击",
+     "move": "裂爪击",
+     "mp_after": 450,
+     "mp_before": 600,
+     "mp_cost": 150,
+     "notes": [
+      "流血3%×2"
+     ],
+     "raw": 900,
+     "round": 2,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "dmg": 46,
+     "dot": true,
+     "foe": "岩蛇",
+     "foe_hp_after": 2114,
+     "hp_after": 991,
+     "index": 5,
+     "kind": "持续伤害",
+     "move": "持续伤害",
+     "mp_after": 450,
+     "notes": [
+      "流血3%=23",
+      "流血3%=23"
+     ],
+     "round": 2
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 324,
+     "crit": false,
+     "def_cut": 107,
+     "dmg": 217,
+     "foe": "岩蛇",
+     "foe_hp_after": 2114,
+     "hp_after": 774,
+     "index": 6,
+     "kind": "兽击",
+     "monster_skill": "毒液喷射",
+     "monster_skill_tier": "normal",
+     "move": "兽击",
+     "mp_after": 450,
+     "notes": [
+      "毒液喷射！中毒 17×2 回合"
+     ],
+     "round": 2,
+     "taken": true
+    },
+    {
+     "dmg": 17,
+     "dot": true,
+     "foe": "岩蛇",
+     "hp_after": 757,
+     "index": 7,
+     "kind": "中毒",
+     "move": "中毒",
+     "mp_after": 450,
+     "notes": [
+      "毒液喷射100%=17"
+     ],
+     "round": 3,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 130,
+     "dmg": 769,
+     "foe": "岩蛇",
+     "foe_hp_after": 1345,
+     "foe_hp_before": 2114,
+     "heal_ratio": 0.0,
+     "hp_after": 757,
+     "hp_before": 774,
+     "index": 8,
+     "kind": "裂爪击",
+     "move": "裂爪击",
+     "mp_after": 300,
+     "mp_before": 450,
+     "mp_cost": 150,
+     "notes": [
+      "流血3%×2"
+     ],
+     "raw": 900,
+     "round": 3,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "dmg": 46,
+     "dot": true,
+     "foe": "岩蛇",
+     "foe_hp_after": 1299,
+     "hp_after": 757,
+     "index": 9,
+     "kind": "持续伤害",
+     "move": "持续伤害",
+     "mp_after": 300,
+     "notes": [
+      "流血3%=23",
+      "流血3%=23"
+     ],
+     "round": 3
+    },
+    {
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 757,
+     "index": 10,
+     "kind": "失误",
+     "mishap": true,
+     "move": "踉跄",
+     "mp_after": 300,
+     "notes": [
+      "脚掌一崴，一屁股坐在地上"
+     ],
+     "round": 3
+    },
+    {
+     "dmg": 17,
+     "dot": true,
+     "foe": "岩蛇",
+     "hp_after": 740,
+     "index": 11,
+     "kind": "中毒",
+     "move": "中毒",
+     "mp_after": 300,
+     "notes": [
+      "毒液喷射100%=17"
+     ],
+     "round": 4,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 130,
+     "dmg": 769,
+     "foe": "岩蛇",
+     "foe_hp_after": 530,
+     "foe_hp_before": 1299,
+     "heal_ratio": 0.0,
+     "hp_after": 740,
+     "hp_before": 757,
+     "index": 12,
+     "kind": "裂爪击",
+     "move": "裂爪击",
+     "mp_after": 150,
+     "mp_before": 300,
+     "mp_cost": 150,
+     "notes": [
+      "流血3%×2"
+     ],
+     "raw": 900,
+     "round": 4,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "dmg": 46,
+     "dot": true,
+     "foe": "岩蛇",
+     "foe_hp_after": 484,
+     "hp_after": 740,
+     "index": 13,
+     "kind": "持续伤害",
+     "move": "持续伤害",
+     "mp_after": 150,
+     "notes": [
+      "流血3%=23",
+      "流血3%=23"
+     ],
+     "round": 4
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 422,
+     "crit": false,
+     "def_cut": 138,
+     "dmg": 284,
+     "foe": "岩蛇",
+     "foe_hp_after": 484,
+     "hp_after": 456,
+     "index": 14,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 150,
+     "round": 4,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 130,
+     "dmg": 769,
+     "foe": "岩蛇",
+     "foe_hp_after": 0,
+     "foe_hp_before": 484,
+     "heal_ratio": 0.0,
+     "hp_after": 456,
+     "hp_before": 456,
+     "index": 15,
+     "kind": "裂爪击",
+     "move": "裂爪击",
+     "mp_after": 0,
+     "mp_before": 150,
+     "mp_cost": 150,
+     "notes": [
+      "流血3%×2"
+     ],
+     "raw": 900,
+     "round": 5,
+     "skill": true,
+     "tier": "普通"
+    }
+   ],
+   "opponent": "岩蛇",
+   "player": {
+    "hp": 456,
+    "hp_max": 1200,
+    "lv": 5,
+    "mp": 0,
+    "mp_max": 750,
+    "name": "夹1",
+    "power": 3465
+   },
+   "rounds": 5,
+   "summary": {
+    "auto_pills": {
+     "hp": 0,
+     "mp": 0
+    },
+    "drops": [
+     [
+      "还魂妖果",
+      1
+     ],
+     [
+      "回气丹",
+      1
+     ]
+    ],
+    "end_reason": "kill",
+    "end_text": "击杀对手",
+    "enemies": [
+     "岩蛇"
+    ],
+    "enemy_count": 1,
+    "exhausted": false,
+    "exp": 194,
+    "extra": {},
+    "foe_hp_end": 0,
+    "foe_hp_max": 3721,
+    "fortune": false,
+    "gold": 199,
+    "hero_aid": null,
+    "hp_p": null,
+    "hp_v": null,
+    "taken": 744
+   },
+   "ts": 1795588481.6154573,
+   "version": 1,
+   "win": true
+  },
+  "qq": "780000001"
+ },
+ "fx_lv9": {
+  "battle": {
+   "kind": "遭遇",
+   "log": [
+    {
+     "crit": true,
+     "def_cut": 196,
+     "dmg": 1733,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 1988,
+     "foe_hp_before": 3721,
+     "heal_ratio": 0.0,
+     "hp_after": 1520,
+     "hp_before": 1520,
+     "index": 1,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 696,
+     "mp_before": 870,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 450,
+     "crit": false,
+     "def_cut": 160,
+     "dmg": 406,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 1988,
+     "hp_after": 1114,
+     "index": 2,
+     "kind": "兽击",
+     "monster_skill": "噬咬",
+     "monster_skill_tier": "normal",
+     "move": "兽击",
+     "mp_after": 696,
+     "notes": [
+      "噬咬！伤害×1.4"
+     ],
+     "round": 1,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 196,
+     "dmg": 1155,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 833,
+     "foe_hp_before": 1988,
+     "heal_ratio": 0.0,
+     "hp_after": 1114,
+     "hp_before": 1114,
+     "index": 3,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 522,
+     "mp_before": 696,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 2,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 299,
+     "crit": false,
+     "def_cut": 106,
+     "dmg": 193,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 833,
+     "hp_after": 921,
+     "index": 4,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 522,
+     "round": 2,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 196,
+     "dmg": 1155,
+     "foe": "嗜血鼠",
+     "foe_hp_after": 0,
+     "foe_hp_before": 833,
+     "heal_ratio": 0.0,
+     "hp_after": 921,
+     "hp_before": 921,
+     "index": 5,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 348,
+     "mp_before": 522,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 3,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "crit": false,
+     "def_cut": 196,
+     "dmg": 1155,
+     "foe": "岩蛇",
+     "foe_hp_after": 2379,
+     "foe_hp_before": 3534,
+     "heal_ratio": 0.0,
+     "hp_after": 1194,
+     "hp_before": 1194,
+     "index": 6,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 174,
+     "mp_before": 348,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 336,
+     "crit": false,
+     "def_cut": 119,
+     "dmg": 217,
+     "foe": "岩蛇",
+     "foe_hp_after": 2379,
+     "hp_after": 977,
+     "index": 7,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 174,
+     "round": 1,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 196,
+     "dmg": 1155,
+     "foe": "岩蛇",
+     "foe_hp_after": 1224,
+     "foe_hp_before": 2379,
+     "heal_ratio": 0.0,
+     "hp_after": 977,
+     "hp_before": 977,
+     "index": 8,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 0,
+     "mp_before": 174,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 2,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 375,
+     "crit": false,
+     "def_cut": 133,
+     "dmg": 242,
+     "foe": "岩蛇",
+     "foe_hp_after": 1224,
+     "hp_after": 735,
+     "index": 9,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 0,
+     "round": 2,
+     "taken": true
+    },
+    {
+     "crit": false,
+     "def_cut": 112,
+     "dmg": 662,
+     "foe": "岩蛇",
+     "foe_hp_after": 562,
+     "foe_hp_before": 1224,
+     "heal_ratio": 0.0,
+     "hp_after": 735,
+     "hp_before": 735,
+     "index": 10,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 0,
+     "mp_before": 0,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 3,
+     "skill": false,
+     "tier": ""
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 418,
+     "crit": false,
+     "def_cut": 148,
+     "dmg": 270,
+     "foe": "岩蛇",
+     "foe_hp_after": 562,
+     "hp_after": 465,
+     "index": 11,
+     "kind": "兽击",
+     "monster_skill": "毒液喷射",
+     "monster_skill_tier": "normal",
+     "move": "兽击",
+     "mp_after": 0,
+     "notes": [
+      "毒液喷射！中毒 21×2 回合"
+     ],
+     "round": 3,
+     "taken": true
+    },
+    {
+     "dmg": 0,
+     "foe": "岩蛇",
+     "fortune": true,
+     "hp_after": 465,
+     "index": 12,
+     "kind": "心火共鸣",
+     "move": "心火共鸣",
+     "mp_after": 0,
+     "notes": [
+      "气机顺畅，接下来 2 回合增伤减伤"
+     ],
+     "round": 3
+    },
+    {
+     "dmg": 21,
+     "dot": true,
+     "foe": "岩蛇",
+     "hp_after": 444,
+     "index": 13,
+     "kind": "中毒",
+     "move": "中毒",
+     "mp_after": 0,
+     "notes": [
+      "毒液喷射100%=21"
+     ],
+     "round": 4,
+     "taken": true
+    },
+    {
+     "amount": 200,
+     "auto": true,
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 644,
+     "index": 14,
+     "kind": "服药",
+     "move": "服药",
+     "mp_after": 0,
+     "pill": "回春散",
+     "round": 4
+    },
+    {
+     "crit": false,
+     "def_cut": 112,
+     "dmg": 860,
+     "foe": "岩蛇",
+     "foe_hp_after": 0,
+     "foe_hp_before": 562,
+     "fortune": true,
+     "heal_ratio": 0.0,
+     "hp_after": 644,
+     "hp_before": 465,
+     "index": 15,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 0,
+     "mp_before": 0,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 4,
+     "skill": false,
+     "tier": ""
+    },
+    {
+     "amount": 300,
+     "auto": true,
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 917,
+     "index": 16,
+     "kind": "服药",
+     "move": "服药",
+     "mp_after": 300,
+     "pill": "回气丹",
+     "round": 1
+    },
+    {
+     "crit": false,
+     "def_cut": 196,
+     "dmg": 1155,
+     "foe": "岩蛇",
+     "foe_hp_after": 2193,
+     "foe_hp_before": 3348,
+     "heal_ratio": 0.0,
+     "hp_after": 917,
+     "hp_before": 917,
+     "index": 17,
+     "kind": "爆步",
+     "move": "爆步",
+     "mp_after": 126,
+     "mp_before": 0,
+     "mp_cost": 174,
+     "notes": [
+      "闪避20%"
+     ],
+     "raw": 1352,
+     "round": 1,
+     "skill": true,
+     "tier": "普通"
+    },
+    {
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 917,
+     "index": 18,
+     "kind": "闪避",
+     "miss": true,
+     "move": "闪避",
+     "mp_after": 126,
+     "round": 1
+    },
+    {
+     "crit": false,
+     "def_cut": 112,
+     "dmg": 662,
+     "foe": "岩蛇",
+     "foe_hp_after": 1531,
+     "foe_hp_before": 2193,
+     "heal_ratio": 0.0,
+     "hp_after": 917,
+     "hp_before": 917,
+     "index": 19,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 126,
+     "mp_before": 126,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 2,
+     "skill": false,
+     "tier": ""
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 313,
+     "crit": false,
+     "def_cut": 111,
+     "dmg": 202,
+     "foe": "岩蛇",
+     "foe_hp_after": 1531,
+     "hp_after": 715,
+     "index": 20,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 126,
+     "round": 2,
+     "taken": true
+    },
+    {
+     "dmg": 0,
+     "foe": "岩蛇",
+     "fortune": true,
+     "hp_after": 715,
+     "index": 21,
+     "kind": "心火共鸣",
+     "move": "心火共鸣",
+     "mp_after": 126,
+     "notes": [
+      "气机顺畅，接下来 1 回合增伤减伤"
+     ],
+     "round": 2
+    },
+    {
+     "crit": false,
+     "def_cut": 112,
+     "dmg": 860,
+     "foe": "岩蛇",
+     "foe_hp_after": 671,
+     "foe_hp_before": 1531,
+     "fortune": true,
+     "heal_ratio": 0.0,
+     "hp_after": 715,
+     "hp_before": 715,
+     "index": 22,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 126,
+     "mp_before": 126,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 3,
+     "skill": false,
+     "tier": ""
+    },
+    {
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 715,
+     "index": 23,
+     "kind": "闪避",
+     "miss": true,
+     "move": "闪避",
+     "mp_after": 126,
+     "round": 3
+    },
+    {
+     "crit": false,
+     "def_cut": 112,
+     "dmg": 662,
+     "foe": "岩蛇",
+     "foe_hp_after": 9,
+     "foe_hp_before": 671,
+     "heal_ratio": 0.0,
+     "hp_after": 715,
+     "hp_before": 715,
+     "index": 24,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 126,
+     "mp_before": 126,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 4,
+     "skill": false,
+     "tier": ""
+    },
+    {
+     "absorbed": 0,
+     "atk_debuff": 0,
+     "atk_raw": 331,
+     "crit": false,
+     "def_cut": 117,
+     "dmg": 214,
+     "foe": "岩蛇",
+     "foe_hp_after": 9,
+     "hp_after": 501,
+     "index": 25,
+     "kind": "兽击",
+     "move": "兽击",
+     "mp_after": 126,
+     "round": 4,
+     "taken": true
+    },
+    {
+     "amount": 1019,
+     "auto": true,
+     "dmg": 0,
+     "foe": "岩蛇",
+     "hp_after": 1520,
+     "index": 26,
+     "kind": "服药",
+     "move": "服药",
+     "mp_after": 126,
+     "pill": "回灵丹",
+     "round": 5
+    },
+    {
+     "crit": true,
+     "def_cut": 112,
+     "dmg": 993,
+     "foe": "岩蛇",
+     "foe_hp_after": 0,
+     "foe_hp_before": 9,
+     "heal_ratio": 0.0,
+     "hp_after": 1520,
+     "hp_before": 501,
+     "index": 27,
+     "kind": "普攻",
+     "move": "普攻",
+     "mp_after": 126,
+     "mp_before": 126,
+     "mp_cost": 0,
+     "notes": [],
+     "raw": 775,
+     "round": 5,
+     "skill": false,
+     "tier": ""
+    }
+   ],
+   "opponent": "嗜血鼠、岩蛇、岩蛇",
+   "player": {
+    "hp": 1520,
+    "hp_max": 1520,
+    "lv": 9,
+    "mp": 126,
+    "mp_max": 870,
+    "name": "夹2",
+    "power": 3993
+   },
+   "rounds": 12,
+   "summary": {
+    "auto_pills": {
+     "hp": 2,
+     "mp": 1
+    },
+    "drops": [
+     [
+      "炎星石",
+      2
+     ],
+     [
+      "回春散",
+      1
+     ],
+     [
+      "火属性药材",
+      2
+     ],
+     [
+      "回气丹",
+      1
+     ]
+    ],
+    "end_reason": "kill",
+    "end_text": "击杀对手",
+    "enemies": [
+     "嗜血鼠",
+     "岩蛇",
+     "岩蛇"
+    ],
+    "enemy_count": 3,
+    "exhausted": false,
+    "exp": 232,
+    "extra": {},
+    "foe_hp_end": 0,
+    "foe_hp_max": 3348,
+    "fortune": true,
+    "gold": 554,
+    "hero_aid": null,
+    "hp_p": null,
+    "hp_v": null,
+    "taken": 1765
+   },
+   "ts": 1795588481.8232522,
+   "version": 1,
+   "win": true
+  },
+  "qq": "780000002"
+ }
+}

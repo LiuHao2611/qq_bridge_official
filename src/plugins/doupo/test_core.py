@@ -491,8 +491,29 @@ def test_main_task_flow():
     p = _p(1)
     m = core.current_main(p)
     core.main_progress(p, m["kind"], m["target"])
+    # 2026-11-25 章节门槛（用户拍板 G1=A）：交任务须达到本章境界上限。
+    # 该门槛是**新增预期行为**，故这里先「练够」再交；下面的反证用例守「不够必须挡」。
+    if m.get("require_lv"):
+        p["lv"] = int(m["require_lv"])
     res = core.main_submit(p)
     assert res["ok"] and p["main_idx"] == 1
+    # 章节与任务同笔推进：story_chapter 必须跟着 main_idx 走（不许分两笔）
+    assert int(p["story_chapter"]) == int(p["main_idx"]) + 1
+
+
+def test_main_submit_blocked_by_lv():
+    """反证：等级不到 require_lv 时主线必须被挡，且**不改任何存档字段**。"""
+    p = _p(1)
+    m = core.current_main(p)
+    core.main_progress(p, m["kind"], m["target"])
+    need = int(m.get("require_lv") or 0)
+    assert need > 1, "第 1 章 require_lv 应 > 1（否则本条反证无意义）"
+    before = (int(p["main_idx"]), int(p["gold"]), int(p["exp"]), int(p["story_chapter"]))
+    res = core.main_submit(p)
+    assert res["ok"] is False and res["reason"] == "lv", res
+    assert int(p["main_idx"]) == before[0], "被挡时绝不推进 main_idx"
+    assert int(p["gold"]) == before[1] and int(p["exp"]) == before[2], "被挡时绝不发奖"
+    assert int(p["story_chapter"]) == before[3], "被挡时绝不推进章节"
 
 
 # ---------------------------------------------------------------------------

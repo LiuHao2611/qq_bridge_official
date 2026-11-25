@@ -120,6 +120,13 @@ def create_player(qq, name, group) -> dict:
         # 切磋只动这两个字段，绝不扣 hp/gold/exp。
         "duel_wins": 0, "duel_losses": 0,
         "main_idx": 0, "task": None,
+        # 2026-11-25 剧情章节（用户拍板 G1=A / G2=怪等级按章节走）：
+        # 第 1 章开通的是「乌坦城·萧家后山」。**唯一写入点**是 main_submit，
+        # 与 main_idx 同笔推进（story_chapter = main_idx + 1）。
+        # 老档没有这个字段 → 读侧一律 `ensure_story_chapter()` 显式判空补
+        # `main_idx + 1`（夹在 [1, CHAPTER_COUNT]），禁止用 `p.get(...) or 1`
+        # （合法 0 会被吞成 1 并改写存档）。
+        "story_chapter": 1,
         "diyan": False,
     }
     st["hp"] = stats(st)["体力"]
@@ -150,6 +157,118 @@ def create_player(qq, name, group) -> dict:
     except Exception:
         pass
     return st
+
+
+# ---------------------------------------------------------------------------
+# 剧情章节门禁（2026-11-25 用户拍板 Q1=A / G2=「怪等级按章节走」）
+#
+# 三层职责严格分开，禁止互相兜底：
+#   1. `ensure_story_chapter` —— 读侧迁移（老档没有字段时显式判空补）；
+#   2. `chapter_pool`         —— 章 → 可遇怪池（已开通章并集，硬锁，池空必抛）；
+#   3. `_monster_lv_for`      —— 怪等级 = min(玩家等级, 该怪所属章的基准等级)，
+#                                只能把怪压**低**（护章初新手），永远抬不**高**。
+# ---------------------------------------------------------------------------
+def ensure_story_chapter(p: dict) -> int:
+    """读玩家当前剧情章；老档缺字段时按 `main_idx` 补一次并写回。
+
+    🚨 必须 `is None` 显式判空，**禁止 `p.get(...) or 1`**：0 是合法输入
+    （历史/脏档：尚未开通任何区域），`or` 会把它吞成 1 **并改写存档**，
+    同时让下面的迁移分支变成永不可达的死代码。
+    补值口径与 `main_submit` 的写入口径一致：`story_chapter = main_idx + 1`，
+    并夹在 `[1, CHAPTER_COUNT]` 内（老档 main_idx 越界时不至于指向不存在的章）。
+    """
+    v = p.get("story_chapter")
+    if v is None:
+        v = int(p.get("main_idx", 0) or 0) + 1
+        v = max(1, min(cfg.CHAPTER_COUNT, v))
+        p["story_chapter"] = v
+    return max(1, min(cfg.CHAPTER_COUNT, int(v)))
+
+
+def chapter_pool(ch: int) -> list[dict]:
+    """已开通章（1..ch）的怪种并集，返回 `cfg.MONSTERS` 里的 species dict（保序去重）。
+
+    🚨 硬锁核心：**只含已开通章的怪**，绝不因为「池子太小」回落去抽未开通章的怪。
+    池空说明 `CHAPTER_SPECIES` 配错，直接抛 `ValueError` 上抛——绝不静默降级
+    （降级会让玩家在第 1 章遇到魂灭生，比报错更难查）。
+    """
+    ch = max(1, min(cfg.CHAPTER_COUNT, int(ch)))
+    names: list[str] = []
+    for c in range(1, ch + 1):
+        for nm in cfg.CHAPTER_SPECIES.get(c, ()):
+            if nm not in names:
+                names.append(nm)
+    by_name = {str(m["name"]): m for m in cfg.MONSTERS}
+    out = [by_name[nm] for nm in names if nm in by_name]
+    if not out:
+        raise ValueError(
+            "章节 %d 的可遇怪池为空：CHAPTER_SPECIES 前 %d 章没有任何命中 MONSTERS 的怪名"
+            % (ch, ch))
+    return out
+
+
+def chapter_of_species(name: str) -> int | None:
+    """物种名 → 它所属的章（`CHAPTER_SPECIES` 的逆）；不在任何章返回 None。
+
+    同一物种若被多章引用，取**最小章号**（最先开通它的章）——怪等级以最先
+    能遇到它的那一章为准，高章再引用不会把它悄悄抬强。
+    """
+    nm = str(name)
+    for c in sorted(cfg.CHAPTER_SPECIES):
+        if nm in cfg.CHAPTER_SPECIES[c]:
+            return int(c)
+    return None
+
+
+def _monster_lv_for(p: dict, spec: dict, chapter: int | None) -> int | None:
+    """章节门禁下这只怪的实例等级 = ``min(玩家等级, 该怪所属章的基准等级)``。
+
+    用户 2026-11-25 拍板 G2：「取消玩家等级抬高怪等级，怪等级按章节走」。
+    落地口径取**上限封顶**，各方向严格如下：
+
+    * **封顶（这才是「取消抬高」）**：玩家等级**不能**把怪抬到章节基准之上。
+      lv40 回第 1 章，怪仍是 lv5（`chapter_base_lv(1)=5`），经验按 lv5 给
+      （实测 215/场），而 lv40 升级要 71111 —— 刷低章怪收益 0.30%，逼推主线。
+    * **托底（保护章初）**：玩家等级低于章节基准时，怪降到玩家等级。
+      lv1 新号在第 1 章遇到 lv1 的怪（而不是 lv5）—— 实测固定 lv5 时
+      lv1 胜率只有 12%（劝退），托底后 39%（旧口径 35%，不是变难而是不再必死）。
+    * **章内不变**：玩家一旦达到章节基准，怪等级就完全由章节决定，不再随玩家变。
+
+    实测（ch1、1~5 敌随机、无丹、每格 120 场，胜率/均修为）：
+    lv1 39%/8、lv5 40%/133、lv9 73%/188、lv40 100%/215。
+    三方案对照（设计文档 §10.1）：A 固定中点不托底 lv1 只有 12%；
+    C 只钳到玩家等级 lv40 能拿 2648/场（刷低章暴利，等于没惩罚）。
+
+    :param chapter: 玩家当前章；None（非门禁调用）→ 返回 None，走旧口径。
+    """
+    if chapter is None:
+        return None
+    ch = chapter_of_species(spec.get("name")) or int(chapter)
+    return min(int(p.get("lv", 1)), cfg.chapter_base_lv(ch))
+
+
+#: 章节基准玩家的缓存（等级 → 裸装档）。只读，绝不写回任何真实玩家。
+_BASELINE_CACHE: dict[int, dict] = {}
+
+
+def _baseline_at(lv: int) -> dict:
+    """构造「该等级的标准新号」，只用于按章节等级反解怪物数值。
+
+    与 `create_player` 同源（同一套基础属性/默认武器/无增益、无火、无宗门加成），
+    因此「第 N 章的怪有多强」= 「裸装练到该等级的新号打它要几回合」，与具体玩家
+    的装备/异火/宗门无关 —— 这是「怪等级按章节走」不被玩家强度污染的前提。
+
+    缓存：同一等级的基准档只构造一次（`stats` 只读它，不会写回）。
+    """
+    lv = max(1, min(cfg.MAX_LV, int(lv)))
+    b = _BASELINE_CACHE.get(lv)
+    if b is None:
+        b = create_player("__baseline__", "__baseline__", "")
+        b["lv"] = lv
+        b["hp"] = stats(b)["体力"]
+        b["mp"] = mp_max(b)
+        _BASELINE_CACHE[lv] = b
+    return b
 
 
 # ---------------------------------------------------------------------------
@@ -282,23 +401,28 @@ def encounter_exp_divisor(lv: int) -> float:
     return base * (1.0 + ramp * (clamped - 1) / float(span))
 
 
-def encounter_exp_budget(p: dict, enemy_count: int) -> int:
+def encounter_exp_budget(p: dict, enemy_count: int, base_lv: int | None = None) -> int:
     """整场遭遇战的修为总预算（2026-11-22 v0.2 + 2026-11-23 前快后慢，唯一真源）。
 
     一场战斗的回报由「这场打几只怪」改成「这场战斗本身」：
-        budget = exp_need(玩家lv) / K(lv) × 异火倍率 × (1 + min(CAP, STEP×(敌数-1)))
+        budget = exp_need(基准lv) / K(基准lv) × 异火倍率 × (1 + min(CAP, STEP×(敌数-1)))
     多敌只给有限补偿（每多 1 敌 +10%，封顶 +40%），不再逐敌线性累加。
     ``enemy_count`` 是**整场抽取的敌数**（encounter 开场已知），故预算在战斗中固定；
     实际发放按「已击败份额 = budget / enemy_count × 已胜敌数」，中途战败不补发。
 
+    :param base_lv: 预算基准等级（2026-11-25 章节门禁）。给定 → 按**怪等级**算，
+        不再按玩家等级；玩家 lv50 回第 1 章打 lv9 的怪，拿的就是 lv9 的预算
+        （这正是「练级不推主线」的惩罚）。None → 旧口径（按玩家等级）。
+
     K(lv) / STEP / CAP 全部来自 config（K(lv) 经 encounter_exp_divisor），
     本函数不重复定义（单一真源）。
     """
-    lv = int(p.get("lv", 1))
+    lv = int(p.get("lv", 1)) if base_lv is None else int(base_lv)
     need = cfg.exp_need(lv)
     n = max(1, int(enemy_count))
     hard = min(float(cfg.ENCOUNTER_EXP_HARD_CAP),
                float(cfg.ENCOUNTER_EXP_HARD_STEP) * (n - 1))
+    # 异火倍率仍是**玩家**的加成（火是玩家资产，不该因怪等级低就失效）。
     budget = int(need / encounter_exp_divisor(lv)
                  * flame_exp_mult(p) * (1.0 + hard))
     return max(0, budget)
@@ -857,7 +981,7 @@ def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
     }
 
 
-def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
+def monster_scaled(p, mon, puppet_bonus: float = 0.0, at_lv=None) -> dict:
     """把"物种"实例化成一只同阶怪。
 
     为什么不写死数值：玩家每 9 级 c_stat 有一次 阶² 的平方级跃升，
@@ -865,7 +989,16 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0) -> dict:
 
     血量：反解"玩家刚好在 TTK_PLAYER 回合斩杀"对应的累计伤害。
     攻击：反解"怪刚好在 TTK_PLAYER × MON_ROUND_RATIO 回合斩杀玩家"的单击值。
+
+    :param at_lv: 把怪实例化到**指定等级**（2026-11-25 章节门禁用）。
+        给定时不看真实玩家，改用 ``_baseline_at(at_lv)``（该等级的裸装新号）反解，
+        并把实例的 ``lv`` 就地改成该等级 —— 玩家再强也抬不动低章怪的数值。
+        None（默认）→ 沿用旧口径（按玩家等级反解），爬塔/周本/切磋/突破逐字节不变。
     """
+    if at_lv is not None:
+        _lv_at = max(1, min(cfg.MAX_LV, int(at_lv)))
+        p = _baseline_at(_lv_at)
+        mon = dict(mon, lv=_lv_at)   # 复制：绝不改 cfg.MONSTERS 里的物种真源
     st = stats(p)
     lv = int(p.get("lv", 1))
     # 等级差只微调"几回合打完"，上下限收紧到 ±20%（原 ±60%/+80%）：
@@ -1322,19 +1455,29 @@ def roll_encounter_count(p, rng=random.random) -> int:
     return max(lo, min(hi, n))
 
 
-def pick_encounter(p, n, rng=random.random) -> list[dict]:
+def pick_encounter(p, n, rng=random.random, chapter=None) -> list[dict]:
     """抽 n 个敌人 species：优先与玩家同档，且尽量跨类型（魔兽/悍匪/反派）。
 
     复用 pick_monster 的"同大境界窗口"口径保证不会出现越级秒杀；
     再去重 + 跨 kind，让一场遭遇读起来像"魔兽 + 山贼"而不是 5 只同种鼠。
+
+    :param chapter: 剧情章号（2026-11-25 章节门禁）。给定 → **只从已开通章
+        （1..chapter）的怪种并集里抽**，且**不做等级窗口筛选/截断**：
+        全池等概率，高章怪才抽得到，低章怪也仍能遇到（收益低）。
+        None（默认）→ 沿用旧的「按等级贴近」口径；爬塔/周本/切磋/突破等
+        既有调用不传该参数，行为逐字节不变。
     """
     n = max(1, int(n))
     lv = int(p.get("lv", 1))
-    window = [m for m in cfg.MONSTERS if abs(int(m["lv"]) - lv) <= cfg.LV_PER_REALM]
-    pool = window or cfg.MONSTERS
-    # 等级贴近度排序后取一个稍大的候选池（同档至少 6 只），再随机抽
-    cand = sorted(pool, key=lambda m: abs(int(m["lv"]) - lv))
-    cand = cand[:max(n * 2, 6)]
+    if chapter is not None:
+        # 硬锁：池子只含已开通章的怪；池空由 chapter_pool 抛错，绝不回落全表。
+        cand = list(chapter_pool(chapter))
+    else:
+        window = [m for m in cfg.MONSTERS if abs(int(m["lv"]) - lv) <= cfg.LV_PER_REALM]
+        pool = window or cfg.MONSTERS
+        # 等级贴近度排序后取一个稍大的候选池（同档至少 6 只），再随机抽
+        cand = sorted(pool, key=lambda m: abs(int(m["lv"]) - lv))
+        cand = cand[:max(n * 2, 6)]
     out: list[dict] = []
     used: set[str] = set()
     # 第一轮：每个 kind 先拿一只，保证类型多样
@@ -1361,7 +1504,8 @@ def pick_encounter(p, n, rng=random.random) -> list[dict]:
 
 
 def encounter(p, rng=random.random, locked=None, auto_pill=True,
-              puppet=None, formation_n=0, puppet_flame_mult=1.0) -> dict:
+              puppet=None, formation_n=0, puppet_flame_mult=1.0,
+              chapter=None) -> dict:
     """一场遭遇战：连续打 1~5 个敌人，逐个调用 ``fight``（单敌内核零改动）。
 
     设计要点（守既有纪律）：
@@ -1382,16 +1526,26 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     傀儡是常驻打手，不是一次性外援。怪血反解与实战出手用**同一个 p 与同一个
     ``puppet_expected_damage``**（红线），不会出现「带傀儡怪血变厚却不见它出手」。
     """
-    specs = pick_encounter(p, roll_encounter_count(p, rng), rng)
+    # 2026-11-25 章节门禁（用户拍板 Q1=A / G2=怪等级按章节走）：
+    # chapter 给定 → 只抽已开通章的怪（硬锁），且每只怪实例化到
+    # min(玩家等级, 该怪所属章的基准等级)；None → 走旧口径，逐字节不变。
+    specs = pick_encounter(p, roll_encounter_count(p, rng), rng, chapter=chapter)
     st = stats(p)
     fade = max(0.0, float(cfg.ENCOUNTER_FADE))
     heal = max(0.0, float(cfg.ENCOUNTER_REST_HEAL))
+    # 同一场可能混章：lv40 玩家在第 3 章，既会遇到 ch1 的 lv5 嗜血鼠，
+    # 也会遇到 ch3 的 lv23 怪 —— 逐敌按**自己所属章**定级，不按玩家当前章。
+    _mon_lvs = [_monster_lv_for(p, sp, chapter) for sp in specs]
+    # 整场预算的基准等级：多敌混章时取均值（逐敌分别发会破坏
+    # encounter_exp_share「Σ份额=预算」的整除性质，收益差 <1%）。
+    _budget_lv = (int(round(sum(_mon_lvs) / len(_mon_lvs)))
+                  if chapter is not None and _mon_lvs else None)
 
     # 2026-11-22 经验平衡 v0.2：整场修为预算开场一次算定（敌数已知），
     # 按「已击败份额」逐敌发放；中途战败只发已胜份额，不补发。
     # 公式唯一真源 = encounter_exp_budget / encounter_exp_share。
     _n_enemies = len(specs)
-    _exp_budget = encounter_exp_budget(p, _n_enemies)
+    _exp_budget = encounter_exp_budget(p, _n_enemies, base_lv=_budget_lv)
     _exp_base, _exp_rem = divmod(_exp_budget, _n_enemies)  # 余量给首敌，Σ恰等于预算
 
     # 傀儡每回合期望输出：整场算一次（p / puppet / 异火倍率都不变），
@@ -1421,7 +1575,8 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     pill_budget = {"hp": 0, "mp": 0,
                    "cap": min(6, int(cfg.AUTO_PILL_MAX_PER_FIGHT) * max(1, len(specs)))}
     for i, spec in enumerate(specs):
-        mon = dict(monster_scaled(p, spec, puppet_bonus=_pu_bonus))
+        mon = dict(monster_scaled(p, spec, puppet_bonus=_pu_bonus,
+                                  at_lv=_mon_lvs[i]))
         # 连战第 i 敌削弱（首敌不削），只缩放 hp/atk，def 与产出不动
         scale = max(0.8, 1.0 - i * fade)
         if i:
@@ -3215,13 +3370,25 @@ def main_submit(p) -> dict:
     if main_value(p) < int(t["target"]):
         return {"ok": False, "reason": "unfinished", "task": t,
                 "progress": main_value(p)}
+    # 2026-11-25 用户拍板 G1=A：章节推进要求等级到位（`require_lv` = 本章区间上限）。
+    # 为什么需要：主线任务本身很轻（杀 3 只 / 采 5 株），lv1 也能做完；若直接放行，
+    # 玩家会带着 lv1 进第 2 章打 lv10 的怪（必死）。等级门槛把「练够」写成硬条件，
+    # 与「低章怪经验被钳制」一起构成「必须推主线才能变强、必须练够才能推主线」闭环。
+    _need_lv = int(t.get("require_lv") or 0)
+    if _need_lv and int(p.get("lv", 1)) < _need_lv:
+        return {"ok": False, "reason": "lv", "task": t, "need_lv": _need_lv,
+                "lv": int(p.get("lv", 1))}
     rw = t["reward"]
     p["gold"] = int(p.get("gold", 0)) + int(rw.get("gold", 0))
     p["exp"] = int(p.get("exp", 0)) + int(rw.get("exp", 0))
     p["luck"] = min(9999, int(p.get("luck", 0)) + int(rw.get("luck", 0)))
     p["main_idx"] = int(p.get("main_idx", 0)) + 1
+    # 章节与任务**同一笔**推进：绝不出现「给了奖励没推章」或反之。
+    # 口径唯一：story_chapter = main_idx + 1（夹在合法章号内）。
+    p["story_chapter"] = max(1, min(cfg.CHAPTER_COUNT, int(p["main_idx"]) + 1))
     p["main_progress"] = 0
-    return {"ok": True, "task": t, "reward": rw, "next": current_main(p)}
+    return {"ok": True, "task": t, "reward": rw, "next": current_main(p),
+            "story_chapter": int(p["story_chapter"])}
 
 
 # ---------------------------------------------------------------------------

@@ -107,6 +107,25 @@ def tiandi_fail_plain(rate: int) -> str:
 # 二、遭遇 / 战斗播报
 # ---------------------------------------------------------------------------
 
+def chapter_line(ch: int, region: str, lv_lo: int, lv_hi: int = 0) -> str:
+    """战斗首行上方的章节坐标行（2026-11-25 章节门禁）。
+
+    为什么必须露出来：怪等级改成「按章节走」之后，同一个人在不同章遇到的怪
+    强度差异很大（第 1 章 lv5、第 8 章 lv68）；不写清楚，玩家会以为是随机难度。
+    ``lv_lo``/``lv_hi`` 取本场实际敌人的等级区间（0 表示只有一档 → 只显示单值）。
+    """
+    lo = int(lv_lo or 0)
+    hi = int(lv_hi or 0)
+    if hi and hi != lo:
+        lv = "lv%d-%d" % (lo, hi)
+    elif lo:
+        lv = "lv%d" % lo
+    else:
+        lv = ""
+    tail = ("　妖物 %s" % lv) if lv else ""
+    return "📍 第 %d 章 · %s%s" % (int(ch), region or "未知之地", tail)
+
+
 def encounter_head(n: int, foes: str, rounds: int, win: bool, killed: int) -> str:
     """战斗首行。保留「遭遇」锚点，补一句临场感。"""
     verdict = "大捷" if win else f"力竭·斩{killed}/{n}"
