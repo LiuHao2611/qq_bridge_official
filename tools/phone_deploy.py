@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +45,11 @@ ROOT = Path(__file__).resolve().parents[1]
 HOST = "pmos@192.168.0.50"
 REMOTE_ROOT = "/home/pmos/qq_bridge"
 TMP = "/tmp/push"
+
+
+def _stage_path(rel: str) -> str:
+    """临时区路径：保留相对目录（防同名文件互踩，见 push 里的 2026-11-25 事故）。"""
+    return f"{TMP}/{rel}"
 SERVICE = "qq-bridge"
 
 #: drift 只审计生产运行时代码目录（tools/ 是电脑侧开发脚本，不上手机）
@@ -206,8 +212,17 @@ def cmd_push(files: list[str], grep: str | None, no_restart: bool) -> int:
     ssh(f"mkdir -p {TMP}")
 
     # 传到临时区（单文件 scp，WiFi 瞬时；大文件用户应自己走 USB，这里只 push 少量源码）
+    #
+    # 🚨 2026-11-25 事故：早先所有文件都平铺到 {TMP}/，而本仓库里同名文件不止一组
+    #    （src/plugins/doupo/__init__.py 与 src/plugins/qq_bridge/pic/__init__.py）。
+    #    后传的把先传的覆盖掉，L3 报「md5 不一致 / 传输被破坏」，白折腾一轮。
+    #    现在按相对路径落临时区，同名文件互不干扰。
     for f in files:
-        cp = run_local(["scp", "-q", str(ROOT / f), f"{HOST}:{TMP}/"])
+        st = _stage_path(f)
+        # ⚠️ 必须用 os.path.dirname 而不是 Path(...).parent：Windows 上后者会给出
+        # 反斜杠路径，ssh 到 busybox 就成了 `mkdir -p \tmp\push\...`（建出怪文件）。
+        ssh(f"mkdir -p {os.path.dirname(st)}")
+        cp = run_local(["scp", "-q", str(ROOT / f), f"{HOST}:{st}"])
         if cp.returncode != 0:
             raise GateFail(f"scp 失败: {f}: {cp.stderr.strip()[:200]}")
     print(f"[L2] 已传 {len(files)} 个文件到手机临时区")
@@ -225,7 +240,7 @@ def cmd_push(files: list[str], grep: str | None, no_restart: bool) -> int:
         cmd = (
             f"mkdir -p $(dirname {dst}); "
             f"[ -f {dst} ] && cp -p {dst} \"{bk}\"; "
-            f"cat {TMP}/{Path(f).name} > {dst}"
+            f"cat {_stage_path(f)} > {dst}"
         )
         cp = ssh(cmd)
         if cp.returncode != 0:
