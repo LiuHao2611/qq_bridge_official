@@ -2181,6 +2181,25 @@ async def _handle(bot: Bot, event: MessageEvent) -> None:
         if cmd.lower() in ("下发计划", "下发", "runplan", "dispatch"):
             await _handle_dispatch_plan(bot, event, arg)
             return
+        # 🚨 2026-11-25「帮助」双回包（只补 msg_seq 治不了本，必须收敛出口）：
+        # 本模块 priority=5 且 block=False，**全量接消息**；「帮助」在斗破/修仙模式下
+        # 与各自插件的 helper(priority=5, block=True) 同时命中 → 两边各发一次、都用
+        # seq=1 → 后到的被平台 40054005 去重拒收，失败那侧还抛 running failed
+        # （生产日志 00:24:30 实证）。口径：玩家已进入某游戏模式时，该模式的「帮助」
+        # 归它自己，本模块让位。
+        # 注意**只让「帮助」**：斗破/修仙只注册了「斗破菜单/修仙菜单」，没接「菜单」，
+        # 若把「菜单/功能/工具」一并让位，玩家发「菜单」会两头都不回。
+        if cmd == "帮助" and not arg:
+            try:
+                from src.game_compat import view as _view  # noqa: PLC0415
+                from src.game_mode import get_mode as _get_mode  # noqa: PLC0415
+
+                _mode = await _get_mode(str(_view(event).user_id))
+            except Exception:  # noqa: BLE001 — 判不出模式就不让位，行为回到现状
+                _mode = None
+            if _mode in ("doupo", "xiuxian"):
+                _flog.info(_jlog("gt_help_yield_to_game", mode=_mode))
+                return
         reply = await dispatch(cmd, arg, _sk(event))
     except Exception as e:  # noqa: BLE001 — 工具是旁路，绝不拖垮消息循环
         logger.error(f"game_tools_error cmd={cmd} error={type(e).__name__}: {e}")

@@ -83,6 +83,11 @@ class FakeSegment:
         return ("text", content)
 
     @staticmethod
+    def markdown(content: str):
+        # 2026-11-25：官方纯文本改走 markdown(msg_type=2)，假段必须支持
+        return ("markdown", content)
+
+    @staticmethod
     def mention_user(openid: str, username: str | None = None):
         return ("mention_user", openid)
 
@@ -94,6 +99,11 @@ class FakeSegment:
     @staticmethod
     def file_video(data, file_name: str | None = None):
         return ("file_video", file_name, len(data))
+
+    @staticmethod
+    def keyboard(model):
+        # 2026-11-25 第四轮：纯文本也要挂键盘（与卡片同形才到得了）
+        return ("keyboard", model)
 
 
 class FakeBot(FakeQQBot):
@@ -214,6 +224,144 @@ def test_send_group_uses_send_to_group(patched):
     assert msg_id == "msg-2" and msg_seq == 1          # 被动回复引用
     assert ("mention_user", "member-openid-1") in msg   # at_user
     assert ("text", "你好") in msg
+
+
+def test_plain_text_uses_markdown_not_text(patched):
+    """🔴 2026-11-25 回归（用户「我上阵斗技和学习斗技都没反应」）。
+
+    官方群机器人 ``msg_type=0`` 纯文本**平台接受（200 + 回 msg_id）但客户端不下发**：
+    日志只有 ``official_sent kind=text``，没有 ``channel_send_failed``，用户端一片空白。
+    同一机器人 ``msg_type=2`` markdown 的卡片每次都到 → 普通文本（不带 @）必须发
+    markdown 段，否则等于静默丢消息。带 @ 的场景仍用 text 段（markdown 的 @ 语法
+    与适配器 mention 段不通用）。
+    """
+    bot = FakeBot()
+    patched["bot"] = bot
+    ctx = _ctx_of(FakeGroupAtEvent())
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    # 1) 普通文本（绝大多数口令回包）：必须是 markdown
+    asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="当前上阵：风灵分形剑[三阶]")))
+    msg = bot.calls[-1][2]
+    assert ("markdown", "当前上阵：风灵分形剑[三阶]") in msg, \
+        "纯文本必须走 markdown（msg_type=0 在官方群聊不下发），实际段：%r" % (msg,)
+    assert not any(seg[0] == "text" for seg in msg if isinstance(seg, tuple)), \
+        "不得再混入 text 段（会让整条退化成 msg_type=0）"
+
+    # 2) 带 @ 的文本：保持 mention + text（老行为）
+    asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="你好", at_user=True)))
+    msg2 = bot.calls[-1][2]
+    assert ("mention_user", "member-openid-1") in msg2 and ("text", "你好") in msg2
+
+
+def test_plain_text_carries_keyboard_from_fallback(patched):
+    """🔴 2026-11-25 第四轮回归（用户「发上阵 11 14 没反应」）。
+
+    01:34:53 / 01:35:02 两条**纯 markdown（无键盘）**平台照样 200 + 回 msg_id，
+    用户端依旧空白；而同批次 01:35:22 的卡片（markdown+keyboard）正常到达。
+    ⇒ 「卡片到、文本不到」的分界是 **有没有 keyboard**。
+    故文本段必须能按 ``ctx["kb_fallback"]`` 挂上键盘，且**同一条消息**先 markdown 后
+    keyboard（分两条发会退化成独立 keyboard 段，平台 40034011）。
+    """
+    from src.plugins.qq_bridge.channel import qq_keyboard
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    seen: list = []
+    orig = qq_keyboard.make_keyboard
+
+    class _B:
+        label = "斗破菜单"
+
+    def _fake_mk(cmd):
+        seen.append(cmd)
+        return ("KB-MODEL", [_B()])
+
+    qq_keyboard.make_keyboard = _fake_mk
+    try:
+        bot = FakeBot()
+        patched["bot"] = bot
+        ctx = _ctx_of(FakeGroupEvent())
+        ctx["kb_fallback"] = "doupo:menu"
+        asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="还没领悟：帝印决")))
+        msg = bot.calls[-1][2]
+    finally:
+        qq_keyboard.make_keyboard = orig
+
+    assert seen == ["doupo:menu"], "必须用 ctx 给的兜底口令建键盘，实际 %r" % seen
+    kinds = [seg[0] for seg in msg if isinstance(seg, tuple)]
+    assert kinds == ["markdown", "keyboard"], \
+        "文本必须一条消息内「markdown 后 keyboard」，实际 %r" % (kinds,)
+
+
+def test_plain_text_without_fallback_stays_markdown_only(patched):
+    """没有兜底口令时不得凭空造键盘（避免给 warframe/私聊塞游戏按钮）。"""
+    bot = FakeBot()
+    patched["bot"] = bot
+    ctx = _ctx_of(FakeGroupEvent())
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="纯文字")))
+    msg = bot.calls[-1][2]
+    kinds = [seg[0] for seg in msg if isinstance(seg, tuple)]
+    assert kinds == ["markdown"], "无兜底时只发 markdown，实际 %r" % (kinds,)
+
+
+def test_text_without_button_table_uses_single_button_fallback(patched):
+    """🔴 修仙这类**没有按钮表**的模式：造单按钮兜底键盘，别退回裸 markdown。
+
+    `xiuxian:menu` 实测返回空 → `make_keyboard` 返 None → 文本退化成裸 markdown
+    → 又到不了（斗破 01:34:53 同一指纹）。故必须能走单按钮兜底。
+    """
+    from src.plugins.qq_bridge.channel import qq_keyboard
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    seen: list = []
+    orig_mk, orig_btn = qq_keyboard.make_keyboard, qq_keyboard.make_single_button_keyboard
+    try:
+        qq_keyboard.make_keyboard = lambda cmd: (None, ())       # 没有按钮表
+        qq_keyboard.make_single_button_keyboard = (
+            lambda label, cmd: seen.append((label, cmd)) or "KB-FB")
+        bot = FakeBot()
+        patched["bot"] = bot
+        ctx = _ctx_of(FakeGroupEvent())
+        ctx["kb_fallback_btn"] = ["修仙菜单", "修仙菜单"]
+        asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="灵石不足")))
+        msg = bot.calls[-1][2]
+    finally:
+        qq_keyboard.make_keyboard = orig_mk
+        qq_keyboard.make_single_button_keyboard = orig_btn
+
+    assert seen == [("修仙菜单", "修仙菜单")], "必须用 ctx 的单按钮兜底，实际 %r" % (seen,)
+    kinds = [seg[0] for seg in msg if isinstance(seg, tuple)]
+    assert kinds == ["markdown", "keyboard"], "仍须一条消息内 markdown+keyboard：%r" % (kinds,)
+
+
+def test_c2c_text_stays_markdown_only(patched):
+    """私聊文本**不许**挂键盘：C2C 对 keyboard 没有实测样本，别为修群聊搭进私聊。
+
+    ⚠️ 必须把 ``make_keyboard`` 换成**返回真模型**的假件——否则走真件时它会因
+    （宿主没有 nonebot models）抛异常被发送层吞掉，用例会「假通过」，
+    证明不了 is_group 这道门真的在。
+    """
+    from src.plugins.qq_bridge.channel import qq_keyboard
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    orig, orig_btn = qq_keyboard.make_keyboard, qq_keyboard.make_single_button_keyboard
+    try:
+        qq_keyboard.make_keyboard = lambda cmd: ("KB", [])
+        qq_keyboard.make_single_button_keyboard = lambda label, cmd: "KB-FB"
+        bot = FakeBot()
+        patched["bot"] = bot
+        ctx = _ctx_of(FakeC2CEvent())
+        ctx["kb_fallback"] = "doupo:menu"
+        ctx["kb_fallback_btn"] = ["修仙菜单", "修仙菜单"]
+        asyncio.run(get_channel(OFFICIAL).send(ctx, Outgoing(text="私聊文本")))
+        msg = bot.calls[-1][2]
+    finally:
+        qq_keyboard.make_keyboard = orig
+        qq_keyboard.make_single_button_keyboard = orig_btn
+    kinds = [seg[0] for seg in msg if isinstance(seg, tuple)]
+    assert kinds == ["markdown"], "私聊只发 markdown，实际 %r" % (kinds,)
 
 
 def test_consecutive_sends_share_reply_ref_get_increasing_msg_seq(patched):

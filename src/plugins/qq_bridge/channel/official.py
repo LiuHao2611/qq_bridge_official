@@ -353,14 +353,77 @@ class OfficialChannel(Channel):
         # （msg_type=2），用户端就是**一条**消息；失败则降级回「图片条 + 按钮条」。
         segments: list[tuple] = []
         btn_labels: list[str] = []
+
+        # btn_cmd 优先取 Outgoing 显式字段，其次取 ctx（warframe/主流程入口注入），
+        # 否则按 out.text 首词兜底。
+        # 2026-11-25 第四轮：**提前到文本段之前**——纯文本要据此决定是否挂键盘
+        # （纯 markdown 无按钮实测仍不到，见下方文本段的注释）。
+        btn_cmd = str(
+            out.keyboard_cmd
+            or ctx.get("keyboard_cmd", "")
+            or (out.text or "").strip().split("\n")[0]
+        )
+
+        # 第四次修改：先判「该口令是否有同卡其他档位按钮」。单档卡/非口令/
+        # 市价裸口令去掉自己+主菜单后是**零按钮**——此时绝不能走「图片+按钮合并」
+        # （会上传素材换 qqbot-media 却挂空 keyboard，或下发空 rows 被 40034011 拒）。
+        # 零按钮直接走下面的图片独立段（msg_type=7 富媒体），用户只看到干净的图片卡。
+        try:
+            from .qq_keyboard import buttons_for as _buttons_for  # noqa: PLC0415
+            has_buttons = bool(btn_cmd) and bool(_buttons_for(btn_cmd))
+        except Exception as e:  # noqa: BLE001 — 判不出就当无按钮，宁可少发按钮不阻断图片
+            log.warning(jlog("official_has_buttons_failed", error=type(e).__name__,
+                             cmd=btn_cmd))
+            has_buttons = False
+
         if out.text:
             seg = QQMessage()
+            seg_kind = "text"
+            # 🚨 2026-11-25「打字没反应」根因（实测证据在 logs/service.log）：
+            # 官方群机器人 **msg_type=0 纯文本「API 200 + 返回 msg_id，但客户端一条不见」**。
+            # 指纹：`official_sent kind=text msg_seq=1` 有、`channel_send_failed` 没有、
+            # 用户端空白。同一机器人用 msg_type=2 markdown 发的卡片（含内嵌图片、零按钮
+            # 也发过）**全部正常到达** → 纯文本一律改走 markdown，文本内容原样塞进 content。
+            # 需要 @ 人时仍用传统 text 段（markdown 里 @ 的语法与适配器段不通用，别赌）。
             if out.at_user and is_group:
                 openid = str(ctx.get("user_key", "")).replace(USER_PREFIX, "")
                 if openid:
                     seg += QQSegment.mention_user(openid)
-            seg += QQSegment.text(out.text)
-            segments.append((seg, "text"))
+                seg += QQSegment.text(out.text)
+            else:
+                seg += QQSegment.markdown(out.text)
+                # 🚨 2026-11-25 第四轮（01:34:53 / 01:35:02 两条纯 markdown 仍空白）：
+                # 「卡片到达、文本不到」的真正分界不是 msg_type，而是**有没有 keyboard**——
+                # 到达的每一条都带 keyboard（merged_card / keyboard 段），不带的每一条都空。
+                # 故纯文本也必须与卡片**同形**：markdown + keyboard 同段（msg_type=2）。
+                # 键盘口令优先用当前口令（有按钮就挂它），否则用 ctx 给的兜底
+                # （`_channel_send_text` 按玩家当前模式注入，目前只有 doupo:menu）。
+                # 只对**群**生效：私聊文本在挂键盘之前一直是活的，别为了修群聊把私聊
+                # 搭进去（C2C 对 keyboard 的兼容性没有实测样本）。
+                kb_key = ""
+                if is_group:
+                    kb_key = btn_cmd if has_buttons else str(ctx.get("kb_fallback") or "")
+                fb_btn = ctx.get("kb_fallback_btn") or []
+                if kb_key or (is_group and fb_btn):
+                    try:
+                        from .qq_keyboard import (  # noqa: PLC0415
+                            make_keyboard as _mk_kb,
+                            make_single_button_keyboard as _mk_btn_kb,
+                        )
+                        kb_model, kb_btns = _mk_kb(kb_key) if kb_key else (None, ())
+                        if kb_model is not None:
+                            btn_labels = [b.label for b in kb_btns]
+                        elif is_group and fb_btn:
+                            # 没有按钮表的模式（修仙）：造单按钮兜底键盘
+                            kb_model = _mk_btn_kb(str(fb_btn[0]), str(fb_btn[1]))
+                            btn_labels = [str(fb_btn[0])]
+                        if kb_model is not None:
+                            seg += QQSegment.keyboard(kb_model)
+                            seg_kind = "text_card"
+                    except Exception as e:  # noqa: BLE001 — 挂键盘失败只退回纯文本，绝不阻断
+                        log.warning(jlog("official_text_keyboard_failed",
+                                         error=type(e).__name__, cmd=kb_key))
+            segments.append((seg, seg_kind))
 
         # 先把所有图片字节收齐（不再逐个 append file_image 段，交给合并逻辑决定）
         image_datas: list[bytes] = []
@@ -381,25 +444,8 @@ class OfficialChannel(Channel):
                 m += QQSegment.file_video(data, file_name="video.mp4")
                 segments.append((m, "video"))
 
-        # btn_cmd 优先取 Outgoing 显式字段，其次取 ctx（warframe/主流程入口注入），
-        # 否则按 out.text 首词兜底。
-        btn_cmd = str(
-            out.keyboard_cmd
-            or ctx.get("keyboard_cmd", "")
-            or (out.text or "").strip().split("\n")[0]
-        )
-
-        # 第四次修改：先判「该口令是否有同卡其他档位按钮」。单档卡/非口令/
-        # 市价裸口令去掉自己+主菜单后是**零按钮**——此时绝不能走「图片+按钮合并」
-        # （会上传素材换 qqbot-media 却挂空 keyboard，或下发空 rows 被 40034011 拒）。
-        # 零按钮直接走下面的图片独立段（msg_type=7 富媒体），用户只看到干净的图片卡。
-        try:
-            from .qq_keyboard import buttons_for as _buttons_for  # noqa: PLC0415
-            has_buttons = bool(btn_cmd) and bool(_buttons_for(btn_cmd))
-        except Exception as e:  # noqa: BLE001 — 判不出就当无按钮，宁可少发按钮不阻断图片
-            log.warning(jlog("official_has_buttons_failed", error=type(e).__name__,
-                             cmd=btn_cmd))
-            has_buttons = False
+        # btn_cmd / has_buttons 已在文本段之前算好（2026-11-25 第四轮上移），
+        # 这里不再重复计算——重复会让文本段与图片段用不同的按钮口令。
 
         # ---- 图片 + 按钮合一（默认开；失败见下方降级策略；零按钮时跳过）----
         # 「本意是图+按钮卡」：图片、按钮口令、按钮都齐，才谈得上合并/降级。
@@ -527,7 +573,10 @@ class OfficialChannel(Channel):
                 msg_seq=msg_seq,
                 reply_seq=peek_msg_seq(ref),
                 **( {"buttons": ",".join(btn_labels)}
-                    if seg_kind in ("keyboard", "merged_card") else {} ),
+                    if seg_kind in ("keyboard", "merged_card", "text_card") else {} ),
+                # 2026-11-25 第四轮：文本到达与否只看不回执，故把平台的**完整返回**
+                # 原样记下（含 timestamp/code 等），下次再丢就能直接比对字段。
+                **( {"ret": repr(ret)[:180]} if seg_kind in ("text", "text_card") else {} ),
             ))
 
         if not sent:

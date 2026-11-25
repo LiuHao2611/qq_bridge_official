@@ -392,6 +392,31 @@ def wrap_button_rows(btns: tuple) -> tuple[tuple, ...]:
     return tuple(tuple(r) for r in rows)
 
 
+def make_single_button_keyboard(label: str, cmd: str):
+    """兜底键盘：**一个**按钮，data 直接就是一句口令。
+
+    2026-11-25 第四轮：官方群「卡片到、纯文本不到」的分界是有没有 keyboard 段。
+    斗破有按钮表（`doupo:menu` 等），修仙**没有**按钮表 → `make_keyboard` 返 None
+    → 文本退化成裸 markdown → 又不到。这里给没有按钮表的模式一个最小可用键盘：
+    一个「菜单」按钮，点一下就是发那条口令，功能上不比纯文本差。
+
+    :return: ``MessageKeyboard``（恒非 None）。调用方需自行保证 label/cmd 非空。
+    """
+    from nonebot.adapters.qq.models.common import (  # noqa: PLC0415
+        Action, Button, InlineKeyboard, InlineKeyboardRow, MessageKeyboard,
+        Permission, RenderData,
+    )
+
+    btn = Button(
+        id="qb_fb_menu",
+        render_data=RenderData(label=label[:10], visited_label=label[:10], style=0),
+        action=Action(type=1, permission=Permission(type=2), data=cmd,
+                      reply=False, enter=False),
+    )
+    return MessageKeyboard(content=InlineKeyboard(
+        rows=[InlineKeyboardRow(buttons=[btn])]))
+
+
 def make_keyboard(text: str):
     """根据当前口令文本构造 ``MessageKeyboard``（供 official.py::send 调用）。
 
