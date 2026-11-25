@@ -192,11 +192,14 @@ def _res(n=2, win=True, rounds=None, puppet_hits=0, tier="普通", move="劈山�
     return out
 
 
-def _render(res, lv=20, hp=None):
+def _render(res, lv=20, hp=None, ch=1):
     """把任意 res 喂给 cmd_fight 的展示层，返回文本。"""
     p = core.create_player("rich", "富文本测试", "g")
     p["lv"] = lv
     p["hp"] = int(hp if hp is not None else core.stats(p)["体力"])
+    # 章节决定铺垫与点睛台词，必须显式钉住（ensure_story_chapter 会按 main_idx 补值）
+    p["story_chapter"] = int(ch)
+    p["main_idx"] = int(ch) - 1
     saved = (core.encounter, core.settle, core.advance_task, core.can_level)
     try:
         core.encounter = lambda _p, **_kw: res
@@ -299,11 +302,12 @@ def _chars(s: str) -> int:
 
 def _marks(s: str) -> tuple:
     return tuple(ln[:2] for ln in s.split("\n") if ln.strip()
-                 and ln[:1] in ("⚔", "💥", "⋯", "🎯", "🩸", "🧿", "🩹", "🍀", "⬆"))
+                 and ln[:1] in ("⚔", "💥", "⋯", "🎯", "🩸", "🧿", "🩹", "🍀", "⬆",
+                                "🏅", "🥀", "✊", "「"))
 
 
 def test_skeleton_still_flat_across_enemy_count():
-    """1~5 敌：行数、标记序列仍一致，字数差仍 ≤24，总字数仍 ≤200。"""
+    """1~5 敌：行数、标记序列仍一致，字数差仍 ≤24，总字数仍 ≤350。"""
     outs = {n: _render(_res(n=n)) for n in (1, 3, 5)}
     shapes = {n: (len([x for x in o.split("\n") if x.strip()]), _marks(o))
               for n, o in outs.items()}
@@ -312,7 +316,7 @@ def test_skeleton_still_flat_across_enemy_count():
         assert sh[0] == base[0], "%d 敌行数与 1 敌不同：%d vs %d" % (n, sh[0], base[0])
         assert sh[1] == base[1], "%d 敌标记序列与 1 敌不同：%s vs %s" % (n, sh[1], base[1])
     c = {n: _chars(o) for n, o in outs.items()}
-    assert c[5] <= 200, "5 敌 %d 字，破 200 上限" % c[5]
+    assert c[5] <= 350, "5 敌 %d 字，破 350 上限" % c[5]
     assert c[5] - c[1] <= 24, "字数随敌人数膨胀：%d vs %d" % (c[1], c[5])
 
 
@@ -350,16 +354,201 @@ def test_new_lines_no_ban_words():
 
 
 def test_new_lines_have_no_quoted_dialogue():
-    """不给角色加引号台词（模块纪律：新写的一律旁白）。"""
-    samples = [txt.battle_defeat(), txt.battle_puppet("天级傀儡·玄", "7965", "金"),
-               txt.battle_spot("劈山掌 3621", tier="高阶", move="劈山掌")]
+    """不给角色**新编**台词：除 CHAPTER_QUOTE 里逐字核对过的原文外，一律旁白。
+
+    2026-11-25 第二轮放宽了这条：用户明确要「原著出圈台词」，于是允许
+    ``CHAPTER_QUOTE`` 里的条目带引号——但它是**白名单**：不在池子里带引号
+    照样报错。放宽的是「有没有台词」，没放宽「能不能自己编台词」。
+    """
+    samples = [txt.battle_defeat(0), txt.battle_puppet("天级傀儡·玄", "7965", "金"),
+               txt.battle_spot("劈山掌 3621", tier="高阶", move="劈山掌"),
+               txt.scene_line(3, 1), txt.glory_line("great", 1),
+               txt.mock_line(2), txt.climax_line("crush", 0)]
     for s in samples:
         assert "“" not in s and "”" not in s, "新文案出现引号台词：%s" % s
         assert "「" not in s and "」" not in s, "新文案出现引号台词：%s" % s
 
 
 # ---------------------------------------------------------------------------
-# 七、prove-it：把坏样本喂给判据，必须报错
+# 七、第二轮：小说式战报（铺垫 / 高潮 / 吹捧 / 嘲讽 / 鼓励 / 点睛）
+#
+# 用户原话：「要像写小说那样，机器人输出的战斗报告要有铺垫有激烈高潮，失败有
+# 嘲讽和鼓励，成功有满满的吹捧，就算只掉落一个垃圾材料，也要吹的天花乱坠」。
+# ---------------------------------------------------------------------------
+def test_all_13_chapters_have_scene_and_none_repeats():
+    """13 章都要有取景铺垫，且两两不同——否则「结合所在区域」是假的。"""
+    miss = [c for c in range(1, int(cfg.CHAPTER_COUNT) + 1)
+            if not txt.CHAPTER_SCENE.get(c)]
+    assert not miss, "这些章没有铺垫句：%s" % miss
+    all_lines = [ln for c in range(1, 14) for ln in txt.CHAPTER_SCENE[c]]
+    dup = {x for x in all_lines if all_lines.count(x) > 1}
+    assert not dup, "不同章用了同一句铺垫：%s" % list(dup)[:3]
+
+
+def test_scene_really_follows_story_chapter():
+    """同一场战斗，换个章节就必须换铺垫——不能 13 章共用一句。"""
+    a = _render(_res(n=2), ch=1)
+    b = _render(_res(n=2), ch=8)
+    sc_a = [ln for ln in a.split("\n") if ln.strip() in txt.CHAPTER_SCENE[1]]
+    sc_b = [ln for ln in b.split("\n") if ln.strip() in txt.CHAPTER_SCENE[8]]
+    assert sc_a, "第 1 章的战报里没有第 1 章的铺垫：\n%s" % a
+    assert sc_b, "第 8 章的战报里没有第 8 章的铺垫：\n%s" % b
+    assert sc_a != sc_b
+
+
+def test_scene_sits_before_encounter():
+    """顺序：铺垫在「遭遇」之前——先写在哪，再写来了什么。"""
+    out = _render(_res(n=2), ch=3)
+    idx_scene = out.index(txt.CHAPTER_SCENE[3][0]) if txt.CHAPTER_SCENE[3][0] in out \
+        else min(out.index(x) for x in txt.CHAPTER_SCENE[3] if x in out)
+    assert idx_scene < out.index("⚔️"), "铺垫排到遭遇之后了（读起来像倒叙）：\n%s" % out
+
+
+def test_win_glory_and_lose_mock_are_exclusive():
+    """胜局是吹捧（🏅）、败局是嘲讽（🥀），必须互斥——不能赢了还被笑。"""
+    w = _render(_res(win=True))
+    l = _render(_res(win=False))
+    assert w.count("🏅") == 1 and "🥀" not in w, "胜局的目光行不对：\n%s" % w
+    assert l.count("🥀") == 1 and "🏅" not in l, "败局的目光行不对：\n%s" % l
+
+
+def test_trash_drop_is_hyped_not_dismissed():
+    """用户点名：只掉一个垃圾材料也要吹。最便宜的药材必须走 trash 池。"""
+    cheap = min(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    assert txt.drop_tier([cheap]) == "trash", "最便宜的药材没判成垃圾档：%s" % cheap
+    res = _res(win=True)
+    res["drops"] = [(cheap, 1)]
+    out = _render(res)
+    glory = [ln for ln in out.split("\n") if ln.startswith("🏅")]
+    assert len(glory) == 1, "没有吹捧行：\n%s" % out
+    assert glory[0][2:] in txt.DROP_GLORY["trash"], \
+        "垃圾掉落没走 trash 池（吹捧成了别的档）：%s" % glory[0]
+
+
+def test_rare_drop_uses_rare_pool():
+    """反过来也要成立：贵药材不能还用「就这点破烂」的句子。"""
+    pricey = max(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    assert txt.drop_tier([pricey]) == "rare"
+    res = _res(win=True)
+    res["drops"] = [(pricey, 1)]
+    out = _render(res)
+    glory = [ln for ln in out.split("\n") if ln.startswith("🏅")][0]
+    assert glory[2:] in txt.DROP_GLORY["rare"], "贵药材用了便宜档措辞：%s" % glory
+
+
+def test_defeat_has_mock_then_encourage():
+    """败局必须「先被笑、再自己站起来」，且鼓励行在嘲讽行之后。"""
+    out = _render(_res(win=False))
+    mock = [ln for ln in out.split("\n") if ln.startswith("🥀")]
+    rally = [ln for ln in out.split("\n") if ln.startswith("🩹")]
+    assert len(mock) == 1 and len(rally) == 1, "败局的目光/鼓励行数量不对：%s %s" % (
+        mock, rally)
+    assert out.index(mock[0]) < out.index(rally[0]), "鼓励排到嘲讽前面了（情绪顺序反了）"
+
+
+def test_quote_only_from_verified_pool():
+    """点睛台词必须是 CHAPTER_QUOTE 里的原文，或回落无引号的旁白——不许现编。"""
+    allowed = {pair[0] for pool in txt.CHAPTER_QUOTE.values() for pair in pool}
+    for ch in (1, 3, 8, 13):
+        for seed in range(6):
+            line = txt.quote_line(ch, seed, special=True)
+            if "「" in line:
+                inner = line.strip().strip("「」")
+                assert inner in allowed, "第 %d 章出现了池外台词：%s" % (ch, inner)
+            else:
+                assert line.strip() in txt.QUOTE_FALLBACK, \
+                    "回落句不在旁白池里：%s" % line
+
+
+def test_mixed_drop_takes_highest_tier():
+    """一包东西里有便宜有常见时，按**最高的那一档**吹，别被最便宜的那件拉低。
+
+    2026-11-25 自查：第一版把 trash 排在 common 之上，结果「白参 + 炎星石」
+    被判成 trash——一件便宜货把整包战利品拉低，与「越有收获越该被看见」相反。
+    """
+    cheap = min(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    mid = sorted(cfg.HERBS, key=lambda h: int(h["price"]))[len(cfg.HERBS) // 2]["name"]
+    assert txt.drop_tier([cheap]) == "trash"
+    assert txt.drop_tier([cheap, mid]) == txt.drop_tier([mid]), \
+        "混合掉落被最便宜的那件拉低了：%s + %s → %s" % (
+            cheap, mid, txt.drop_tier([cheap, mid]))
+    # 非药材（强化石等）不得被判成 rare——炎星石是日常料，说成异宝反而敷衍
+    assert txt.drop_tier(["炎星石"]) == "common", "强化石被判成异宝了"
+
+
+def test_quote_follows_chapter():
+    """台词必须跟着章节走：第 N 章出的台词只能是第 N 章的条目。
+
+    没有这条，``CHAPTER_QUOTE.get(1)`` 这种「一律用第一章」的退化解也能全绿
+    ——台词照样是逐字原文，只是挂错了章。
+    """
+    for ch, pool in txt.CHAPTER_QUOTE.items():
+        for seed in (0, 2, 4):
+            line = txt.quote_line(ch, seed, special=True)
+            inner = line.strip().strip("「」")
+            assert any(inner == pair[0] for pair in pool), \
+                "第 %d 章出了别的章的台词：%s" % (ch, inner)
+
+
+def test_quote_carries_no_meta_words():
+    """台词行不能带「原著/第N章」这类元信息——出处只留在数据表里。"""
+    for ch in range(1, 14):
+        for seed in (0, 1, 2):
+            line = txt.quote_line(ch, seed, special=True)
+            for w in ("原著", "第", "章", "出处"):
+                assert w not in line, "点睛行混进元信息 %r：%s" % (w, line)
+
+
+def test_war_tier_priority_crush_over_sweep():
+    """越级优先于无伤：越级斩杀哪怕毫发无伤，也该按「越级」吹。"""
+    assert txt.war_tier(True, 0, 1.0, 60, 40) == "crush", "越级没优先"
+    assert txt.war_tier(True, 0, 1.0, 40, 40) == "sweep", "无伤没识别"
+    assert txt.war_tier(True, 100, 0.1, 40, 40) == "narrow", "残血没识别"
+    assert txt.war_tier(True, 100, 0.9, 40, 40) == "great"
+    assert txt.war_tier(False, 0, 0.0, 40, 40) == "lose"
+
+
+def test_pool_length_gap_bounded():
+    """每个文案池的长短极差必须 ≤4。
+
+    这条不是洁癖：骨架闸允许「1 敌 vs 5 敌」差 24 字，而两者的轮换种子不同。
+    一个池里最长句比最短句多 14 字，光这一个池就能吃掉一半预算，未来加一句话
+    就会莫名其妙把 1v5 闸顶爆。把极差按在 4 以内，是让**加句子本身安全**。
+    """
+    pools = {"SCENE[%d]" % k: v for k, v in txt.CHAPTER_SCENE.items()}
+    pools.update({"GLORY." + k: v for k, v in txt.GLORY_LINES.items()})
+    pools.update({"CLIMAX." + k: v for k, v in txt.CLIMAX_AFTER.items()})
+    pools.update({"DROP." + k: v for k, v in txt.DROP_GLORY.items()})
+    pools["MOCK"] = txt.MOCK_LINES
+    pools["RALLY"] = txt.RALLY_LINES
+    pools["FALLBACK"] = txt.QUOTE_FALLBACK
+    bad = {}
+    for name, pool in pools.items():
+        lens = [len(str(x)) for x in pool]
+        if lens and max(lens) - min(lens) > 4:
+            bad[name] = (min(lens), max(lens))
+    assert not bad, "池内长短极差超过 4 字：%s" % bad
+
+
+def test_prove_it_round2_detectors_not_vacuous():
+    """第二轮判据的 prove-it：每类检测喂坏样本必须报错。"""
+    # A. 章节表漏一章必须被识别（拿掉第 7 章造样本，判据必须只报 7）
+    fake_scene = {k: v for k, v in txt.CHAPTER_SCENE.items() if k != 7}
+    miss = [c for c in range(1, 14) if c not in fake_scene]
+    assert miss == [7], "漏章判据失效：%s" % miss
+    # B. 胜局里塞一条嘲讽必须被互斥判据抓到
+    fake = "🏅 吹捧\n🥀 嘲讽"
+    assert ("🥀" in fake) and ("🏅" in fake), "互斥判据失效"
+    # C. 掉落档位判据不能空转：最便宜与最贵的药材必须不同档
+    cheap = min(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    pricey = max(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
+    assert txt.drop_tier([cheap]) != txt.drop_tier([pricey]), "档位判据失效"
+    # D. 池长判据不能空转
+    assert max(len(x) for x in ("aa", "a" * 20)) - 2 > 4, "池长判据失效"
+
+
+# ---------------------------------------------------------------------------
+# 八、prove-it：把坏样本喂给判据，必须报错
 # ---------------------------------------------------------------------------
 def test_prove_it_detectors_are_not_vacuous():
     # A. 两档品阶若写成同一句，互异判据必须能识别

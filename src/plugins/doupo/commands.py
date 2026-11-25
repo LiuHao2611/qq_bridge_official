@@ -915,8 +915,21 @@ async def cmd_fight(store, qq) -> str:
     _hp_now = int(p.get("hp") or 0)
     _hp_max = max(1, int(core.stats(p)["体力"]))
     _hp_ratio = max(0.0, min(1.0, _hp_now / float(_hp_max)))
+    # 2026-11-25 第二轮（用户「要像写小说，有铺垫有高潮，成功吹捧失败嘲讽鼓励」）：
+    # 战况分档先算出来，后面 💥 的反应镜头、🏅/🥀 的吹捧嘲讽、以及有没有台词点睛，
+    # 全靠这一个档位。档位只由「胜负 / 受伤 / 血量 / 敌我等级」决定，**与敌人数无关**。
+    _foe_max = max([int(x.get("lv") or 0) for x in detail] or [0])
+    _wt = txt.war_tier(bool(res.get("win")), int(res.get("taken") or 0),
+                       _hp_ratio, _foe_max, lv)
+    # 轮换种子：必须是**确定性**的（同一场算两次得同一句），否则回看与回执会对不上；
+    # 同时要带战斗本身的差异，否则同章节同等级永远同一句。
+    _seed = (int(res["rounds"]) * 7 + lv * 3 + n_total * 11 + killed * 5) % 9973
     lines = [
         txt.chapter_line(_ch, cfg.CHAPTER_REGION.get(_ch, ""), _mlo, _mhi),
+        # 铺垫：先写「在哪」，再写「来了什么」，最后才是「怎么赢的」——顺序不能倒。
+        # 必须排在 encounter_head 之前：那个函数一次吐「遭遇 + 判词」两行，
+        # 放在它后面会变成「先报胜负、再说风景」，读起来像倒叙。
+        txt.scene_line(_ch, _seed),
         txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed,
                            realm=cfg.full_realm(lv),
                            tag=txt.REALM_FIGHT_TAG.get(cfg.realm_name(lv), ""),
@@ -934,7 +947,8 @@ async def cmd_fight(store, qq) -> str:
     # 所以直接透传 high["tier"] / high["move"]。
     lines.append(txt.battle_spot(spot,
                                 tier=str(high.get("tier") or ""),
-                                move=str(high.get("move") or high.get("kind") or "")))
+                                move=str(high.get("move") or high.get("kind") or ""),
+                                after=txt.climax_line(_wt, _seed)))
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
     # 2026-11-25 傀儡助阵行（用户「或者高阶傀儡」）：只在傀儡真的出手时出现。
@@ -958,6 +972,15 @@ async def cmd_fight(store, qq) -> str:
     _drop_txt = "、".join(f"{n}×{c}" for n, c in drops[:3])
     lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt,
                                  win=bool(res.get("win"))))
+    # 2026-11-25 第二轮：同一个位置放「别人的目光」——赢是吹捧，输是嘲讽，互斥。
+    # 赢的场次优先吹战利（用户点名「只掉一个垃圾材料也要吹到天上」）；
+    # 没有掉落才退回吹战况，避免出现「空手还能吹半句」的干瘪感。
+    if res.get("win"):
+        _gl = txt.drop_glory_line([n for n, _c in drops], _seed) \
+            or txt.glory_line(_wt, _seed)
+        lines.append(_gl)
+    else:
+        lines.append(txt.mock_line(_seed))
     # 2026-11-24 魂殿邪修：吞噬修为单独一行（已写 p["exp"]/p["pill_exp"]，此处仅反馈）。
     if int(res.get("devour") or 0) > 0:
         lines.append(f"🕯️ 吞噬炼化：斩精英/BOSS 吞噬修为 +{_fmt(res['devour'])}"
@@ -979,14 +1002,20 @@ async def cmd_fight(store, qq) -> str:
     # 2026-11-25 败局收场（用户「失败后给出不同的高反馈」）：只在败局追加。
     # 排在代价之后——先看清损失，再给「不甘」；放前面会显得在找借口。
     if not res.get("win"):
-        lines.append(txt.battle_defeat())
+        lines.append(txt.battle_defeat(_seed))
+    # 点睛：本章的逐字台词（没核到就回落旁白）。恒定出现，是「这一战留下什么」
+    # 的收束——放在机缘/突破提示之前，让整段战报以「话」结尾而不是以「数据」结尾。
+    # 台词只在苦战/败局必出（那才是喊得出口的时候），其余场次按种子轮换。
+    lines.append(txt.quote_line(_ch, _seed,
+                                special=(not res.get("win")) or _hp_ratio < 0.5))
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append(txt.battle_hero_aid())
     if core.can_level(p):
         lines.append(txt.battle_ready(cfg.full_realm(lv)))
     lines.extend(_chance_lines(chance, qq))
-    return "\n".join(lines)
+    # 空行一律丢掉：铺垫等「可能不出句」的段落返回空串时，别让 QQ 里多一条空白。
+    return "\n".join(x for x in lines if str(x).strip())
 
 
 # ---------------------------------------------------------------------------

@@ -323,12 +323,18 @@ def test_skeleton_fixed_1_vs_5_enemies():
 
 
 def test_skeleton_char_count_capped_and_not_linear():
-    """字数有硬上限，且 5 敌相对 1 敌只多几个字（数字位数），不是线性增长。"""
+    """字数有硬上限，且 5 敌相对 1 敌只多几个字（数字位数），不是线性增长。
+
+    2026-11-25 第二轮把上限从 200 提到 350：用户要求战报「像小说，有铺垫有高潮、
+    胜了吹捧、败了嘲讽加鼓励」，五段叙述塞进 200 字必然只剩电报体。真正该守的
+    不变量有两条，都还在：① **与敌人数无关**（差值 ≤24）；② 有绝对上限（350）。
+    350 字 ≈ 12 行，仍在 QQ 一屏内；被砍掉的是「逐敌展开」那种 500+ 字刷屏。
+    """
     one = _render_with_n_enemies(1)
     five = _render_with_n_enemies(5)
     c1 = len(one.replace("\n", ""))
     c5 = len(five.replace("\n", ""))
-    assert c5 <= 200, "5 敌战报 %d 字，超过 200 字上限" % c5
+    assert c5 <= 350, "5 敌战报 %d 字，超过 350 字上限" % c5
     assert c5 - c1 <= 24, "字数随敌人数膨胀：1 敌 %d 字 vs 5 敌 %d 字" % (c1, c5)
 
 

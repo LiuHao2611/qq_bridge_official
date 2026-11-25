@@ -186,7 +186,7 @@ def encounter_head(n: int, foes: str, rounds: int, win: bool, killed: int,
     return f"{head}\n　{prefix}{rounds} 回合{verdict}——{tail}。"
 
 
-def battle_spot(spot: str, tier: str = "", move: str = "") -> str:
+def battle_spot(spot: str, tier: str = "", move: str = "", after: str = "") -> str:
     """把高光条目包成一句叙述（2026-11-25 重构）。
 
     ``spot`` 仍是 ``commands._battle_line`` 剪出的「招式 伤害（归因）」字符串；
@@ -196,21 +196,31 @@ def battle_spot(spot: str, tier: str = "", move: str = "") -> str:
     分档口径：普通/空品阶不加前缀（普通是缺省，每场刷「普通」是噪音），
     只有高阶/特殊才亮出「高阶·」「特殊·」；普攻走另一套，不写「【普攻】」
     这种把系统词当招式名的写法。
+
+    ``after``（2026-11-25 第二轮）：高光之后接的**反应镜头**，如「林子里连虫鸣都
+    静了」。并进同一行而不是另起一行——用户上一轮定的行数骨架要尽量少动，
+    一行里放「动作 + 反应」本来就是小说写法。
     """
     import re
     m = re.match(r"^(.+?)\s+(\d+(?:\.\d+)?[万亿]?)\s*(?:（.*）)?$", spot)
     if not m:
-        return f"💥 最重的一记——{spot}。"
-    name = str(move or m.group(1)).strip()
-    dmg = m.group(2)
-    t = str(tier or "").strip()
-    if name in ("普攻", "拳脚", "拳头"):
-        return f"💥 一记拳脚砸实，{dmg} 点落在要害。"
-    if t == "特殊":
-        return f"💥 【特殊·{name}】气机一沉，{dmg} 点碾下。"
-    if t == "高阶":
-        return f"💥 【高阶·{name}】气劲贯体，{dmg} 点砸进。"
-    return f"💥 【{name}】一记砸实，{dmg} 点落在要害。"
+        body = f"💥 最重的一记——{spot}。"
+    else:
+        name = str(move or m.group(1)).strip()
+        dmg = m.group(2)
+        t = str(tier or "").strip()
+        if name in ("普攻", "拳脚", "拳头"):
+            body = f"💥 一记拳脚砸实，{dmg} 点落在要害。"
+        elif t == "特殊":
+            body = f"💥 【特殊·{name}】气机一沉，{dmg} 点碾下。"
+        elif t == "高阶":
+            body = f"💥 【高阶·{name}】气劲贯体，{dmg} 点砸进。"
+        else:
+            body = f"💥 【{name}】一记砸实，{dmg} 点落在要害。"
+    extra = str(after or "").strip()
+    if not extra:
+        return body
+    return body[:-1] + "——" + extra if body.endswith("。") else body + "——" + extra
 
 
 def battle_puppet(name: str, dmg: str, skin: str = "") -> str:
@@ -227,14 +237,17 @@ def battle_puppet(name: str, dmg: str, skin: str = "") -> str:
     return f"🧿 {tag}{name}掠阵，补 {dmg} 点。"
 
 
-def battle_defeat() -> str:
-    """失败收场（2026-11-25）：只在败局追加一行。
+def battle_defeat(seed: int = 0) -> str:
+    """失败收场（2026-11-25 第一轮）／败局鼓励（第二轮改为轮换池）。
 
-    为什么败要比胜多说一句：胜的反馈由首行判词 + 高光 + 战果三行承担，
-    败只剩「力竭·斩k/n」一个数字，读起来像判词而不是邀请。这里给的是
-    「不甘」而不是「你不行」——留钩子，才有下一场。
+    为什么败要比胜多说一句：胜的反馈由判词 + 高光 + 吹捧承担，败只剩「力竭·斩k/n」
+    一个数字，读起来像判词而不是邀请。这里给的是「不甘」而不是「你不行」——
+    留钩子，才有下一场。
+
+    第二轮改法：从 ``RALLY_LINES`` 里轮换，与上一条 🥀 嘲讽行配成一对
+    「先被踩下去，再自己爬起来」——这是原著最常用的一次情绪起伏。
     """
-    return "🩹 气血枯竭，你被生生打退——这笔账，记下了。"
+    return "🩹 " + _pick(RALLY_LINES, seed)
 
 
 def battle_gain(foes: str, exp: str, gold: str, drops: str = "",
@@ -253,6 +266,271 @@ def battle_gain(foes: str, exp: str, gold: str, drops: str = "",
 def battle_cost(taken: str, hp: str, pills: int = 0) -> str:
     out = f"🩸 代价 防御减伤后受伤 {taken} · 气血 {hp}"
     return out + (f" · 服药 {pills}" if pills else "")
+
+
+# ---------------------------------------------------------------------------
+# 二·五、小说式战报：铺垫 / 吹捧 / 嘲讽 / 鼓励 / 点睛（2026-11-25 第二轮）
+#
+# 用户原话：「要像写小说那样，机器人输出的战斗报告要有铺垫有激烈高潮，失败有
+# 嘲讽和鼓励，成功有满满的吹捧，就算只掉落一个垃圾材料，也要吹的天花乱坠……
+# 要把原著里作者的情绪，满满的通过文本内容，注入给玩家。」
+#
+# 落法：在一场战报里钉死五段——**取景（在哪）→ 登场（来了什么）→ 高潮（怎么赢的）
+# → 吹捧/嘲讽（别人怎么看）→ 点睛（这一战留下什么）**。每段与敌人数无关，1 敌与
+# 5 敌仍是同一套骨架（用户上一轮的硬红线：不许随敌人数膨胀）。
+#
+# 情绪来源不是形容词堆砌，而是天蚕土豆的三板斧，逐条对应：
+#   * 反差——先把你踩到泥里（嘲讽），再让你站起来（鼓励）；
+#   * 围观视角——赢不只是数值，是「林子里静了一瞬」；
+#   * 越级/绝境加码——最重的吹捧留给最险的胜。
+# ---------------------------------------------------------------------------
+
+#: 章 → 区域取景（3 句轮换）。**纯旁白**，只写风物与局势，不给任何角色加台词。
+#: 取景意象逐条对得上正文：后山雾气与峭壁、魔兽山脉的血腥味、塔戈尔的黄沙与蛇人、
+#: 云岚宗的云海山门、天墓二十年一开、兽域的十万大山（原文「十万大山已是处在兽域之内」）。
+CHAPTER_SCENE: dict[int, tuple[str, ...]] = {
+    1: ("后山的雾漫上来，山脚下的窃笑被隔在了雾外。",
+        "峭壁之下是望不见底的悬崖，对面是雾气里的魔兽山脉。",
+        "广场上的窃语还没散，你已经把指甲掐进了掌心。"),
+    2: ("山脊上雾还没散，血腥味先一步漫了下来。",
+        "低阶魔兽在林间游走，刀口都朝一个方向。",
+        "险地才逼得出潜力——这话你一直记着。"),
+    3: ("越往深处走，树越矮、风越冷、兽吼越近。",
+        "血迹一路铺进去，没有一具尸体是完整的。",
+        "这里是魔兽的地盘，人只是路过。"),
+    4: ("再往前一步，就是连斗皇都要绕道的地方。",
+        "核心区的天空常年被翼影遮着，光都是碎的。",
+        "六阶魔兽的领地，连空气都压着人。"),
+    5: ("黄沙一直铺到天边，风里全是烫人的腥气。",
+        "日头把沙面烤得发白，夜里又能冻裂骨头。",
+        "沙漠深处有蛇人的气息，佣兵都绕着走。"),
+    6: ("石漠城的墙是黑石垒的，风一过就呜呜地响。",
+        "蛇人的哨声在沙丘后响起，一支佣兵队正在溃退。",
+        "禁地之内，连阳光都像是被抽走了一半。"),
+    7: ("帝都的灯火亮得刺眼，墨家的车马堵了半条街。",
+        "拍卖场的铜钟一响，整条街的人都抬起了头。",
+        "墨家的门客站成一排，看你的眼神像在看死人。"),
+    8: ("云海翻涌，山门在雾里浮着，像一座悬空的城。",
+        "云岚宗的钟敲了九下，这一日终于还是来了。",
+        "这里的一砖一瓦，都记着当年那纸休书。"),
+    9: ("遗迹的石柱半埋在土里，符文还在隐隐发烫。",
+        "兽魂在断墙之间游荡，风一过就是一片呜咽。",
+        "远古的气息压下来，连斗气都慢了半拍。"),
+    10: ("中州的风是硬的，这里的强者不问你从哪来。",
+         "丹塔的影子压着半座城，药香飘出十里。",
+         "魂殿的人从不露面，只留下满地的黑幡。"),
+    11: ("天墓二十年一开，这一次你赶上了。",
+         "墓道深处没有风，只有前人留下的杀意。",
+         "八族的年轻一代都来了，谁也不肯先退。"),
+    12: ("十万大山横在眼前，那里是魔兽家族的天下。",
+         "兽域的天空属于翼族，地面属于爪牙。",
+         "远古遗迹的争夺，从来都是血流成河。"),
+    13: ("帝炎在体内烧着，万火俯首，天地安静得可怕。",
+         "最后一段路没有同行者，只有你自己。",
+         "走完这条路的人，这片大陆上屈指可数。"),
+}
+
+#: 胜局吹捧。key 是战况档，由调用点按「是否无伤 / 剩余气血 / 是否越级」判定。
+#: 为什么分档而不是一句话：碾压局说「血流到脚踝」是错的，险胜说「衣角没脏」更假。
+GLORY_LINES: dict[str, tuple[str, ...]] = {
+    # 无伤：对手连身都没碰到
+    "sweep": ("衣角都没脏——它连你的身都没碰到。",
+              "从头到尾，你一步都没退，也没让它近身。",
+              "这一场，连热身都算不上，你还没出汗。"),
+    # 大捷：赢得干净
+    "great": ("林子里静了一瞬，随后是压不住的哗然。",
+              "你收回手，掌心那点斗气还没散。",
+              "这样的手段放在外面，足够让人记一辈子。"),
+    # 惨胜 / 险胜：靠意志赢的
+    "narrow": ("血流到脚踝，你还站着——站着的才是赢家。",
+               "最后一击落下时，你已经听不见自己的心跳。",
+               "所有人都以为你要倒下，包括你自己。"),
+    # 越级：等级差不是问题
+    "crush": ("它比你高出整整一头，可先倒下的是它。",
+              "等级从来不是道理，站着的那个说了算。",
+              "越级斩杀这种事传出去，没人肯信。"),
+}
+
+#: 高潮反应镜头：紧跟在 💥 那一击后面的半句（并进同一行）。
+#: 小说里的「高潮」从来不是伤害数字本身，而是**这一击落下去之后场面的变化**——
+#: 虫鸣停了、骨头响了、对手连退都退不开。数字交给前面，反应交给这里。
+CLIMAX_AFTER: dict[str, tuple[str, ...]] = {
+    "sweep": ("它连惨叫都没来得及。", "这一下之后，它没能再站起来。"),
+    "great": ("林子里连虫鸣都静了一瞬。", "它眼里那点凶光，散了个干净。"),
+    "narrow": ("这一击，是你拿最后一口气换的。", "你和它，同时跪了下去——它先倒。"),
+    "crush": ("它连后退都退不开半步。", "高出你那么多，连一招都没接住。"),
+    "lose": ("这一击之后，你的手在抖——斗气见底了。",
+             "这一掌拍在它身上，像拍在一块铁板上。"),
+}
+
+
+#: 战利吹捧。key 是掉落成色，阈值由 ``drop_tier`` 按药材价盘分位推导（不手抄）。
+#: 用户点名「就算只掉落一个垃圾材料，也要吹的天花乱坠」——所以 trash 档不是贬低，
+#: 而是**把不值钱的东西说成拿命换来的战利品**：这是爽文的常规操作，也是笑点。
+DROP_GLORY: dict[str, tuple[str, ...]] = {
+    "trash": ("就这点破烂？对，可它是从三头凶兽嘴里抠出来的。",
+              "旁人眼里一文不值的东西，在你手里却是战利品。",
+              "不值几个钱的东西，被血一浸，也就金贵了。"),
+    "common": ("药材入袋，成色比预想的还要好上一分。",
+               "这点收获看着不多，攒起来就是下一次突破。",
+               "东西不算稀奇，可从它们身上拿，就是不一样。"),
+    "rare": ("异宝入手，掌心的温度都不对了。",
+             "这种成色的东西，拍卖场里能压住半条街。",
+             "它一入手，你身后的林子都安静了。"),
+}
+
+#: 败局嘲讽：**旁白转述围观者**，不加引号（模块纪律：不给角色新编台词）。
+#: 嘲讽的分寸：笑的是「你不自量力」，不是「你菜」——前者能激人，后者只会劝退。
+MOCK_LINES: tuple[str, ...] = (
+    "四周几声嗤笑，没人觉得意外——不自量力罢了。",
+    "有人在远处摇了摇头：又一个来送死的。",
+    "它们甚至没有追，像是懒得再多看你一眼。",
+    "围观的人已经转身，连嘲笑都懒得多给一句。",
+)
+
+#: 败局鼓励：第二人称，全部落在「还没完」上。
+#: 与嘲讽合成一对：先被踩下去，再自己爬起来——这是原著最常用的一次情绪起伏。
+RALLY_LINES: tuple[str, ...] = (
+    "可你还是爬起来了——这笔账，记下了。",
+    "牙咬碎了咽回去，下一场不会是这般结局。",
+    "斗气可以散，这口气不能散，咽不下去。",
+    "倒下不可怕，躺着不动才可怕——你动了。",
+)
+
+#: 章 → 原著台词（**逐字**，出处只写在这里，绝不进回执正文）。
+#: 2026-11-25 用 2133 章全文语料逐字核过；语料里有源站替换字符（『药』），
+#: 核对时做了归一化，落地的是**原文形态**。给不出逐字原文的章一律留空，
+#: 由 ``quote_line`` 回落通用旁白——宁可不引，也不编。
+CHAPTER_QUOTE: dict[int, tuple[tuple[str, str], ...]] = {
+    1: (("三十年河东，三十年河西，莫欺少年穷！", "第7章 休！"),),
+    2: (("处于险地，潜力才能爆发。", "第100章 极崩的暗劲"),),
+    3: (("强者为尊，永远都是这个世界的主调", "第450章 安顿"),),
+    4: (("这个世界，没有实力，连一坨狗屎都不如，至少，狗屎还没人敢去踩！",
+         "第8章 神秘的老者"),),
+    8: (("这张契约，不是解除婚约的契约，而是本少爷把你逐出萧家的休证！",
+         "第213章 倔着骨，咬着牙，忍着辱"),),
+    13: (("那异火，在功成之后，自命帝炎，而后再度修炼千载，方才破世而出。",
+          "第1614章 异火榜第一！"),),
+}
+
+#: 没有逐字台词的章用这几句旁白收（不冒充任何角色）。
+QUOTE_FALLBACK: tuple[str, ...] = (
+    "斗气大陆的规矩：活下来的才配说话。",
+    "这一战不会写进谁的传记，但你会记得。",
+    "风把血腥味吹散了，前面的路还长。",
+)
+
+
+def _pick(pool, seed: int) -> str:
+    """按 seed 轮换，池空返回空串（新章加档不会炸老战报）。"""
+    if not pool:
+        return ""
+    return str(pool[int(seed) % len(pool)])
+
+
+def scene_line(ch: int, seed: int = 0) -> str:
+    """取景行（铺垫）。行首用全角空格缩进——与结算数据行在视觉上分层。
+
+    章号不在表里（脏档 0、或将来扩章还没补文案）时返回空串，由调用点**丢弃**，
+    不要留一个只有全角空格的行——那会在 QQ 里显示成一条空白的空隙。
+    """
+    body = _pick(CHAPTER_SCENE.get(int(ch or 0), ()), seed)
+    return ("　" + body) if body else ""
+
+
+def war_tier(win: bool, taken: int, hp_ratio: float, foe_max_lv: int,
+             my_lv: int) -> str:
+    """战况分档：越级 > 无伤 > 大捷 > 惨胜/险胜。
+
+    顺序即优先级：越级斩杀哪怕只剩一丝血，也该按「越级」吹——那是玩家最想被看见的事。
+    """
+    if not win:
+        return "lose"
+    if int(foe_max_lv or 0) >= int(my_lv or 0) + 2:
+        return "crush"
+    if int(taken or 0) <= 0:
+        return "sweep"
+    return "narrow" if float(hp_ratio) < 0.5 else "great"
+
+
+def glory_line(tier: str, seed: int = 0) -> str:
+    """胜局吹捧行（🏅 领起，与结算数据行的 emoji 体系一致）。"""
+    return "🏅 " + _pick(GLORY_LINES.get(tier) or GLORY_LINES["great"], seed)
+
+
+def climax_line(tier: str, seed: int = 0) -> str:
+    """高潮反应镜头（并进 💥 行尾，不单独占行）。"""
+    return _pick(CLIMAX_AFTER.get(tier) or CLIMAX_AFTER["great"], seed)
+
+
+def drop_tier(names) -> str:
+    """掉落成色：药材按 ``config.HERBS`` 的价盘分位，非药材按 ``item_kind`` 归类。
+
+    为什么不全按价：丹药没有 price 字段，强化石也不在药材表里；早先「查不到就当
+    rare」的写法会让「白参 + 炎星石」被判成「异宝入手」——炎星石是日常强化料，
+    这么吹反而显得战报在敷衍。现在的口径：
+      * 带纹丹 / 丹药 → rare（能炼丹本身就不便宜）；
+      * 药材 → 按价盘三分位（低=trash、中=common、高=rare）；
+      * 其余（强化石/傀儡料/杂物）→ common；
+      * 多件取最高档（一场里出过好东西就按好东西吹）。
+    阈值由价盘推导，**不手抄**——新材料进表就自动有档。
+    """
+    from . import config as _cfg  # noqa: PLC0415 - 函数内导入，避免与 config 循环
+
+    names = list(names or ())
+    if not names:
+        return "common"
+    prices = sorted(int(h.get("price") or 0) for h in getattr(_cfg, "HERBS", ()))
+    lo = prices[len(prices) // 3] if prices else 0
+    hi = prices[(len(prices) * 2) // 3] if prices else 0
+    # 顺序即「值钱程度」：多件取最高的那一档（出过好东西就按好东西吹）。
+    # 早先把 trash 排在 common 之上，会让「白参 + 炎星石」被判成 trash——
+    # 一件便宜货把整包东西拉低，与「越有收获越该被看见」正好相反。
+    order = {"trash": 0, "common": 1, "rare": 2}
+    best = "trash"
+    for n in names:
+        kind = _cfg.item_kind(str(n))
+        if kind in ("danwen", "pill"):
+            tier = "rare"
+        elif kind == "herb":
+            p = int((_cfg.HERB_BY_NAME.get(str(n)) or {}).get("price") or 0)
+            tier = "trash" if p <= lo else ("rare" if p > hi else "common")
+        else:
+            tier = "common"
+        if order[tier] > order[best]:
+            best = tier
+    return best
+
+
+def drop_glory_line(names, seed: int = 0) -> str:
+    """战利吹捧行（垃圾料也吹）。无掉落时返回空串，由调用点改用战况吹捧。"""
+    if not names:
+        return ""
+    return "🏅 " + _pick(DROP_GLORY[drop_tier(names)], seed)
+
+
+def mock_line(seed: int = 0) -> str:
+    """败局嘲讽行（🥀）：与胜局 🏅 同一位置，互斥。"""
+    return "🥀 " + _pick(MOCK_LINES, seed)
+
+
+def rally_line(seed: int = 0) -> str:
+    return "✊ " + _pick(RALLY_LINES, seed)
+
+
+def quote_line(ch: int, seed: int = 0, special: bool = False) -> str:
+    """点睛行：本章逐字台词，没核到就回落通用旁白。
+
+    只在苦战/败局出现这句台词（``special``），其余场次按 seed 三中取一——
+    一章只有一句台词，每场都喊就成了口号，喊三次就不值钱了。
+    不加「原著」二字（禁词）；出处留在 ``CHAPTER_QUOTE`` 第二列供维护者核对。
+    """
+    pool = CHAPTER_QUOTE.get(int(ch or 0), ())
+    if pool and (special or int(seed) % 3 == 0):
+        text = str(pool[int(seed) % len(pool)][0])
+        return f"　「{text}」"
+    return "　" + _pick(QUOTE_FALLBACK, seed)
+
 
 
 def battle_hero_aid() -> str:
@@ -503,6 +781,16 @@ CALL_SAMPLES: tuple[str, ...] = (
     battle_gain("血灵蟒", "一千八", "九百", "血灵草×2"),
     battle_gain("血灵蟒等3名", "0", "0", win=False),
     battle_cost("三千", "一万二", 2),
+    # 2026-11-25 第二轮小说式战报：五段新句全部登记（不登记 = 禁词守门扫不到）
+    scene_line(1, 0), scene_line(6, 1), scene_line(8, 2), scene_line(13, 0),
+    glory_line("sweep", 0), glory_line("great", 1), glory_line("narrow", 2),
+    glory_line("crush", 0),
+    climax_line("sweep", 0), climax_line("great", 1), climax_line("narrow", 2),
+    climax_line("crush", 0), climax_line("lose", 1),
+    drop_glory_line(["黑岩根"], 0), drop_glory_line(["白参"], 1),
+    drop_glory_line(["冰晶石"], 2), drop_glory_line([], 0),
+    mock_line(0), mock_line(3), rally_line(0), rally_line(1),
+    quote_line(1, 0), quote_line(8, 0), quote_line(13, 0), quote_line(5, 0),
     battle_hero_aid(),
     battle_ready("四星斗者"),
     battle_cd(20),
@@ -546,7 +834,19 @@ CALL_SAMPLES: tuple[str, ...] = (
 def all_player_texts() -> tuple[str, ...]:
     """守门测试用：全部玩家可见静态句 + 展开后的模板样本。"""
     out = list(STATIC_TEXTS) + list(CALL_SAMPLES)
-    for obj in (CROSS_LINES, STAR_LINES, CRAFT_SUCCESS, REALM_FIGHT_TAG):
-        out.extend(str(x) for x in obj.values())
+    for obj in (CROSS_LINES, STAR_LINES, CRAFT_SUCCESS, REALM_FIGHT_TAG,
+                CHAPTER_SCENE, GLORY_LINES, CLIMAX_AFTER, DROP_GLORY):
+        for v in obj.values():
+            if isinstance(v, str):
+                out.append(v)
+            else:
+                out.extend(str(x) for x in v)
     out.extend(CRAFT_FAIL_LINES)
+    out.extend(MOCK_LINES)
+    out.extend(RALLY_LINES)
+    out.extend(QUOTE_FALLBACK)
+    # 台词池只扫台词本身：第二列是出处（「第N章 …」），不面向玩家，
+    # 混进来会把「第7章 休！」当玩家可见句去扫禁词，属于自欺。
+    for pool in CHAPTER_QUOTE.values():
+        out.extend(str(pair[0]) for pair in pool)
     return tuple(dict.fromkeys(out))
