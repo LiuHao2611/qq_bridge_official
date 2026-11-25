@@ -52,8 +52,16 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "战斗回看": ("cmd_battle_review", "qq", ""),
     # 同批漏掉的第二个：「任务」在战斗回执按钮族里，也没登记。
     "任务": ("cmd_tasks", "qq", ""),
+    # 2026-11-25 晚：任务/主线类按钮（task_panel/main_submit/task_submit 的按钮族）——
+    # 漏登记会让玩家点「领主线/交任务/接任务」没反应。
+    "领主线": ("cmd_main_submit", "qq", ""),
+    "交任务": ("cmd_task_submit", "qq", ""),
+    "接任务": ("cmd_task_accept", "qq", ""),
     "爬塔": ("cmd_tower", "qq_str", ""),
     "塔层": ("cmd_tower_status", "qq", ""),
+    "塔结算": ("cmd_tower_settle", "qq", ""),      # 2026-11-25 晚 tower_text 按钮
+    "周本状态": ("cmd_weekly_status", "qq", ""),   # 2026-11-25 晚 weekly_text 按钮
+    "查看": ("cmd_view", "qq_str", ""),            # 2026-11-25 晚 use_text 按钮
     "装备": ("cmd_equip", "qq_str", ""),
     "强化": ("cmd_enhance", "qq", ""),
     "斗技": ("cmd_skills", "qq", "skills"),
@@ -66,6 +74,8 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "宝库": ("cmd_shop", "qq", "shop"),
     "买": ("cmd_buy", "qq_str", ""),
     "炼药": ("cmd_recipes", "qq", "recipes"),
+    # 2026-11-25 晚：查看丹药卡的「炼制此丹」按钮（custom 带参：炼制 破厄丹）。
+    "炼制": ("cmd_craft", "qq_str", ""),
     "服丹": ("cmd_use", "qq_str", ""),
     "背包": ("cmd_bag", "qq", "bag"),
     # 2026-11-18 傀儡：按钮点击走同一套 cmd_*，不另写业务逻辑

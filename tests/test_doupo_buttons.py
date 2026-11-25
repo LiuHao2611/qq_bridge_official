@@ -230,7 +230,25 @@ def test_each_card_buttons_are_relevant_family():
         "item": {"服丹", "炼药", "宝库", "背包"},
         # 2026-11-25 战斗**纯文本**回包按钮组（用户 Q2：文本+按钮同条）。
         # 与上面的 "battle"（战斗回看卡）刻意分开：那张卡只挂「战斗评价」。
-        "fight_text": {"战斗回看", "战斗评价", "任务"},
+        "fight_text": {"战斗回看", "战斗评价", "战斗", "任务"},
+        # 2026-11-25 晚：按回复类型精确配按钮（用户「每类只放对应按钮」）。
+        "task_panel": {"领主线", "交任务", "接任务", "战斗"},
+        "main_submit": {"任务", "战斗", "修炼"},
+        "task_submit": {"任务", "领主线", "战斗"},
+        "battle_text": {"战斗回看", "战斗", "任务"},
+        "review_text": {"战斗评价", "战斗", "任务"},
+        "tower_text": {"塔层", "塔结算", "战斗"},
+        "weekly_text": {"周本状态", "战斗", "人物"},
+        "cult_text": {"战斗", "突破", "人物"},
+        "equip_text": {"强化", "人物", "战斗"},
+        "skill_text": {"斗技", "上阵", "人物"},
+        "flame_text": {"养火", "异火", "人物"},
+        "buy_text": {"买", "炼药", "宝库"},
+        "craft_text": {"炼药", "服丹", "背包"},
+        "use_text": {"背包", "炼药", "查看"},
+        "shop_text": {"买", "宝库", "背包"},
+        "enter_text": {"人物", "修炼", "战斗"},
+        "puppet_text": {"傀儡", "炼制傀儡", "傀儡遗迹"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (
@@ -263,9 +281,15 @@ def test_every_button_is_dispatchable():
             if card_key:
                 assert card_key in db.CARD_ACTIONS, \
                     "按钮 %r 的出卡 key %r 不在 CARD_ACTIONS" % (c, card_key)
-    # plan 不得混入非按钮口令（防止反向污染）
-    extra = set(plan) - set(db.ALL_BUTTON_CMDS)
+    # plan 不得混入非按钮口令（防止反向污染）。
+    # 例外：custom 带参按钮的 head（如「炼制 破厄丹」拆出「炼制」）不在静态
+    # CARD_ACTIONS 里——它是查看丹药卡的动态按钮，走 dispatch_custom 带参分发。
+    # 白名单只收这类「带参动作的 head」，且必须真在 _item_detail_buttons 用到。
+    _CUSTOM_ARG_HEADS = {"炼制"}
+    extra = set(plan) - set(db.ALL_BUTTON_CMDS) - _CUSTOM_ARG_HEADS
     assert not extra, "dispatch plan 混入非按钮口令：%s" % sorted(extra)
+    for head in _CUSTOM_ARG_HEADS:
+        assert head in plan, "custom 带参按钮 head %r 缺 dispatch 条目（点击无反应）" % head
 
 
 def test_card_renderer_shapes_match_dispatch():
@@ -419,6 +443,105 @@ def test_page_dispatch_source_contract():
 
 
 # ---------------------------------------------------------------------------
+# 2026-11-25 晚：按入站口令精确配按钮（用户「每个回复的按钮都处理好」）
+# ---------------------------------------------------------------------------
+def test_reply_card_key_for_inbound_mapping():
+    """入站口令首词 → 纯文字回执 card_key：只认白名单，带参取首词，闲聊零按钮。"""
+    cases = {
+        "任务": "task_panel", "领主线": "main_submit", "交主线": "main_submit",
+        "交任务": "task_submit", "接任务": "task_submit",
+        "战斗评价": "battle_text", "战斗回看": "review_text",
+        "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
+        "电梯": "tower_text", "周副本": "weekly_text", "周本状态": "weekly_text",
+        "修炼": "cult_text", "突破": "cult_text",
+        "上阵": "skill_text", "学斗技": "skill_text",
+        "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
+        "买": "buy_text", "炼制": "craft_text", "入道": "enter_text", "主题": "enter_text",
+        "傀儡": "puppet_text", "炼制傀儡": "puppet_text", "傀儡遗迹": "puppet_text",
+    }
+    for inbound, want in cases.items():
+        assert db.reply_card_key_for(inbound) == want, \
+            "入站 %r 应派生 card_key %r，实际 %r" % (
+                inbound, want, db.reply_card_key_for(inbound))
+    # 带参口令取首词
+    assert db.reply_card_key_for("炼制 破厄丹") == "craft_text"
+    assert db.reply_card_key_for("上阵 1 3") == "skill_text"
+    assert db.reply_card_key_for("  任务  ") == "task_panel"
+    # 闲聊 / 空 → 零按钮（绝不误挂）
+    for s in ("", "   ", "闲聊", "你好", "斗破菜单", "/start"):
+        assert db.reply_card_key_for(s) == "", \
+            "非功能口令 %r 不该派生 card_key" % s
+    # 白名单值必须都指向已知卡，键必须规范（无空白）
+    for head, ck in db.REPLY_CARD_KEY.items():
+        assert ck in db.CARD_ACTIONS, "入站映射 %r 指向未知卡 %r" % (head, ck)
+        assert head == head.strip() and head, "入站映射键不规范：%r" % head
+
+
+def test_label_overlay_continue_battle():
+    """「继续战斗」只是 label 覆盖，cmd 必须是真口令「战斗」且可分发。"""
+    real = set(_baseline_real_commands())
+    plan = _baseline_dispatch_plan()
+    for card, pairs in db.CARD_ACTIONS_PAIRS.items():
+        assert card in db.CARD_ACTIONS, "label 覆盖指向未知卡：%s" % card
+        for label, cmd in pairs:
+            assert cmd in real, "label 覆盖 %s 的 cmd %r 不是真口令" % (card, cmd)
+            assert cmd in plan, "label 覆盖 %s 的 cmd %r 不可分发" % (card, cmd)
+            assert 0 < len(label) <= 10, "label 越界：%r" % label
+    # 战报 / 任务面板必须明确有「继续战斗」按钮，data=战斗
+    for card in ("fight_text", "task_panel", "main_submit", "tower_text",
+                 "battle_text", "review_text"):
+        got = [(b.label, b.cmd) for b in db.buttons_for_card(card)]
+        assert ("继续战斗", "战斗") in got, \
+            "卡 %s 缺「继续战斗」按钮：%s" % (card, got)
+    # 未覆盖的卡仍按 CARD_ACTIONS 原样（label == cmd）
+    plain = [(b.label, b.cmd) for b in db.buttons_for_card("panel")]
+    assert plain == [(c, c) for c in db.CARD_ACTIONS["panel"]]
+    # 派生走覆盖表：cmd=战斗 时 label 必须是「继续战斗」，不能回退成「战斗」
+    ft = {b.cmd: b.label for b in db.buttons_for_card("fight_text")}
+    assert ft.get("战斗") == "继续战斗"
+
+
+def test_item_detail_dynamic_buttons():
+    """查看丹药卡：炼制此丹 + 买第一味材料；非丹药/未知回落通用按钮。"""
+    dan = db.buttons_for_card("item:破厄丹")
+    cmds = [b.cmd for b in dan]
+    assert "doupo:cbtn:炼制 破厄丹" in cmds, "丹药卡缺炼制按钮：%s" % cmds
+    assert any(c.startswith("doupo:cbtn:买 ") for c in cmds), \
+        "丹药卡缺买材料按钮：%s" % cmds
+    assert "炼药" in cmds and "背包" in cmds
+    assert len(dan) <= 5 and all(not b.primary for b in dan)
+    assert all(0 < len(b.label) <= 10 for b in dan)
+    # 两味不同丹药的炼制按钮带参不同（不能全挂同一个）
+    assert "doupo:cbtn:炼制 回灵丹" in [
+        b.cmd for b in db.buttons_for_card("item:回灵丹")]
+    # 非丹药 / 空名 → 通用 item 按钮，绝不带 custom 带参按钮
+    for k in ("item:不存在的东西", "item:"):
+        got = [b.cmd for b in db.buttons_for_card(k)]
+        assert got == list(db.CARD_ACTIONS["item"]), \
+            "%s 应回落通用按钮：%s" % (k, got)
+        assert not any(c.startswith(db.DOUPO_CUSTOM_PREFIX) for c in got)
+
+
+def test_bridge_derives_card_key_from_inbound():
+    """源码契约：兜底桥从入站口令派生 card_key（加 doupo: 前缀），未知口令不误挂。"""
+    src = (_ROOT / "src/game_compat.py").read_text(encoding="utf-8")
+    assert "reply_card_key_for" in src, "兜底桥未按入站口令派生 card_key"
+    assert '_ck = "doupo:" + _ck' in src, "派生 card_key 未加 doupo: 前缀"
+    # 派生调用必须早于兜底发送（否则按钮没带上）
+    i_derive = src.find("_ck = reply_card_key_for(_plain)")
+    i_send = src.find("if await _channel_send_text(event, message, _ck)", i_derive)
+    assert i_derive != -1 and i_send != -1 and i_derive < i_send, \
+        "card_key 派生必须早于兜底发送"
+    # 查看卡出口必须传 item:<丹名> 动态 key
+    init_src = (_DOUPO / "__init__.py").read_text(encoding="utf-8")
+    assert '"item:%s" % name' in init_src, "查看卡未传 item:<丹名> 动态 card_key"
+    # custom 带参按钮 head 必须在 dispatch plan（否则点击无反应）
+    plan = _baseline_dispatch_plan()
+    for head in ("炼制", "买"):
+        assert head in plan, "custom 带参按钮 head %r 缺 dispatch" % head
+
+
+# ---------------------------------------------------------------------------
 # 注入验证（prove-it：四类真实错误必须被拦住）
 # ---------------------------------------------------------------------------
 def test_injection_guards():
@@ -527,6 +650,10 @@ if __name__ == "__main__":
         test_page_prefix_isolated_from_canonical_buttons,
         test_page_buttons_derived_from_armed_state,
         test_page_dispatch_source_contract,
+        test_reply_card_key_for_inbound_mapping,
+        test_label_overlay_continue_battle,
+        test_item_detail_dynamic_buttons,
+        test_bridge_derives_card_key_from_inbound,
         test_injection_guards,
         test_source_contract_finish_card_used,
         test_source_contract_interaction_routes_doupo,

@@ -826,7 +826,10 @@ async def _(event: Event):
             logger.warning("斗破物品详情卡渲染异常，降级纯文本：%s: %s",
                            type(e).__name__, e)
     if png:
-        await finish_card(view_cmd, event, png, "item", "doupo_item.png")
+        # 2026-11-25 晚：丹药详情卡带动态按钮（炼制此丹 / 买主材料）；
+        # 非丹药（name 无配方）由派生层自动回落通用按钮。
+        await finish_card(view_cmd, event, png, "item:%s" % name if name else "item",
+                          "doupo_item.png")
         return
     await view_cmd.finish(txt)
 

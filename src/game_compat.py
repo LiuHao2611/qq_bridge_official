@@ -638,8 +638,23 @@ def install_official_text_bridge() -> bool:
     async def send(self, event, message, **kwargs):  # noqa: ANN001, ANN003
         if (isinstance(message, str) and message.strip()
                 and isinstance(event, (GroupMessageCreateEvent, C2CMessageCreateEvent))):
+            # 2026-11-25 晚：按入站口令给纯文字回执配**对应功能按钮**（用户
+            # 「每个回复只放对应按钮，别都塞主菜单」）。从入站文本派生 card_key，
+            # 只影响按钮族，不改变回执正文；派生失败=沿用旧的兜底菜单，不比现状差。
+            _ck = ""
             try:
-                if await _channel_send_text(event, message):
+                _plain = str(event.get_plaintext() or "").strip()
+                from src.plugins.qq_bridge.channel.doupo_buttons import (  # noqa: PLC0415
+                    reply_card_key_for,
+                )
+
+                _ck = reply_card_key_for(_plain)
+                if _ck:
+                    _ck = "doupo:" + _ck
+            except Exception:  # noqa: BLE001 — 按钮是增强项，取不到就照旧
+                _ck = ""
+            try:
+                if await _channel_send_text(event, message, _ck):
                     return None
             except Exception as e:  # noqa: BLE001 — 兜底失败一律回退原生
                 import logging  # noqa: PLC0415

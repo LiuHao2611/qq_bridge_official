@@ -220,7 +220,77 @@ CARD_ACTIONS = {
     # ⚠️ 与 "battle" 语义不同、绝不共用键："battle" 是「战斗回看卡」自己的
     # 下钻按钮（只挂战斗评价），这里是「刚打完这一场」的功能组
     # （回看 / 评价 / 任务）。混用会让回看卡多出不相关的「任务」按钮。
-    "fight_text": ("战斗回看", "战斗评价", "任务"),
+    "fight_text": ("战斗回看", "战斗评价", "战斗", "任务"),
+    # 2026-11-25 晚：按回复类型精确配按钮（用户「对应卡片只放对应的功能按钮，
+    # 别都批量放一堆主菜单」「战报加继续战斗」「处理好每一个回复的按钮」）。
+    # 这些 key 由 game_compat.reply_card_key 按**入站口令**派生，专供纯文字回复。
+    "task_panel": ("领主线", "交任务", "接任务", "战斗"),      # 📜 任务面板
+    "main_submit": ("任务", "战斗", "修炼"),                    # 🏅 主线完成回执
+    "task_submit": ("任务", "领主线", "战斗"),                  # 支线交任务回执
+    "battle_text": ("战斗回看", "战斗", "任务"),                # 战斗评价纯文字
+    "review_text": ("战斗评价", "战斗", "任务"),                # 战斗回看纯文字
+    "tower_text": ("塔层", "塔结算", "战斗"),                   # 爬塔回执
+    "weekly_text": ("周本状态", "战斗", "人物"),                # 周副本回执
+    "cult_text": ("战斗", "突破", "人物"),                      # 修炼/突破回执
+    "equip_text": ("强化", "人物", "战斗"),                     # 装备/强化回执
+    "skill_text": ("斗技", "上阵", "人物"),                     # 学斗技/升级/上阵回执
+    "flame_text": ("养火", "异火", "人物"),                      # 收服/养火回执
+    "buy_text": ("买", "炼药", "宝库"),                         # 购买回执（区别于 shop）
+    "craft_text": ("炼药", "服丹", "背包"),                     # 炼丹回执
+    "use_text": ("背包", "炼药", "查看"),                       # 服丹回执
+    "shop_text": ("买", "宝库", "背包"),                        # 商店文字回执
+    "enter_text": ("人物", "修炼", "战斗"),                     # 入道/主题回执
+    "puppet_text": ("傀儡", "炼制傀儡", "傀儡遗迹"),             # 傀儡子命令回执（区别于其他傀儡卡）
+}
+
+#: 按钮 label 覆盖（card_key → ((label, cmd), ...)）：cmd 仍是 canonical 真口令，
+#: 只改玩家看到的字。用于「继续战斗」这类更友好的措辞（cmd=战斗）。
+#: 未登记的 card_key 走 CARD_ACTIONS 原样（label=cmd）。
+CARD_ACTIONS_PAIRS: dict[str, tuple[tuple[str, str], ...]] = {
+    "fight_text": (
+        ("战斗回看", "战斗回看"), ("战斗评价", "战斗评价"),
+        ("继续战斗", "战斗"), ("任务", "任务"),
+    ),
+    "battle_text": (
+        ("战斗回看", "战斗回看"), ("继续战斗", "战斗"), ("任务", "任务"),
+    ),
+    "review_text": (
+        ("战斗评价", "战斗评价"), ("继续战斗", "战斗"), ("任务", "任务"),
+    ),
+    "task_panel": (
+        ("领主线", "领主线"), ("交任务", "交任务"),
+        ("接任务", "接任务"), ("继续战斗", "战斗"),
+    ),
+    "main_submit": (
+        ("看任务", "任务"), ("继续战斗", "战斗"), ("修炼", "修炼"),
+    ),
+    "tower_text": (
+        ("看塔层", "塔层"), ("塔结算", "塔结算"), ("继续战斗", "战斗"),
+    ),
+}
+
+#: 入站口令首词 → 纯文字回复该挂的 card_key（2026-11-25 晚）。
+#: 兜底桥 ``matcher.finish(str)`` 与未显式传 card_key 的 finish_text 都用它派生，
+#: 一处收口覆盖全部历史写法，不用逐个改 47 处 handler。
+#: 只对「玩家明确发起了某个功能」的口令映射；闲聊/未知口令不映射（保持零按钮兜底）。
+REPLY_CARD_KEY: dict[str, str] = {
+    "任务": "task_panel", "领主线": "main_submit", "交主线": "main_submit",
+    "交任务": "task_submit", "接任务": "task_submit",
+    "战斗评价": "battle_text", "战斗回看": "review_text",
+    "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
+    "电梯": "tower_text",
+    "周副本": "weekly_text", "周本状态": "weekly_text",
+    "修炼": "cult_text", "突破": "cult_text", "入塔": "cult_text",
+    "出塔": "cult_text", "火能": "cult_text",
+    "装备": "equip_text", "强化": "equip_text",
+    "学斗技": "skill_text", "学习": "skill_text", "升级": "skill_text",
+    "上阵": "skill_text", "斗技详情": "skill_text",
+    "收服": "flame_text", "养火": "flame_text",
+    "买": "buy_text", "购买": "buy_text",
+    "炼制": "craft_text", "炼丹": "craft_text",
+    "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
+    "入道": "enter_text", "主题": "enter_text",
+    "傀儡": "puppet_text", "炼制傀儡": "puppet_text", "傀儡遗迹": "puppet_text",
 }
 
 #: 卡片自身 canonical 触发口令（用于「按钮不含当前卡自己」守门）。
@@ -244,11 +314,71 @@ CARD_SELF = {
     # 2026-11-25 战斗纯文本按钮组：自身触发口令就是「战斗」（这条回执的来源）。
     # 它不是一个「可触发的卡」，只是纯文本回执挂的按钮组，但在守门②眼里
     # 必须与「回看卡 battle」区分开——两者的按钮族不同（见 CARD_ACTIONS 注释）。
-    "fight_text": "战斗",
+    "fight_text": "战斗回执",
+    # 2026-11-25 晚：纯文字回执 key 不是「可点卡」，CARD_SELF 只用于守门的
+    # 「按钮不含自身」检查；设成不与本族按钮冲突的虚拟词即可。
+    "task_panel": "任务面板", "main_submit": "主线结算",
+    "task_submit": "支线结算", "battle_text": "战斗评语", "review_text": "回看文本",
+    "tower_text": "爬塔回执", "weekly_text": "周本回执", "cult_text": "修炼回执",
+    "equip_text": "装备回执", "skill_text": "斗技回执", "flame_text": "异火回执",
+    "buy_text": "购买回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
+    "shop_text": "商店回执", "enter_text": "入道回执", "puppet_text": "傀儡回执",
 }
 
 #: 所有按钮 canonical 的并集 —— qq_interaction 据此识别「斗破按钮点击」。
 ALL_BUTTON_CMDS = frozenset(c for acts in CARD_ACTIONS.values() for c in acts)
+
+
+def _item_detail_buttons(name: str) -> tuple[Btn, ...]:
+    """查看物品详情卡：丹药给「炼制此丹 + 买材料 + 炼药/背包」，非丹药给通用按钮。
+
+    按钮 data 用 custom 前缀带参（``doupo:cbtn:炼制 <丹名>``），点击走
+    ``dispatch_custom`` → ``commands.cmd_craft(arg)``，直接开炉这味丹，不用玩家
+    再手打口令。零 nonebot 依赖：只读 config 的纯数据表。
+    """
+    base = CARD_ACTIONS.get("item", ("服丹", "炼药", "宝库", "背包"))
+    if not name:
+        return tuple(Btn(c, c, False) for c in base)
+    try:
+        # 直接按文件加载 config（绕开 doupo/__init__.py 的 nonebot import），
+        # 宿主纯标准库单测可跑、生产零副作用。config 顶部相对 import recipes_data，
+        # 用假包 dpkg 承载即可（同 test_official_text_bridge 的桩法）。
+        import importlib.util as _ilu
+        import sys as _sys
+        import types as _types
+        from pathlib import Path as _Path
+
+        _dir = _Path(__file__).resolve().parents[2] / "doupo"  # src/plugins/doupo
+        _pkg = _types.ModuleType("_doupo_data")
+        _pkg.__path__ = [str(_dir)]  # type: ignore[attr-defined]
+        _sys.modules.setdefault("_doupo_data", _pkg)
+        for _sub in ("recipes_data", "config"):
+            _key = "_doupo_data." + _sub
+            if _key not in _sys.modules:
+                _sp = _ilu.spec_from_file_location(_key, _dir / (_sub + ".py"))
+                if _sp is None or _sp.loader is None:
+                    raise ImportError(_sub)
+                _mod = _ilu.module_from_spec(_sp)
+                _sys.modules[_key] = _mod
+                _sp.loader.exec_module(_mod)
+        _cfg = _sys.modules["_doupo_data.config"]
+        rec = _cfg.RECIPE_BY_NAME.get(name) or {}
+        need = rec.get("need") or {}
+    except Exception:  # noqa: BLE001 — 派生失败退回通用按钮，绝不阻断出图
+        return tuple(Btn(c, c, False) for c in base)
+    if not need:
+        # 非丹药（药材/天材地宝/傀儡料）：给通用「炼药/宝库/背包」，不加炼制按钮。
+        return tuple(Btn(c, c, False) for c in base)
+    first_mat = next(iter(need), "")
+    acts: list[Btn] = [
+        Btn("炼制%s" % name[:6], DOUPO_CUSTOM_PREFIX + "炼制 " + name, False),
+    ]
+    if first_mat:
+        acts.append(Btn("买%s" % first_mat[:6],
+                        DOUPO_CUSTOM_PREFIX + "买 " + first_mat, False))
+    acts.append(Btn("炼药", "炼药", False))
+    acts.append(Btn("背包", "背包", False))
+    return tuple(acts[:5])
 
 
 def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
@@ -258,6 +388,11 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
     （那会污染档位族守门），也不对闲聊/斜杠命令给按钮。
     """
     k = (card_key or "").strip()
+    # 2026-11-25 晚：查看丹药卡动态按钮（用户「丹药就加炼制+买材料按钮」）。
+    # card_key = "item:<丹名>" → 按该丹配方生成带参按钮；非丹药走普通 item。
+    if k.startswith("item:"):
+        return _item_detail_buttons(k[len("item:"):].strip())
+
     acts = CARD_ACTIONS.get(k)
     if not acts:
         return ()
@@ -266,13 +401,40 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
     custom = _custom_buttons.get().get(k)
     if custom:
         return tuple(custom)
+    # 2026-11-25 晚：label 覆盖优先（如「继续战斗」cmd 仍是「战斗」）。
+    pairs = CARD_ACTIONS_PAIRS.get(k)
+    if pairs:
+        return tuple(Btn(label, cmd, False) for label, cmd in pairs)
     return tuple(Btn(c, c, False) for c in acts)
+
+
+def reply_card_key_for(inbound_text: str) -> str:
+    """入站口令文本 → 纯文字回复该挂的 card_key（零编造：只认 REPLY_CARD_KEY）。
+
+    取首个非空词做前缀匹配；「上阵 1 3」「炼制 回灵丹」这类带参口令取首词。
+    """
+    s = str(inbound_text or "").strip()
+    if not s:
+        return ""
+    head = s.split()[0]
+    return REPLY_CARD_KEY.get(head, "")
 
 
 def validate() -> None:
     """实现侧自检（守门测试另有独立基准，不信任本函数）：任一违例立即抛 AssertionError。"""
     real = set(real_commands())
     assert real, "MENU_GROUPS 派生为空（事实源退化）"
+    # label 覆盖表：cmd 必须是真口令，label 长度合法，覆盖的 card_key 必须存在
+    for card, pairs in CARD_ACTIONS_PAIRS.items():
+        assert card in CARD_ACTIONS, "label 覆盖指向不存在的卡：%s" % card
+        assert 1 <= len(pairs) <= 5, "卡 %s label 覆盖按钮数越界" % card
+        for label, cmd in pairs:
+            assert cmd in real, "卡 %s 覆盖 cmd 编造：%s" % (card, cmd)
+            assert 0 < len(label) <= 10, "卡 %s label 越界：%s" % (card, label)
+    # 入站映射表：值必须指向已知 card_key，键必须首词规范
+    for head, ck in REPLY_CARD_KEY.items():
+        assert ck in CARD_ACTIONS, "入站口令 %s 指向未知卡 %s" % (head, ck)
+        assert head == head.strip() and head, "入站口令键不规范：%r" % head
     combos: list[tuple[str, ...]] = []
     for card, acts in CARD_ACTIONS.items():
         assert 1 <= len(acts) <= 5, "卡 %s 按钮数越界：%d" % (card, len(acts))

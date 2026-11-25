@@ -476,6 +476,54 @@ def t_fight_text_button_survives_net_error() -> None:
         "重试成功后必须空 finish（不降级兜底桥），否则按钮掉回主菜单，实际 %r" % m.done)
 
 
+def t_bridge_derives_kcmd_from_inbound() -> None:
+    """兜底桥：从入站口令派生 card_key，未知口令不误挂，带参取首词。
+
+    2026-11-25 晚「每个回复只放对应按钮」：matcher.finish(str) 走兜底桥时，
+    send() 从 event.get_plaintext() 派生 card_key 并加 doupo: 前缀传给通道。
+    真实映射由 test_doupo_buttons 守门；这里守「接线」——派生值真的到了 kcmd。
+    """
+    qq = _install_fake_qq()
+    mod = _fresh_mod(qq)
+    seen: list = []
+
+    async def fake(raw, text, kcmd=""):  # noqa: ANN001
+        seen.append(kcmd)
+        return True
+
+    mod._channel_send_text = fake  # type: ignore[assignment]
+
+    # 挂真实 doupo_buttons（零 nonebot 依赖），让兜底桥 import 拿到真的映射表。
+    for pkg in ("src.plugins", "src.plugins.qq_bridge",
+                "src.plugins.qq_bridge.channel"):
+        if pkg not in sys.modules:
+            m = types.ModuleType(pkg)
+            m.__path__ = []  # type: ignore[attr-defined]
+            sys.modules[pkg] = m
+    import importlib.util  # noqa: PLC0415
+
+    _p = _ROOT / "src/plugins/qq_bridge/channel/doupo_buttons.py"
+    _spec = importlib.util.spec_from_file_location(
+        "src.plugins.qq_bridge.channel.doupo_buttons", _p)
+    _db = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = _db
+    _spec.loader.exec_module(_db)
+
+    def send_with(plain: str) -> None:
+        ev = qq.GroupMessageCreateEvent()
+        ev.get_plaintext = lambda: plain  # type: ignore[attr-defined]
+        asyncio.run(qq.Bot().send(ev, "回复正文"))
+
+    send_with("任务")
+    send_with("炼制 破厄丹")   # 带参取首词
+    send_with("上阵 1 3")     # 带参取首词
+    send_with("闲聊")          # 未知口令 → 零按钮兜底
+    assert seen == [
+        "doupo:task_panel", "doupo:craft_text", "doupo:skill_text", "",
+    ], "兜底桥 card_key 派生错：%r" % seen
+    assert qq.Bot.calls == [], "走通道成功不得再调原生 send（会双发）"
+
+
 CASES = (
     ("install_idempotent", t_install_idempotent),
     ("text_goes_channel", t_text_goes_channel),
@@ -494,6 +542,7 @@ CASES = (
     ("business_fail_no_retry", t_business_fail_no_retry),
     ("success_no_retry", t_success_no_retry),
     ("fight_text_button_survives_net_error", t_fight_text_button_survives_net_error),
+    ("bridge_derives_kcmd_from_inbound", t_bridge_derives_kcmd_from_inbound),
 )
 
 
