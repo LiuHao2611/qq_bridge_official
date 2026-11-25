@@ -182,3 +182,38 @@ echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec
   `test_use_danwen.py`（85，自跑 runner **才是正确跑法**，`-p _pytest_stub_plugin` 下变异抓不到）、
   `test_commands.py`（125）、`tests/test_doupo_tower.py`（21）、`tests/test_doupo_buttons.py`（21）。
 - **变异反证只用 /tmp 备份还原，绝对禁止 `git checkout --`**（会把整文件未提交改动全撤销）。
+
+## §24 按钮派生链 + 出卡渲染缓存（2026-11-26 凌晨，用户 4 条日志反馈）
+
+- **官方群纯文本必须 `markdown + keyboard` 同段才送达**（无 keyboard 的 markdown 实测
+  「API 200 但一条不见」）。因此「不给按钮」不是选项：任何纯文本回复**必须**自带 card_key，
+  否则一律退回 `_KB_FALLBACKS["doupo"]="doupo:menu"` → 回执底部一排默认主菜单按钮。
+- **三条独立链路决定按钮，改了必须同时对齐**：
+  ① 纯文字口令 → 兜底桥 → `reply_card_key_for(入站首词)`；
+  ② 按钮点击 → `button_dispatch._PLAN[cmd]` 第三字段 `card_key`（留空 = 点完没按钮）；
+  ③ 出图口令 → `render_<card_key>`。
+- **`reply_card_key_for` 必须过 `REPLY_ALIAS`**：同一张卡的说法有 2~4 种
+  （战斗/打怪/历练/出战、背包/包裹/行囊、宝库/商店/坊市、周本/周塔/周报状态）。
+  新增口令只登记主词 = 别名玩家拿到默认主菜单按钮。
+  **守门**：`test_every_regex_keyword_maps_to_buttons` 从 `_pat()` 正则抠 110 个词逐个要 card_key。
+- **`finish_text(...)` 一律显式传 `card_key=`**（签名第 5 参）。守门
+  `test_every_finish_text_carries_card_key` 会 AST 扫全 `doupo/*.py`，缺一个就红。
+- **回执 key 族**（`TEXT_CARD_KEYS`，20 个 `*_text` + `task_panel/main_submit/task_submit/setup_text`）
+  **没有也不该有 `render_*`**；出图卡的 key（bag/shop/tower…）必须有。两族别混，
+  守门靠 `NO_RENDER_CARD_KEYS = TEXT_CARD_KEYS | PROMPT_CARD_KEYS` 区分。
+- **`转宗` 的 card_key 只能是 `skill_text`**，给 `faction` 会走 `render_faction(p)` 出宗门卡把回执吞掉。
+- **出卡渲染缓存**（`card._RENDER_CACHE`）：key=`(template, card_name, sha1(json(render_data)))`，
+  LRU 48 张。**别为了命中率把「背包 ×N」从详情卡摘掉**——内容变就该重画，那是正确行为；
+  真正的前提是 **PNG 字节确定性**（改渲染必须保持三次 md5 一致，否则上层 md5 素材缓存全废）。
+- **`craft_rate_for` 的 `diff` 负数 = 高品阶炼低阶的加成，不是越阶**。
+  越档提示只能 `diff > 0` 且只在**失败**时出现；成功回执不许泼冷水（用户实测骂过）。
+  `txt.craft_over()` 自身对非正数返回空串（双闸）。
+- **部署红线**：`drift` 只审计 `src/**/*.py`，**`tests/*.py` 改了要手动 `phone_deploy push`**，
+  否则手机上跑旧断言出假红。**手机上禁止裸跑 `tests/`**（会按默认 `DB_PATH` 在
+  `src/plugins/doupo/data/` 建空库，下次 push 被「包内示例库 sqlite」闸门拦死）——
+  必须 `DOUPO_DATA_PATH=/tmp/t/... XIUXIAN_DATA_PATH=/tmp/t/...`。
+- **`tests/` 里 24 个文件的 `check()` 只 print 不抛** → `pytest tests/` 假绿。
+  看到「pytest 全绿」先确认该文件用的是 `assert` 还是 `check()`；`test_doupo_puppet_craft_card.py`
+  已改成 pytest 下即抛，其余 23 个仍是坑（已知隐藏失败 12 条，见 2026-11-25 日志待办）。
+- **写跨行正则做源码契约测试时禁止 `(?:[ ]+[^\n]*\n)*?`**：目标句一改就灾难性回溯，
+  整个 pytest 进程被 timeout 插件 SIGTERM（表现为「测试卡死」）。用定长窗口 + `[ ]*`。
