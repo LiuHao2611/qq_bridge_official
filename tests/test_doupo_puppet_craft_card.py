@@ -139,14 +139,19 @@ def test_handler_gate():
     check("handler 有 puppet_is_subcmd 分流", gate >= 0, gate)
     check("分流在建卡之前（先出声再考虑出图）", 0 <= gate < render, (gate, render))
     # 只用 find 会被 `if is_subcmd(arg) and False:` 骗过（调用还在、条件已废）。
-    # 这里钉整段结构：条件原样 → finish_text(txt) → return，一步都不许少。
+    # 这里钉整段结构：条件原样 → finish_text(txt, card_key=...) → return，一步都不许少。
+    #
+    # ⚠️ 2026-11-25 晚：原写法用 `(?:[ ]+[^\n]*\n)*?` 跨行，一旦被匹配的句子改了
+    # （这里给 finish_text 补了 card_key），惰性量词就会在长文本上**灾难性回溯**，
+    # 整个 pytest 进程被 timeout 插件 SIGTERM 掉——看起来像「测试卡死」，其实是
+    # 正则爆了。改成定长窗口 + 线性 `[ ]*`，匹配不上就干脆利落地红。
+    window = seg[gate:gate + 800]
     shape = re.search(
         r"if commands\.puppet_is_subcmd\(arg\):\n"
-        r"(?:[ ]+[^\n]*\n)*?"
-        r"[ ]+await finish_text\(puppet_cmd, event, txt\)\n"
-        r"[ ]+return\n", seg)
-    check("分流是「条件原样 + finish_text + return」的完整结构", bool(shape),
-          seg[gate:gate + 260] if gate >= 0 else "")
+        r"[ ]*await finish_text\(puppet_cmd, event, txt, card_key=\"puppet_text\"\)\n"
+        r"[ ]*return\n", window)
+    check("分流是「条件原样 + finish_text(带按钮) + return」的完整结构", bool(shape),
+          window[:260] if gate >= 0 else "")
 
     # 炼制成卡：只有 rep.ok 才渲染，失败保持文本
     j0 = seg.index('if "炼制傀儡" in raw:')

@@ -337,7 +337,9 @@ async def _(event: Event):
         # （官方 markdown 内嵌多图 / NapCat 多图片段），不是「文字+卡」两条。
         await finish_card(battle_review_cmd, event, pages, "battle", "doupo_battle.png")
         return
-    await finish_text(battle_review_cmd, event, msg)
+    # 没战报可看时的纯文本兜底：同样要挂「战斗回看 / 继续战斗 / 任务」，
+    # 否则官方群里纯文本会落到 kb_fallback=doupo:menu，变成一排默认主菜单按钮。
+    await finish_text(battle_review_cmd, event, msg, card_key="review_text")
 
 
 battle_comment_cmd = on_regex(_pat(r"战斗评价"), priority=PRI - 1, block=True,
@@ -351,6 +353,7 @@ async def _(event: Event):
     await finish_text(
         battle_comment_cmd, event,
         await commands.cmd_battle_comment(store, str(event.user_id)),
+        card_key="battle_text",
     )
 
 
@@ -385,10 +388,13 @@ async def _(event: Event):
         # 裸数字：塔战利品优先，其次机遇竞猜；都没有时静默（不吞群聊、不回复）
         msg = await commands.cmd_pick(store, str(event.user_id), int(raw))
         if msg:
-            await finish_text(tower, event, msg)
+            # 竞猜 arming 优先于 card_key（finish_text 内部已处理），
+            # 这条纯文本不至于落到主菜单按钮上。
+            await finish_text(tower, event, msg, card_key="tower_text")
         return
     arg = _arg(event, "爬塔")
-    await finish_text(tower, event, await commands.cmd_tower(store, str(event.user_id), arg))
+    await finish_text(tower, event, await commands.cmd_tower(store, str(event.user_id), arg),
+                      card_key="tower_text")
 
 
 tower_status = on_regex(_pat(r"(?:塔层|塔状态)"), priority=PRI, block=True,
@@ -400,7 +406,8 @@ async def _(event: Event):
     event = view(event)
     await _need_group(event, tower_status)
     await finish_text(tower_status, event,
-                      await commands.cmd_tower_status(store, str(event.user_id)))
+                      await commands.cmd_tower_status(store, str(event.user_id)),
+                      card_key="tower_text")
 
 
 tower_settle = on_regex(_pat(r"(?:塔结算|收手)"), priority=PRI, block=True,
@@ -412,7 +419,8 @@ async def _(event: Event):
     event = view(event)
     await _need_group(event, tower_settle)
     await finish_text(tower_settle, event,
-                      await commands.cmd_tower_settle(store, str(event.user_id)))
+                      await commands.cmd_tower_settle(store, str(event.user_id)),
+                      card_key="tower_text")
 
 
 # 自动爬塔（2026-11-25 用户取代电梯）：发口令→挂【随机加成】【无加成】按钮→点一下
@@ -430,7 +438,9 @@ async def _(event: Event):
     # 带参（按钮点击拼出的「自动爬塔 是/否」）直接跑；裸口令给确认提示+按钮。
     arg = _arg(event, "自动爬塔").strip()
     if arg:
-        await finish_text(auto_tower, event, await commands.cmd_auto_tower(store, qq, arg))
+        await finish_text(auto_tower, event,
+                          await commands.cmd_auto_tower(store, qq, arg),
+                          card_key="tower_text")
         return
     p = await store.get_player(qq) or {}
     await finish_text(auto_tower, event, commands.auto_tower_prompt(p),
@@ -447,7 +457,8 @@ async def _(event: Event):
     event = view(event)
     await _need_group(event, weekly)
     await finish_text(weekly, event,
-                      await commands.cmd_weekly(store, str(event.user_id)))
+                      await commands.cmd_weekly(store, str(event.user_id)),
+                      card_key="weekly_text")
 
 
 # PRI-1 抢在「周副本」之前命中：否则「周本状态」会被短口令「周本」先吃掉。
@@ -460,7 +471,8 @@ async def _(event: Event):
     event = view(event)
     await _need_group(event, weekly_status)
     await finish_text(weekly_status, event,
-                      await commands.cmd_weekly_status(store, str(event.user_id)))
+                      await commands.cmd_weekly_status(store, str(event.user_id)),
+                      card_key="weekly_text")
 
 
 equip = on_regex(_pat(r"装备") + r"\s*(.*)", priority=PRI, block=True,
@@ -472,7 +484,8 @@ async def _(event: Event):
     event = view(event)
     await _need_group(event, equip)
     arg = _arg(event, "装备")
-    await finish_text(equip, event, await commands.cmd_equip(store, str(event.user_id), arg))
+    await finish_text(equip, event, await commands.cmd_equip(store, str(event.user_id), arg),
+                      card_key="equip_text")
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +498,8 @@ enh = on_regex(_pat(r"强化"), priority=PRI, block=True, rule=_mode_is("doupo")
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, enh)
-    await finish_text(enh, event, await commands.cmd_enhance(store, str(event.user_id)))
+    await finish_text(enh, event, await commands.cmd_enhance(store, str(event.user_id)),
+                      card_key="equip_text")
 
 
 # 学斗技必须注册在 skills_cmd 之前（同 PRI 下先注册者先拦），否则「学斗技」
@@ -684,7 +698,8 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, feed)
     arg = _arg(event, "养火") if "养火" in _plain(event) else _arg(event, "喂火")
-    await finish_text(feed, event, await commands.cmd_feed(store, str(event.user_id), arg))
+    await finish_text(feed, event, await commands.cmd_feed(store, str(event.user_id), arg),
+                      card_key="flame_text")
 
 
 # 2026-11-19 三层投放补齐：玩家主动收服入口（S 线门槛 / B 线直接 / A 线拒绝）。
@@ -701,7 +716,8 @@ async def _(event: Event):
     kw = "收服异火" if "收服异火" in txt else "收服"
     arg = _arg(event, kw)
     await finish_text(claim_flame, event,
-                      await commands.cmd_claim_flame(store, str(event.user_id), arg))
+                      await commands.cmd_claim_flame(store, str(event.user_id), arg),
+                      card_key="flame_text")
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +778,9 @@ async def _(event: Event):
         quote_card = None
     logger.info("btn_setup quote_card=%s arg=%r", quote_card, arg)
 
-    await finish_text(btn_setup, event, await _cb.handle_config(store, qq, arg, quote_card=quote_card))
+    await finish_text(btn_setup, event,
+                      await _cb.handle_config(store, qq, arg, quote_card=quote_card),
+                      card_key="setup_text")
 
 
 buy = on_regex(_pat(r"(?:买|购买)") + r"\s*(.*)", priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -773,7 +791,8 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, buy)
     arg = _arg(event, "购买") if "购买" in _plain(event) else _arg(event, "买")
-    await finish_text(buy, event, await commands.cmd_buy(store, str(event.user_id), arg))
+    await finish_text(buy, event, await commands.cmd_buy(store, str(event.user_id), arg),
+                      card_key="buy_text")
 
 
 recipes = on_regex(_pat(r"(?:炼药|丹方)"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -851,7 +870,8 @@ async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, craft)
     arg = _arg(event, "炼制") if "炼制" in _plain(event) else _arg(event, "炼丹")
-    await finish_text(craft, event, await commands.cmd_craft(store, str(event.user_id), arg))
+    await finish_text(craft, event, await commands.cmd_craft(store, str(event.user_id), arg),
+                      card_key="craft_text")
 
 
 bag = on_regex(_pat(r"(?:背包|包裹|行囊)"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -1072,7 +1092,7 @@ async def _(event: Event):
             await puppet_cmd.finish(
                 "⚠️ 炼制卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
             return
-        await finish_text(puppet_cmd, event, txt)
+        await finish_text(puppet_cmd, event, txt, card_key="puppet_text")
         return
     m = re.search(r"傀儡\s*(.*)", raw)
     arg = (m.group(1) if m else "").strip()
@@ -1082,7 +1102,7 @@ async def _(event: Event):
         # 改的是真实列。此前这里无条件出傀儡卡，把这些回执整条吞掉——玩家花了
         # 材料只收到一张没有变化的名录卡，于是「傀儡淬炼」看起来像没触发
         # （2026-11-20 第十一轮实锤：命令真跑了、料真扣了、回执被卡吞了）。
-        await finish_text(puppet_cmd, event, txt)
+        await finish_text(puppet_cmd, event, txt, card_key="puppet_text")
         return
     try:
         p = await store.get_player(qq)

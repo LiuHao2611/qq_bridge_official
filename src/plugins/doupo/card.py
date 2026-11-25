@@ -17,9 +17,12 @@ pic 包自身约定「不 import nonebot、不 import 上级包」，因此可�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
+import json
 import logging
 import sys
+from collections import OrderedDict
 from pathlib import Path
 
 from . import battle_review as br
@@ -342,6 +345,60 @@ async def _render_pages(template: str, data: dict, card_name: str,
     return out
 
 
+# ---------------------------------------------------------------------------
+# 渲染结果缓存（2026-11-25 用户「查看物品卡输出很慢，99% 固定内容，你忘了加缓存」）
+#
+# PNG 字节**完全**由 (template, card_name, render_data) 决定：主题色/布局在
+# _styled() 里已烘成具体值，所以参与哈希的数据里天然带着主题指纹——改主题自然
+# 换 key，不会串色。命中时直接返回字节，省掉取数与整张重绘。
+#
+# 比「只靠 pic 内部缓存」强的地方：pic 的缓存键由它自己定（某些模板不缓存），
+# 而且我们这层命中连 build_*_data 之后的 hash 计算都省不了、但能省渲染；
+# 更关键的是**字节稳定 → 上层素材上传按 md5 命中**，不会每次重传一张新图。
+# ---------------------------------------------------------------------------
+_RENDER_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_RENDER_CACHE_MAX = 48          # 单张 100~250KB，48 张 ≈ 10MB 上限
+_RENDER_STATS = {"hit": 0, "miss": 0, "put": 0}
+
+
+def _render_cache_key(template: str, card_name: str, data: dict) -> str:
+    blob = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    return "%s|%s|%s" % (template, card_name,
+                         hashlib.sha1(blob.encode("utf-8")).hexdigest())
+
+
+def render_cache_stats() -> dict:
+    """缓存命中计数（守门/排障用，不对外输出给玩家）。"""
+    return dict(_RENDER_STATS)
+
+
+def render_cache_clear() -> None:
+    """清空渲染缓存（测试隔离用）。"""
+    _RENDER_CACHE.clear()
+    for k in _RENDER_STATS:
+        _RENDER_STATS[k] = 0
+
+
+def _render_cache_get(key: str) -> bytes | None:
+    hit = _RENDER_CACHE.get(key)
+    if hit is None:
+        _RENDER_STATS["miss"] += 1
+        return None
+    _RENDER_CACHE.move_to_end(key)
+    _RENDER_STATS["hit"] += 1
+    return hit
+
+
+def _render_cache_put(key: str, png: bytes) -> None:
+    if not png:
+        return
+    _RENDER_CACHE[key] = png
+    _RENDER_STATS["put"] += 1
+    _RENDER_CACHE.move_to_end(key)
+    while len(_RENDER_CACHE) > _RENDER_CACHE_MAX:
+        _RENDER_CACHE.popitem(last=False)
+
+
 async def _render_list(template: str, data: dict, card_name: str,
                        qq: str | None = None) -> bytes | None:
     """渲染任意斗破列表卡：主题链路 → 内置 light 兜底 → None（调用方回纯文本）。"""
@@ -353,20 +410,31 @@ async def _render_list(template: str, data: dict, card_name: str,
         data["__qq"] = str(qq)
     style, token, tpl = _style_for(data)
     render_data = _styled(data, style)
+    key = _render_cache_key(template, card_name, render_data)
+    cached = _render_cache_get(key)
+    if cached is not None:
+        return cached
+    png: bytes | None = None
     try:
         try:
-            return await pic.render(template, card=card_name, width=CARD_WIDTH, data=render_data)
+            png = await pic.render(template, card=card_name, width=CARD_WIDTH, data=render_data)
         except Exception as e:  # noqa: BLE001
             log.debug("%s 主题链路渲染失败，尝试内置 light 兜底：%s", card_name, e)
-        try:
-            return await asyncio.to_thread(
-                pic.render_sync, template, "light", card_name, width=CARD_WIDTH, data=render_data
-            )
-        except Exception as e:  # noqa: BLE001
-            log.warning("%s 渲染失败（已降级为纯文本）：%s: %s", card_name, type(e).__name__, e)
-            return None
+        if not png:
+            try:
+                png = await asyncio.to_thread(
+                    pic.render_sync, template, "light", card_name, width=CARD_WIDTH,
+                    data=render_data
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s 渲染失败（已降级为纯文本）：%s: %s",
+                            card_name, type(e).__name__, e)
+                png = None
     finally:
         _reset_style(token, tpl)
+    if png:
+        _render_cache_put(key, png)
+    return png
 
 
 def build_skills_data(p: dict) -> dict:

@@ -241,6 +241,11 @@ CARD_ACTIONS = {
     "shop_text": ("买", "宝库", "背包"),                        # 商店文字回执
     "enter_text": ("人物", "修炼", "战斗"),                     # 入道/主题回执
     "puppet_text": ("傀儡", "炼制傀儡", "傀儡遗迹"),             # 傀儡子命令回执（区别于其他傀儡卡）
+    # 2026-11-25 晚：切磋/应战/拒战回执（不惩罚切磋，最自然下一步是打一场或看人物）。
+    "duel_text": ("战斗", "人物"),
+    # 按钮设置/自定义按钮的回执（隐藏口令，不进菜单）。配完就该回去玩，
+    # 给三个不重叠的常用入口；绝不给「斗破菜单」那一套主菜单按钮。
+    "setup_text": ("人物", "背包", "战斗"),
 }
 
 #: 按钮 label 覆盖（card_key → ((label, cmd), ...)）：cmd 仍是 canonical 真口令，
@@ -291,6 +296,59 @@ REPLY_CARD_KEY: dict[str, str] = {
     "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
     "入道": "enter_text", "主题": "enter_text",
     "傀儡": "puppet_text", "炼制傀儡": "puppet_text", "傀儡遗迹": "puppet_text",
+    # 2026-11-25 第五轮（用户「买材料炼药的回复自动携带默认按钮，检查所有口令」）：
+    # 这里补齐全量菜单口令——**任何一条命令的回执都不许回落到主菜单按钮**。
+    # 数值键必须指向真实存在的 CARD_ACTIONS 卡（validate 会查）。
+    "斗破菜单": "menu", "斗破口令": "menu", "人物": "panel", "帮助": "help",
+    "战斗": "fight_text",                      # ★「继续战斗」按钮点完必须还带战斗按钮
+    "斗技": "skills", "宗门斗技": "faction", "宗门": "faction",
+    "转宗": "skill_text", "异火": "flames",
+    "宝库": "shop", "炼药": "recipes", "查看": "use_text", "背包": "bag",
+    "排行": "rank", "抢": "rank",
+    "切磋": "duel_text", "应战": "duel_text", "拒战": "duel_text",
+    "送": "bag", "换卡": "cult_text",
+    "自动爬塔": "auto_tower_prompt",
+    # 按钮设置（隐藏口令，不进菜单）——回执也要有自己的按钮组，
+    # 否则又是一排「入道/人物/修炼/战斗/宝库」。
+    "按钮设置": "setup_text", "自定义按钮": "setup_text",
+}
+
+#: 入站**别名** → 主口令（主口令必须已在 ``REPLY_CARD_KEY`` 里）。
+#:
+#: 为什么要这一层：斗破的同一张卡常有 2~4 个触发词（「战斗 / 打怪 / 历练 / 出战」
+#: 「背包 / 包裹 / 行囊」「宝库 / 商店 / 坊市」）。以前只登记主词，别的说法一律
+#: 落空 → 官方群纯文本兜底到 ``doupo:menu``，回执底下就是默认主菜单按钮
+#: （2026-11-25 用户实测「买材料炼药的回复自动携带默认按钮」的同类缺口）。
+#: 别名只是**指向**主词，按钮族仍然只有一份，不会出现两套漂移。
+REPLY_ALIAS: dict[str, str] = {
+    # 战斗族
+    "打怪": "战斗", "历练": "战斗", "出战": "战斗",
+    "回看战斗": "战斗回看", "完整战斗": "战斗回看", "战斗详情": "战斗回看",
+    # 塔族
+    "开始": "爬塔", "聚火壶": "爬塔", "塔状态": "塔层", "收手": "塔结算",
+    # 周本族（别名最多的一个 matcher）
+    "周本": "周本状态", "周塔": "周本状态",
+    "周塔状态": "周本状态", "周副本状态": "周本状态",
+    # 修炼族
+    "打坐": "修炼", "静修": "修炼", "晋升": "突破",
+    # 装备 / 斗技族
+    "升星": "强化", "升技": "升级", "功法": "斗技", "技能": "斗技",
+    "悟技": "学斗技", "领悟斗技": "学斗技",
+    "布阵": "上阵", "配置斗技": "上阵", "详情": "斗技详情",
+    # 物品族
+    "吃药": "服丹", "用丹": "服丹", "丹方": "炼药",
+    "包裹": "背包", "行囊": "背包", "赠送": "送",
+    # 商店 / 排行族
+    "商店": "宝库", "坊市": "宝库",
+    "排行榜": "排行", "战力榜": "排行", "抢夺": "抢", "掠夺": "抢",
+    # 异火 / 宗门 / 切磋族
+    "喂火": "养火", "收服异火": "收服",
+    "门派": "宗门", "换宗": "转宗", "改换门庭": "转宗",
+    "接受切磋": "应战", "拒绝切磋": "拒战",
+    # 其它
+    "创建角色": "入道", "切换": "换卡", "属性": "人物", "面板": "人物",
+    "攻略": "帮助", "规则": "帮助", "玩法": "帮助",
+    "默认": "按钮设置",
 }
 
 #: 卡片自身 canonical 触发口令（用于「按钮不含当前卡自己」守门）。
@@ -323,7 +381,35 @@ CARD_SELF = {
     "equip_text": "装备回执", "skill_text": "斗技回执", "flame_text": "异火回执",
     "buy_text": "购买回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
     "shop_text": "商店回执", "enter_text": "入道回执", "puppet_text": "傀儡回执",
+    "duel_text": "切磋回执",
+    "setup_text": "按钮设置",
 }
+
+#: 2026-11-25：**不出图、只挂按钮**的提示型 card_key（buttons_for_card 里特判返回）。
+#: 它们不是可渲染的卡（没有 render_*），但可以作为 keyboard_cmd 传给通道；
+#: validate 与守门都认这一族，否则「提示卡」会被当成未知卡拒掉。
+PROMPT_CARD_KEYS = frozenset({"auto_tower_prompt"})
+
+#: 2026-11-25 晚：**纯文字回执**族 —— 回复本身是一段文本，卡片另有 render_* 负责
+#: （或压根不该出图），这些 key 只用来给那段文本挂一组「下一步做什么」的按钮。
+#:
+#: 为什么必须单独列出来：守门要区分两种 card_key ——
+#:   * 出图卡的 key（bag / shop / tower …）→ 必须有 ``render_<key>``，否则渲出假卡；
+#:   * 回执卡的 key（fight_text / craft_text …）→ **本来就不出图**，逼它写渲染函数
+#:     只会催生一堆永远不用的死代码。
+#: 新增纯文字回执时，往这里补一行即可；漏补的话守门会红（不会静默放过）。
+TEXT_CARD_KEYS = frozenset({
+    "fight_text", "battle_text", "review_text",              # 战斗族回执
+    "task_panel", "main_submit", "task_submit",              # 任务族回执
+    "tower_text", "weekly_text",                             # 塔 / 周本回执
+    "cult_text", "equip_text", "skill_text", "flame_text",   # 修炼 / 装备 / 斗技 / 异火
+    "buy_text", "craft_text", "use_text", "shop_text",       # 买 / 炼 / 服 / 商店
+    "enter_text", "puppet_text", "duel_text",                # 入道 / 傀儡 / 切磋
+    "setup_text",                                            # 按钮设置回执
+})
+
+#: 以上两族的并集：**没有 render_***、但可以当 keyboard_cmd 用。
+NO_RENDER_CARD_KEYS = TEXT_CARD_KEYS | PROMPT_CARD_KEYS
 
 #: 所有按钮 canonical 的并集 —— qq_interaction 据此识别「斗破按钮点击」。
 ALL_BUTTON_CMDS = frozenset(c for acts in CARD_ACTIONS.values() for c in acts)
@@ -417,15 +503,23 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
 
 
 def reply_card_key_for(inbound_text: str) -> str:
-    """入站口令文本 → 纯文字回复该挂的 card_key（零编造：只认 REPLY_CARD_KEY）。
+    """入站口令文本 → 纯文字回复该挂的 card_key（零编造：只认两张表）。
 
-    取首个非空词做前缀匹配；「上阵 1 3」「炼制 回灵丹」这类带参口令取首词。
+    取首个非空词；「上阵 1 3」「炼制 回灵丹」这类带参口令取首词。
+    先查 ``REPLY_CARD_KEY``（主口令），查不到再经 ``REPLY_ALIAS`` 归到主口令上——
+    同一张卡的各种说法（「打怪/历练」「包裹/行囊/背包」）不能一半有按钮一半没有。
     """
     s = str(inbound_text or "").strip()
     if not s:
         return ""
     head = s.split()[0]
-    return REPLY_CARD_KEY.get(head, "")
+    key = REPLY_CARD_KEY.get(head)
+    if key:
+        return key
+    canon = REPLY_ALIAS.get(head)
+    if canon:
+        return REPLY_CARD_KEY.get(canon, "")
+    return ""
 
 
 def validate() -> None:
@@ -441,8 +535,22 @@ def validate() -> None:
             assert 0 < len(label) <= 10, "卡 %s label 越界：%s" % (card, label)
     # 入站映射表：值必须指向已知 card_key，键必须首词规范
     for head, ck in REPLY_CARD_KEY.items():
-        assert ck in CARD_ACTIONS, "入站口令 %s 指向未知卡 %s" % (head, ck)
+        assert ck in CARD_ACTIONS or ck in NO_RENDER_CARD_KEYS, \
+            "入站口令 %s 指向未知卡 %s" % (head, ck)
         assert head == head.strip() and head, "入站口令键不规范：%r" % head
+    # 别名表：只能指向**已有主口令**，且不许和主表重名（重名会让别名静默失效）
+    for alias, canon in REPLY_ALIAS.items():
+        assert canon in REPLY_CARD_KEY, \
+            "别名 %s 指向不存在的主口令 %s" % (alias, canon)
+        assert alias not in REPLY_CARD_KEY, \
+            "别名 %s 与主表重名（主表优先，别名会被无视）" % alias
+        assert alias == alias.strip() and alias, "别名不规范：%r" % alias
+    # 回执族自洽：TEXT_CARD_KEYS 里每个 key 都得真在 CARD_ACTIONS 里（否则挂了空按钮），
+    # 且不许和提示卡族重叠（语义不同：一个发文本、一个发提示卡）。
+    assert TEXT_CARD_KEYS <= set(CARD_ACTIONS), \
+        "TEXT_CARD_KEYS 有 CARD_ACTIONS 里不存在的卡：%s" % sorted(
+            TEXT_CARD_KEYS - set(CARD_ACTIONS))
+    assert not (TEXT_CARD_KEYS & PROMPT_CARD_KEYS), "回执族与提示卡族重叠"
     combos: list[tuple[str, ...]] = []
     for card, acts in CARD_ACTIONS.items():
         assert 1 <= len(acts) <= 5, "卡 %s 按钮数越界：%d" % (card, len(acts))

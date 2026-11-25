@@ -1903,9 +1903,11 @@ async def cmd_craft(store, qq, name) -> str:
         return txt.craft_cd(res["left"])
     chance = core.advance_task(p, "craft", 1) if res.get("ok") else None
     await store.put_player(p)
-    # 2026-11-18 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
-    # 越2档以上「几无可能」。diff>0 时把原因写进回包，玩家才知道为什么老失败。
-    over = int(res.get("diff") or 0)
+    # 2026-11-25 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
+    # 越2档以上「几无可能」。只有**真越阶（diff>0）**才提示，且只在失败时提示：
+    # diff<0 是「高品阶炼低阶」的加成（四品炼一品十拿九稳），旧版 `if over:` 把
+    # 负数也当越阶，公然在成功回执里印「⚠ 越-3档——几无可能」（用户实测骂过）。
+    over = max(0, int(res.get("diff") or 0))
     over_hint = txt.craft_over(over) if over else ""
     if not res.get("ok"):
         if res.get("reason") == "mat":
@@ -1921,8 +1923,7 @@ async def cmd_craft(store, qq, name) -> str:
     msg = txt.craft_success(hit, _grade, cfg.rate_cn(res["rate"]))
     if res.get("danwen"):
         msg += "\n" + txt.craft_danwen(hit, 1)
-    if over:
-        msg += "\n" + over_hint.rstrip("\n")
+    # 成功回执不再附「越档几无可能」——丹都成了还泼冷水，只会让人以为出错了。
     if res.get("alch_up"):
         msg += "\n" + txt.alch_up(res["alch_up"])
     out = [msg]

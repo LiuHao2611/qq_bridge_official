@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -43,9 +44,25 @@ _DISPATCH_PY = _DOUPO / "button_dispatch.py"
 
 _MENU_CMDS = frozenset({"斗破菜单", "斗破口令", "修仙菜单", "帮助"})
 
-#: 不在 CARD_ACTIONS 表里、由 buttons_for_card 特判返回的「提示卡」。
-#: 目前只有自动爬塔确认卡（两个 custom 带参按钮），必须真能拿到按钮才算合格。
-_SPECIAL_CARD_KEYS = frozenset({"auto_tower_prompt"})
+#: **不出图**的 card_key 族（不要求存在 render_<key>）：
+#:   * 提示卡（auto_tower_prompt）：只挂 custom 带参按钮，本身就发一条确认提示；
+#:   * 回执族（fight_text / craft_text …）：回复是文本，卡面另有 render_* 负责。
+#: 事实源在 doupo_buttons.py 的 NO_RENDER_CARD_KEYS，这里只做兜底（模块加载失败时）。
+_SPECIAL_CARD_KEYS_FALLBACK = frozenset({
+    "auto_tower_prompt",
+    "fight_text", "battle_text", "review_text",
+    "task_panel", "main_submit", "task_submit",
+    "tower_text", "weekly_text",
+    "cult_text", "equip_text", "skill_text", "flame_text",
+    "buy_text", "craft_text", "use_text", "shop_text",
+    "enter_text", "puppet_text", "duel_text",
+    "setup_text",
+})
+
+
+def _special_card_keys() -> frozenset:
+    """优先读被测模块的事实源；读不到才用兜底集（纯 AST 模式下也能跑）。"""
+    return frozenset(getattr(db, "NO_RENDER_CARD_KEYS", _SPECIAL_CARD_KEYS_FALLBACK))
 
 
 def _load(path: Path, name: str):
@@ -243,6 +260,7 @@ def test_each_card_buttons_are_relevant_family():
         "battle_text": {"战斗回看", "战斗", "任务"},
         "review_text": {"战斗评价", "战斗", "任务"},
         "tower_text": {"塔层", "塔结算", "自动爬塔", "战斗"},
+        "duel_text": {"战斗", "人物"},
         "weekly_text": {"周本状态", "战斗", "人物"},
         "cult_text": {"战斗", "突破", "人物"},
         "equip_text": {"强化", "人物", "战斗"},
@@ -254,6 +272,9 @@ def test_each_card_buttons_are_relevant_family():
         "shop_text": {"买", "宝库", "背包"},
         "enter_text": {"人物", "修炼", "战斗"},
         "puppet_text": {"傀儡", "炼制傀儡", "傀儡遗迹"},
+        # 2026-11-25 晚：按钮设置回执（隐藏口令）。配完就回去玩，给三个常用入口，
+        # 绝不给「斗破菜单」那套默认主菜单按钮。
+        "setup_text": {"人物", "背包", "战斗"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (
@@ -283,11 +304,11 @@ def test_every_button_is_dispatchable():
             assert shape in ("qq", "qq_str", "gid", "enter", "ruin"), \
                 "按钮 %r 参数形态非法：%s" % (c, shape)
             # card_key 非空时必须真的是本模块认知的卡片。
-            # 例外：特判卡（如 auto_tower_prompt 在 buttons_for_card 里直接返回
+            # 例外：特判提示卡（如 auto_tower_prompt 在 buttons_for_card 里直接返回
             # 两个 custom 带参按钮）不在 CARD_ACTIONS 表里，但必须有按钮，否则
-            # 等于发了一条没有按钮的提示。
+            # 等于发了一条没有按钮的提示。回执族（*_text）在 CARD_ACTIONS 里，走 else 分支。
             if card_key:
-                if card_key in _SPECIAL_CARD_KEYS:
+                if card_key in db.PROMPT_CARD_KEYS:
                     assert db.buttons_for_card(card_key), \
                         "特判卡 %r 没有任何按钮（提示卡会变成死胡同）" % card_key
                 else:
@@ -321,9 +342,11 @@ def test_card_renderer_shapes_match_dispatch():
     dispatch_src = _DISPATCH_PY.read_text(encoding="utf-8")
     bad = []
     for key in sorted({v[2] for v in _baseline_dispatch_plan().values() if v[2]}):
-        # 提示型 card_key（如 auto_tower_prompt）本来就不出图，只挂 custom 按钮，
-        # 不参与 render_* 形状校验；但仍必须有按钮（由 test_auto_tower_prompt_buttons 守）。
-        if key in _SPECIAL_CARD_KEYS:
+        # 不出图的 card_key 分两族（事实源 NO_RENDER_CARD_KEYS）：
+        #   * 提示卡 auto_tower_prompt：只挂 custom 带参按钮，本身发一条确认提示；
+        #   * 回执族 fight_text / craft_text …：回复是文本，卡面另有 render_* 负责。
+        # 两族都不参与 render_* 形状校验，但都必须真能拿到按钮（由别的用例守）。
+        if key in _special_card_keys():
             continue
         args = shapes.get(key)
         if args is None:
@@ -474,6 +497,12 @@ def test_reply_card_key_for_inbound_mapping():
         "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
         "买": "buy_text", "炼制": "craft_text", "入道": "enter_text", "主题": "enter_text",
         "傀儡": "puppet_text", "炼制傀儡": "puppet_text", "傀儡遗迹": "puppet_text",
+        # 2026-11-25 第五轮：全量命令都必须有专属按钮族（不许回落主菜单）
+        "战斗": "fight_text", "斗破菜单": "menu", "人物": "panel", "帮助": "help",
+        "斗技": "skills", "宗门斗技": "faction", "宗门": "faction", "转宗": "skill_text",
+        "异火": "flames", "宝库": "shop", "炼药": "recipes", "查看": "use_text",
+        "背包": "bag", "排行": "rank", "抢": "rank", "送": "bag", "换卡": "cult_text",
+        "切磋": "duel_text", "应战": "duel_text", "拒战": "duel_text",
     }
     for inbound, want in cases.items():
         assert db.reply_card_key_for(inbound) == want, \
@@ -484,12 +513,13 @@ def test_reply_card_key_for_inbound_mapping():
     assert db.reply_card_key_for("上阵 1 3") == "skill_text"
     assert db.reply_card_key_for("  任务  ") == "task_panel"
     # 闲聊 / 空 → 零按钮（绝不误挂）
-    for s in ("", "   ", "闲聊", "你好", "斗破菜单", "/start"):
+    for s in ("", "   ", "闲聊", "你好", "今天天气不错", "/start"):
         assert db.reply_card_key_for(s) == "", \
             "非功能口令 %r 不该派生 card_key" % s
     # 白名单值必须都指向已知卡，键必须规范（无空白）
     for head, ck in db.REPLY_CARD_KEY.items():
-        assert ck in db.CARD_ACTIONS, "入站映射 %r 指向未知卡 %r" % (head, ck)
+        assert ck in db.CARD_ACTIONS or ck in db.PROMPT_CARD_KEYS, \
+            "入站映射 %r 指向未知卡 %r" % (head, ck)
         assert head == head.strip() and head, "入站映射键不规范：%r" % head
 
 
@@ -550,6 +580,42 @@ def test_auto_tower_prompt_buttons():
     assert all(0 < len(x) <= 10 for x in labels), "按钮文字过长会被截断：%s" % labels
     # 裸 card_key 不能误挂（没这一步就是通用卡按钮，点了不会开打）
     assert db.buttons_for_card("auto_tower_prompt") != db.buttons_for_card("tower_text")
+
+
+def test_every_command_never_falls_back_to_menu():
+    """守门：**每一条**命令的回执都必须挂自己那一族的按钮，绝不许回落主菜单。
+
+    2026-11-25 用户实测：点「买 紫叶兰」/「炼制 凝火丹」后，回执底下是
+    入道/人物/修炼/战斗/宝库（主菜单）——因为这两条口令当时没登记入站映射，
+    兜底桥只能给 kb_fallback=menu。这类「默认按钮」必须绝迹。
+    """
+    real = list(db.real_commands())
+    assert len(real) == 55
+    bad = []
+    for c in real:
+        ck = db.reply_card_key_for(c)
+        if not ck:
+            bad.append("%s：无映射（会回落主菜单）" % c)
+            continue
+        assert ck in db.CARD_ACTIONS or ck in db.PROMPT_CARD_KEYS, ck
+        # 只有「菜单/帮助」本身挂菜单按钮是合理的
+        if ck == "menu" and c not in ("斗破菜单",):
+            bad.append("%s：回落主菜单" % c)
+    assert not bad, "命令回执仍会挂默认主菜单按钮：%s" % bad
+
+
+def test_every_dispatch_entry_carries_keyboard():
+    """守门：_PLAN 里每一条都必须带 card_key，否则按钮点出来的回复没有按钮。
+
+    2026-11-25 用户实测：「继续战斗」点完，战斗结果一条按钮都没有——
+    因为 ``_PLAN["战斗"]`` 的 card_key 是空串，文本兜底没键盘可挂。
+    """
+    plan = _baseline_dispatch_plan()
+    assert plan, "button_dispatch._PLAN 解析失败"
+    bad = ["%s(%s)" % (k, v[2]) for k, v in plan.items() if not v[2]]
+    assert not bad, "这些按钮点完会发出「无按钮」的回复：%s" % bad
+    # 战斗必须还原成战斗按钮族（而不是留着空串或挂到别的卡）
+    assert plan["战斗"][2] == "fight_text", plan["战斗"]
 
 
 def test_bridge_derives_card_key_from_inbound():
@@ -663,6 +729,78 @@ def test_source_contract_button_text_fallback_keeps_keyboard():
         "keyboard 口令未按 doupo:<card_key> 组装"
 
 
+def test_every_finish_text_carries_card_key():
+    """斗破每一条纯文本回执都必须自带 card_key —— 否则底部会冒出默认主菜单按钮。
+
+    2026-11-25 用户实测：「买材料炼药的回复内容自动携带了默认按钮」。
+    根因不是某一张卡配错，而是**机制**：官方群纯文本必须与卡片同形
+    （markdown + keyboard 同段）才送得到，而 `finish_text` 没拿到 card_key 时
+    会退回 `_KB_FALLBACKS["doupo"] = "doupo:menu"` → 回执底下永远挂着
+    「入道 / 人物 / 修炼 / 战斗 / 宝库」那一排主菜单。
+
+    所以这里逐条 AST 扫 `doupo/*.py` 的 `finish_text(...)` 调用（含位置参数：
+    签名是 ``(matcher, event, text, file_name, card_key)``），一旦发现没传
+    card_key 就红；同时校验它指向的 key 真的存在（CARD_ACTIONS 或不出图族）。
+    """
+    bad = []
+    for path in sorted(_DOUPO.glob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        if "finish_text(" not in src:
+            continue
+        for node in ast.walk(ast.parse(src)):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "finish_text"):
+                continue
+            ck = None
+            for kw in node.keywords:
+                if kw.arg == "card_key":
+                    ck = kw.value
+            if ck is None and len(node.args) >= 5:
+                ck = node.args[4]
+            if ck is None or (isinstance(ck, ast.Constant) and not ck.value):
+                bad.append("%s:%d 无 card_key" % (path.name, node.lineno))
+                continue
+            if isinstance(ck, ast.Constant):
+                key = ck.value
+                if key not in db.CARD_ACTIONS and key not in _special_card_keys():
+                    bad.append("%s:%d card_key=%r 未注册" % (path.name, node.lineno, key))
+    assert not bad, "纯文本回执会挂成默认主菜单按钮：%s" % bad
+
+
+def test_every_regex_keyword_maps_to_buttons():
+    """`doupo/__init__.py` 里**每一个**能触发的口令词都必须派生到按钮组。
+
+    比「55 条菜单口令」更狠：菜单只列主词，而玩家实际会打「打怪 / 历练 / 包裹 /
+    行囊 / 商店 / 坊市 / 周塔」这些别名。别名不登记 → `reply_card_key_for` 返回空
+    → 官方群纯文本兜底成 `doupo:menu` → 回执底部又是一排默认主菜单按钮。
+    这里直接从正则里抠中文词，逐个问实现要 card_key，一个落空就红。
+    """
+    src = (_DOUPO / "__init__.py").read_text(encoding="utf-8")
+    words = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "_pat":
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    words.update(re.findall(r"[\u4e00-\u9fa5]{2,}", arg.value))
+    assert len(words) > 80, "口令词抽取退化（只抽到 %d 个）" % len(words)
+    miss = sorted(w for w in words if not db.reply_card_key_for(w))
+    assert not miss, "这些口令没有按钮组（回执会挂默认主菜单）：%s" % miss
+
+
+def test_reply_alias_points_to_real_key():
+    """别名表只许指向已有主口令，且不许和主表重名（重名会被主表静默盖掉）。"""
+    alias = getattr(db, "REPLY_ALIAS", {})
+    assert alias, "别名表缺失（同一张卡的各种说法会一半有按钮一半没有）"
+    bad = [(a, c) for a, c in alias.items()
+           if c not in db.REPLY_CARD_KEY or a in db.REPLY_CARD_KEY]
+    assert not bad, "别名表有问题（指向不存在的主口令 / 与主表重名）：%s" % bad
+    # 抽查：三个高频别名必须真落到对应的卡
+    for word, want in (("打怪", "fight_text"), ("包裹", "bag"), ("商店", "shop")):
+        got = db.reply_card_key_for(word)
+        assert got == want, "%s → %r，应为 %r" % (word, got, want)
+
+
 def test_source_contract_interaction_routes_doupo():
     """qq_interaction 必须先识别斗破口令再走 game_tools（否则点击无反应）。"""
     src = (_CH / "qq_interaction.py").read_text(encoding="utf-8")
@@ -693,11 +831,16 @@ if __name__ == "__main__":
         test_page_buttons_derived_from_armed_state,
         test_page_dispatch_source_contract,
         test_reply_card_key_for_inbound_mapping,
+        test_every_command_never_falls_back_to_menu,
+        test_every_dispatch_entry_carries_keyboard,
         test_label_overlay_continue_battle,
         test_item_detail_dynamic_buttons,
         test_auto_tower_prompt_buttons,
         test_bridge_derives_card_key_from_inbound,
         test_injection_guards,
+        test_every_finish_text_carries_card_key,
+        test_every_regex_keyword_maps_to_buttons,
+        test_reply_alias_points_to_real_key,
         test_source_contract_finish_card_used,
         test_source_contract_button_text_fallback_keeps_keyboard,
         test_source_contract_interaction_routes_doupo,

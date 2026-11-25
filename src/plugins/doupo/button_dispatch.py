@@ -37,51 +37,51 @@ from typing import Any
 # 出卡口令同时给出 card_key，供带按钮再下发；文本口令 card_key=""。
 _PLAN: dict[str, tuple[str, str, str]] = {
     # cmd               : (commands 函数,   参数形态,  card_key 或 "")
-    "入道": ("cmd_enter", "enter", ""),        # 已在群中→返回提示；不重复建号
+    "入道": ("cmd_enter", "enter", "enter_text"),  # 已在群中→返回提示；不重复建号
     "人物": ("cmd_panel", "qq", "panel"),
-    "修炼": ("cmd_cultivate", "qq", ""),
-    "突破": ("cmd_break", "qq", ""),
-    "战斗": ("cmd_fight", "qq", ""),
-    "战斗评价": ("cmd_battle_comment", "qq", ""),
+    "修炼": ("cmd_cultivate", "qq", "cult_text"),
+    "突破": ("cmd_break", "qq", "cult_text"),
+    "战斗": ("cmd_fight", "qq", "fight_text"),
+    "战斗评价": ("cmd_battle_comment", "qq", "battle_text"),
     # 2026-11-25：战斗回执的按钮族里加了「战斗回看」，但这里漏登记 →
     # 玩家点了没反应（test_doupo_buttons 的守门真抓到了）。
     # card_key 留空是**故意的**：card.render_battle 签名是 (last_battle, qq)，
     # 走通用 renderer(p) 分支会把玩家 dict 当 last_battle 渲出假卡
     # （见下方「每张卡的入参形状不同」那段事故注释）。故走纯文本兜底
     # cmd_battle_review —— 它本来就返回完整逐招文本。
-    "战斗回看": ("cmd_battle_review", "qq", ""),
+    "战斗回看": ("cmd_battle_review", "qq", "review_text"),
     # 同批漏掉的第二个：「任务」在战斗回执按钮族里，也没登记。
-    "任务": ("cmd_tasks", "qq", ""),
+    "任务": ("cmd_tasks", "qq", "task_panel"),
     # 2026-11-25 晚：任务/主线类按钮（task_panel/main_submit/task_submit 的按钮族）——
     # 漏登记会让玩家点「领主线/交任务/接任务」没反应。
-    "领主线": ("cmd_main_submit", "qq", ""),
-    "交任务": ("cmd_task_submit", "qq", ""),
-    "接任务": ("cmd_task_accept", "qq", ""),
-    "爬塔": ("cmd_tower", "qq_str", ""),
-    "塔层": ("cmd_tower_status", "qq", ""),
-    "塔结算": ("cmd_tower_settle", "qq", ""),      # 2026-11-25 晚 tower_text 按钮
-    "周本状态": ("cmd_weekly_status", "qq", ""),   # 2026-11-25 晚 weekly_text 按钮
-    "查看": ("cmd_view", "qq_str", ""),            # 2026-11-25 晚 use_text 按钮
-    "装备": ("cmd_equip", "qq_str", ""),
-    "强化": ("cmd_enhance", "qq", ""),
+    "领主线": ("cmd_main_submit", "qq", "main_submit"),
+    "交任务": ("cmd_task_submit", "qq", "task_submit"),
+    "接任务": ("cmd_task_accept", "qq", "task_submit"),
+    "爬塔": ("cmd_tower", "qq_str", "tower_text"),
+    "塔层": ("cmd_tower_status", "qq", "tower_text"),
+    "塔结算": ("cmd_tower_settle", "qq", "tower_text"),   # 2026-11-25 晚 tower_text 按钮
+    "周本状态": ("cmd_weekly_status", "qq", "weekly_text"),  # 2026-11-25 晚 weekly_text 按钮
+    "查看": ("cmd_view", "qq_str", "use_text"),     # 2026-11-25 晚 use_text 按钮
+    "装备": ("cmd_equip", "qq_str", "equip_text"),
+    "强化": ("cmd_enhance", "qq", "equip_text"),
     "斗技": ("cmd_skills", "qq", "skills"),
-    "斗技详情": ("cmd_skill_info", "qq_str", ""),
-    "升级": ("cmd_skill_up", "qq_str", ""),
-    "上阵": ("cmd_loadout", "qq_str", ""),
+    "斗技详情": ("cmd_skill_info", "qq_str", "skill_text"),
+    "升级": ("cmd_skill_up", "qq_str", "skill_text"),
+    "上阵": ("cmd_loadout", "qq_str", "skill_text"),
     "异火": ("cmd_flames", "qq", "flames"),
-    "养火": ("cmd_feed", "qq_str", ""),
-    "转宗": ("cmd_faction", "qq_str", ""),
+    "养火": ("cmd_feed", "qq_str", "flame_text"),
+    "转宗": ("cmd_faction", "qq_str", "skill_text"),  # 不能给 "faction"：那会出宗门卡、吞掉回执
     "宝库": ("cmd_shop", "qq", "shop"),
-    "买": ("cmd_buy", "qq_str", ""),
+    "买": ("cmd_buy", "qq_str", "buy_text"),
     "炼药": ("cmd_recipes", "qq", "recipes"),
     # 2026-11-25 晚：查看丹药卡的「炼制此丹」按钮（custom 带参：炼制 破厄丹）。
-    "炼制": ("cmd_craft", "qq_str", ""),
+    "炼制": ("cmd_craft", "qq_str", "craft_text"),
     # 2026-11-25 自动爬塔确认按钮（custom 带参：自动爬塔 是/否）。
     "自动爬塔": ("cmd_auto_tower", "qq_str", "auto_tower_prompt"),
-    "服丹": ("cmd_use", "qq_str", ""),
+    "服丹": ("cmd_use", "qq_str", "use_text"),
     "背包": ("cmd_bag", "qq", "bag"),
     # 2026-11-18 傀儡：按钮点击走同一套 cmd_*，不另写业务逻辑
-    "炼制傀儡": ("cmd_craft_puppet", "qq", ""),
+    "炼制傀儡": ("cmd_craft_puppet", "qq", "puppet_text"),
     # shape="ruin"：先跑战斗并把战况收进 report，再把战况并进同一张卡（只发一条）。
     "傀儡遗迹": ("cmd_puppet_ruin", "ruin", "ruin"),
     "傀儡": ("cmd_puppet", "qq", "puppet"),

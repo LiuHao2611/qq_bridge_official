@@ -679,6 +679,19 @@ def craft_generic_fail() -> str:
 
 
 def craft_over(diff: int) -> str:
+    """越阶开炉的风险提示。**只有正数才算越阶**。
+
+    diff 的语义是「丹药所需品阶 − 炼药师品阶」：负数代表高品阶炼低阶的**加成**
+    （四品炼一品十拿九稳），不是越阶。2026-11-25 玩家实测骂过——炼制成功了，
+    回执里还印着「⚠ 越-3档——几无可能」，纯属胡说。这里直接吞掉非正数，
+    任何调用方传错也印不出来；调用方那边同样有 max(0, …) 的一道闸。
+    """
+    try:
+        diff = int(diff or 0)
+    except (TypeError, ValueError):
+        return ""
+    if diff <= 0:
+        return ""
     if diff == 1:
         return "　⚠ 越1档勉强开炉（药力未熟，成功率骤降）\n"
     return f"　⚠ 越{diff}档——几无可能，仅可勉强尝试\n"

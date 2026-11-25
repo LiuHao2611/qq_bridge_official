@@ -175,7 +175,14 @@ def test_mp_recipes_visible_in_text():
 
 
 def test_mp_recipes_visible_in_card():
-    """图片卡：回气丹行 desc 必须带〔回斗气〕且带单丹成功率。"""
+    """图片卡：满级必须看得见回气丹（回斗气的那味）。
+
+    2026-11-25 用户「炼药的卡片就只展示丹方和丹药本身效果就行，别写其他废话」——
+    卡面只剩本效，〔回斗气〕功效标签与成数全部撤出卡面（详见
+    ``card.build_recipes_data`` docstring 与 ``tests/test_view_item.py`` 的
+    ``test_recipes_card_is_slim``）。所以这里守「丹在、本效写着回斗气」，
+    不再要求 effect_tag 字段存在。
+    """
     p = _p(lv=103, alch=3)
     found = None
     for pg in range(1, 20):
@@ -190,28 +197,38 @@ def test_mp_recipes_visible_in_card():
         if found:
             break
     assert found is not None, "满级应可见回气丹"
-    assert found["effect_tag"] == "回斗气", found
-    assert "〔回斗气〕" in found["desc"], found["desc"]
-    assert "成" in found["desc"], "卡片 desc 应含单丹成功率：%s" % found["desc"]
+    # 卡面字段面收敛到「材料 / 本效 / 齐备」三件，成数与标签不许回流
+    assert "effect_tag" not in found and "rate" not in found and "diff" not in found, found
+    assert "斗气" in found["desc"], "回气丹本效应写着回斗气：%s" % found["desc"]
+    assert "〔" not in found["desc"], "功效标签已撤出卡面：%s" % found["desc"]
+    assert "把握" not in found["desc"], "成数已撤出卡面：%s" % found["desc"]
 
 
 def test_card_rate_diff_by_alchemist():
-    """同一枚丹药，四品炼药师与九品炼药师的卡片成功率不同。"""
-    def rate_for(alch):
-        p = _p(lv=103, alch=alch)
-        for pg in range(1, 20):
-            d = card.build_recipes_data(p, pg)
-            for g in d["groups"]:
-                for r in g["rows"]:
-                    if r["name"] == "凝血散":
-                        return r["rate"], r["diff"]
-        return None, None
+    """同一枚丹药，四品与九品炼药师的**成丹率**不同 —— 2026-11-25 起看详情卡。
 
-    low_rate, low_diff = rate_for(3)   # 四品炼二品 够格
-    high_rate, high_diff = rate_for(8)  # 九品炼二品 够格
-    assert low_rate is not None and high_rate is not None
+    卡片瘦身后成数不进炼药卡，但「炼药师品阶越高越稳」这件事玩家仍要看得见：
+    改由「查看 <丹名>」详情卡的「从何而来」段承载（成丹率 + 越 N 档）。
+    """
+    def detail_for(alch):
+        p = _p(lv=103, alch=alch)
+        d = card.build_item_detail_data(p, "凝血散")
+        assert d, "详情卡应查得到凝血散"
+        rows = [r for g in d["groups"] for r in g["rows"]]
+        rate_rows = [r for r in rows if "成丹率" in r]
+        assert rate_rows, "详情卡缺成丹率：%s" % rows
+        rate, diff = cfg.craft_rate_for(int(p.get("alch", 0)),
+                                        str(cfg.RECIPE_BY_NAME["凝血散"]["grade"]))
+        return rate, diff, rate_rows[0]
+
+    low_rate, low_diff, low_row = detail_for(3)   # 四品炼二品 够格
+    high_rate, high_diff, high_row = detail_for(8)  # 九品炼二品 够格
     assert low_diff <= 0 and high_diff <= 0
-    assert high_rate >= low_rate, "炼药师品阶越高成功率越高：%s" % ((low_rate, high_rate),)
+    assert high_rate >= low_rate, "炼药师品阶越高成功率越高：%s" % (
+        (low_rate, high_rate),)
+    # 详情卡上的成数必须与 cfg 同源（不许另算一套）
+    assert cfg.rate_cn(high_rate) in high_row, (high_row, cfg.rate_cn(high_rate))
+    assert "越" not in low_row, "高品阶炼低阶不该标越档：%s" % low_row
 
 
 # ---------------------------------------------------------------------------
@@ -294,19 +311,31 @@ def test_craft_reply_uses_cheng_no_percent():
 
 
 def test_card_desc_uses_cheng_no_percent():
-    """图片卡每枚丹药的 desc 用「N成把握」，无百分号。"""
-    p = _p(lv=103, alch=3)
-    d = card.build_recipes_data(p, 1)
+    """成数仍是**纯中文成数、不带百分号** —— 2026-11-25 起落在详情卡上。
+
+    卡片瘦身前这条守的是炼药卡 desc；瘦身后成数只出现在「查看 <丹名>」详情卡
+    与纯文本「炼药」里，所以改守详情卡那行——口径（N成、不出现 %）一字不变。
+    """
     import re
+    p = _p(lv=103, alch=3)
+    checked = 0
+    for name in ("凝血散", "回气丹", "破厄丹"):
+        d = card.build_item_detail_data(p, name)
+        assert d, "详情卡应查得到 %s" % name
+        rows = [r for g in d["groups"] for r in g["rows"]]
+        rate_rows = [r for r in rows if "成丹率" in r]
+        assert rate_rows, "%s 详情卡缺成丹率：%s" % (name, rows)
+        for r in rate_rows:
+            assert "成" in r, (name, r)
+            assert not re.search(r"\d+\s*%", r.split("（")[0]), (name, r)
+        checked += 1
+    assert checked == 3, checked
+
+    # 卡片侧：炼药卡 desc 不再印任何成数（同一信息不重复给）
+    d = card.build_recipes_data(p, 1)
     for g in d["groups"]:
         for r in g["rows"]:
-            # 成功率片段（「…成把握」之前）不得含百分号；之后的原功效描述里
-            # 「闪避+5%」这类是效果数值，合法保留。
-            rate_part = r["desc"].split("把握")[0]
-            assert "%" not in rate_part, (r["name"], r["desc"])
-            assert "成" in rate_part, (r["name"], r["desc"])
-            assert "把握" in r["desc"], (r["name"], r["desc"])
-    assert "%" not in d["subtitle"], d["subtitle"]
+            assert "把握" not in r["desc"], (r["name"], r["desc"])
 
 
 # ---------------------------------------------------------------------------
