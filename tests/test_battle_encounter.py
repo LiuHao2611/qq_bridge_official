@@ -25,6 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE_PY = ROOT / "src" / "plugins" / "doupo" / "core.py"
 CONFIG_PY = ROOT / "src" / "plugins" / "doupo" / "config.py"
 COMMANDS_PY = ROOT / "src" / "plugins" / "doupo" / "commands.py"
+#: 2026-11-25 战斗内核外迁：``fight`` 的实现在 battle_core.py，core.py 只剩
+#: 同名 re-export。凡「读源码判据」的守门必须指到真实实现文件，否则永远绿不了
+#: ——曾因此静默失效 2 条（见 test_no_postfight_refill_source_guard）。
+BATTLE_CORE_PY = ROOT / "src" / "plugins" / "doupo" / "battle_core.py"
 
 
 def _p(lv=20, luck=1):
@@ -456,7 +460,10 @@ def test_single_fight_still_rolls_by_default():
 def test_aid_guard_detects_old_compounding_source():
     """prove-it：把旧实现（每敌各掷）喂给源码判据，必须被识别为回退。"""
     src = CORE_PY.read_text(encoding="utf-8")
-    fn = src[src.index("def encounter"):]
+    # 必须用带左括号的精确名：`def encounter` 会先命中更早定义的
+    # encounter_exp_divisor / encounter_exp_budget / encounter_exp_share，
+    # 截出的片段根本不含 encounter 本体 —— 守门会假红（2026-11-25 实测）。
+    fn = src[src.index("def encounter("):]
     fn = fn[:fn.index("\ndef ")] if "\ndef " in fn else fn
     # 正确实现：encounter 自己掷一次 + 传 roll_aid=False 禁止 fight 再掷
     assert "roll_hero_aid(p, rng)" in fn, "encounter 没在整场掷机缘"
@@ -512,9 +519,14 @@ def test_level_up_refills_mp_so_break_matters():
 
 
 def test_no_postfight_refill_source_guard():
-    """prove-it：源码判据——fight 战后不得再写 p[\"mp\"] = mp_max(p)。"""
-    src = CORE_PY.read_text(encoding="utf-8")
-    fn = src[src.index("def fight"):]
+    """prove-it：源码判据——fight 战后不得再写 p["mp"] = mp_max(p)。
+
+    2026-11-25：``fight`` 实现已外迁 battle_core.py（core.py 逼近 200KB 上传红线），
+    core.py 只剩同名 re-export。本判据必须读**真实实现文件**——读 core.py 会直接
+    ValueError（substring not found），守门是假死而不是假红，比红更危险。
+    """
+    src = BATTLE_CORE_PY.read_text(encoding="utf-8")
+    fn = src[src.index("def fight("):]
     fn = fn[:fn.index("\ndef ")] if "\ndef " in fn else fn
     assert 'p["mp"] = mp' in fn, "战后没写回消耗后的斗气"
     assert 'p["mp"] = mp_max(p)' not in fn, "仍存在战后强制回满斗气"

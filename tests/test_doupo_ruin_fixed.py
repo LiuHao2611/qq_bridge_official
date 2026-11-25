@@ -168,8 +168,13 @@ def test_power_rec_never_shown_to_frontend():
 # 3. 用户红线：残暴毙是正常设计，连打续航机制不许动
 # ---------------------------------------------------------------------------
 def test_carry_over_and_pill_logic_untouched():
-    """源码级钉子：连打结转/服药封顶/战败即停三件套必须保持。"""
-    with open(os.path.join(ROOT, "src", "plugins", "doupo", "commands.py"),
+    """源码级钉子：连打结转/服药封顶/战败即停三件套必须保持。
+
+    2026-11-25：``cmd_puppet_ruin`` 已随傀儡命令一起外迁到 commands_puppet.py，
+    本判据原先读 commands.py，于是 ``src.index("async def cmd_puppet_ruin(")``
+    直接 ValueError —— 守门假死（不是假红），长期没人发现。改读实现文件。
+    """
+    with open(os.path.join(ROOT, "src", "plugins", "doupo", "commands_puppet.py"),
               encoding="utf-8") as f:
         src = f.read()
     i0 = src.index("async def cmd_puppet_ruin(")

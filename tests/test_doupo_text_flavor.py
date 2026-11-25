@@ -160,11 +160,21 @@ def test_source_file_has_no_banned_words_in_strings():
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
     bad: list[str] = []
-    docstring = ast.get_docstring(tree) or ""
+    # 跳过**所有** docstring（模块 / 类 / 函数）：原实现只把「模块 docstring」
+    # 比进白名单，函数级 docstring 一旦含「考据」就被当成玩家可见句报红
+    # （2026-11-25 实测 danwen_grant 的「文案不透露概率/考据」被误报，该文件
+    # 因此长期红着没人管）。原注释写的就是「模块/函数 docstring」，这里补齐
+    # 实现，而不是改注释去迁就漏写的代码。
+    docstrings: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            _d = ast.get_docstring(node, clean=False)
+            if _d:
+                docstrings.add(_d)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            # 跳过模块/函数 docstring（开发者注释，不是玩家可见）
-            if node.value == docstring or node.value.startswith(("#", ":", "{")) \
+            if node.value in docstrings or node.value.startswith(("#", ":", "{")) \
                     or "def " in node.value or "\n\n##" in node.value:
                 continue
             if "——" not in node.value and "。" not in node.value and "！" not in node.value:

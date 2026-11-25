@@ -102,8 +102,13 @@ def src(rel):
 # 1. 纯函数层
 # ---------------------------------------------------------------------------
 def test_subcmd_truth():
-    """PUPPET_SUBCMDS 必须覆盖 cmd_puppet 里的每一条分派。"""
-    body = src("src/plugins/doupo/commands.py")
+    """PUPPET_SUBCMDS 必须覆盖 cmd_puppet 里的每一条分派。
+
+    2026-11-25：``cmd_puppet`` / ``_puppet_recipe_text`` 已随傀儡命令一起外迁
+    commands_puppet.py，本判据原先读 commands.py，``body.index(...)`` 直接
+    ValueError —— 守门假死。改读实现文件。
+    """
+    body = src("src/plugins/doupo/commands_puppet.py")
     i0 = body.index("async def cmd_puppet(store, qq, arg=\"\", pstore=None) -> str:")
     i1 = body.index("def _puppet_recipe_text(", i0)
     seg = body[i0:i1]

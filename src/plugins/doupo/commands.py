@@ -879,10 +879,17 @@ async def cmd_fight(store, qq) -> str:
         for it in (x.get("log") or []):
             if isinstance(it, dict):
                 all_log.append(it)
-    hi, folded = _battle_highlights(all_log, limit=1)
+    # 2026-11-25 傀儡击不参与「最强一击」评选：它带 puppet=True，伤害来自傀儡
+    # 五维而不是玩家力量/斗气。若不剔出去，傀儡伤害一高就会抢到 💥 行，被
+    # _battle_line 归因成「力量·武器」——把傀儡的功劳记到玩家身上。傀儡另有
+    # 独立一行（battle_puppet），战绩不丢。
+    hero_log = [it for it in all_log if not it.get("puppet")]
+    pup_hits = [it for it in all_log if it.get("puppet")]
+    hi, folded = _battle_highlights(hero_log, limit=1)
     spot = _battle_line(hi[0], who="p").replace("　→ ", "", 1).strip() if hi else "未及出手"
     # 拍平「暴击(敏捷)」嵌套括号，结算面板一行读完不换行
     spot = spot.replace("暴击(敏捷)", "暴击·敏捷")
+    high = hi[0] if hi else {}
 
     # 敌人代表取等级最高的那位（原著反派优先露出名号），其余压成「等N名」。
     if detail:
@@ -901,9 +908,20 @@ async def cmd_fight(store, qq) -> str:
     # 如既有 lv5 的嗜血鼠、也有本章 lv68 的怪，用区间表示更诚实）。
     _mlvs = [int(x.get("lv") or 0) for x in detail if int(x.get("lv") or 0) > 0]
     _mlo, _mhi = (min(_mlvs), max(_mlvs)) if _mlvs else (0, 0)
+    # 2026-11-25 战斗回执重构（用户「结合境界/斗技/傀儡，胜败给不同反馈」）：
+    # 境界取 full_realm（二星斗师）+ REALM_FIGHT_TAG（纱衣浮体）；hp_ratio 决定
+    # 大捷/惨胜/险胜三档，斗气耗尽另算。都只读既有字段，不动任何数值。
+    lv = int(p["lv"])
+    _hp_now = int(p.get("hp") or 0)
+    _hp_max = max(1, int(core.stats(p)["体力"]))
+    _hp_ratio = max(0.0, min(1.0, _hp_now / float(_hp_max)))
     lines = [
         txt.chapter_line(_ch, cfg.CHAPTER_REGION.get(_ch, ""), _mlo, _mhi),
-        txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed),
+        txt.encounter_head(n_total, foes, res["rounds"], bool(res["win"]), killed,
+                           realm=cfg.full_realm(lv),
+                           tag=txt.REALM_FIGHT_TAG.get(cfg.realm_name(lv), ""),
+                           hp_ratio=_hp_ratio,
+                           exhausted=bool(res.get("exhausted"))),
     ]
     # 2026-11-24 限时增益：药力还有余就得在战报里露一行，否则玩家以为丹白吃了。
     _bl = tb.battle_line(p)
@@ -912,13 +930,34 @@ async def cmd_fight(store, qq) -> str:
     # 丹纹赐福：本场用掉几次后还剩几次，战报里给一行（用完自然消失）
     for _dl in dw.lines(p):
         lines.append(_dl)
-    lines.append(txt.battle_spot(spot))
+    # 品阶只有 log 条目里有（tier=普通/高阶/特殊），从拼接后的字符串反解析会丢，
+    # 所以直接透传 high["tier"] / high["move"]。
+    lines.append(txt.battle_spot(spot,
+                                tier=str(high.get("tier") or ""),
+                                move=str(high.get("move") or high.get("kind") or "")))
     if folded > 0:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
+    # 2026-11-25 傀儡助阵行（用户「或者高阶傀儡」）：只在傀儡真的出手时出现。
+    # 取所有傀儡击的伤害**合计**——单条只反映一回合，合计才是这具傀儡的贡献。
+    # 名字要拼全：log 的 helper 是「天级·玄」（puppet_core 造名时把「傀儡」二字
+    # 截掉了），单看「天级·玄」玩家不知道那是傀儡，故用 cfg.PUPPET_TIERS 补回档位。
+    if pup_hits:
+        _pd = sum(int(it.get("dmg") or 0) for it in pup_hits)
+        _p0 = pup_hits[0]
+        _pt = int(_p0.get("tier") or 0)
+        _tier_name = cfg.PUPPET_TIERS[_pt] if 0 <= _pt < len(cfg.PUPPET_TIERS) else ""
+        _body = str(_p0.get("helper") or "").split("·")[-1]
+        if _body == "傀儡":
+            # 老档傀儡 name 为空时 helper 兜底成「傀儡」，别再拼一次 → 「天级傀儡·傀儡」
+            _body = ""
+        _pname = f"{_tier_name}·{_body}" if (_tier_name and _body) else \
+            (_tier_name or _body or "傀儡")
+        lines.append(txt.battle_puppet(_pname, _fmt(_pd), str(_p0.get("skin") or "")))
     # ① 战果（修为/金币/敌人 + 战利）
     drops = list(res.get("drops") or [])
     _drop_txt = "、".join(f"{n}×{c}" for n, c in drops[:3])
-    lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt))
+    lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt,
+                                 win=bool(res.get("win"))))
     # 2026-11-24 魂殿邪修：吞噬修为单独一行（已写 p["exp"]/p["pill_exp"]，此处仅反馈）。
     if int(res.get("devour") or 0) > 0:
         lines.append(f"🕯️ 吞噬炼化：斩精英/BOSS 吞噬修为 +{_fmt(res['devour'])}"
@@ -937,10 +976,13 @@ async def cmd_fight(store, qq) -> str:
     auto = res.get("auto_pills") or {}
     _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
     lines.append(txt.battle_cost(_fmt(res["taken"]), _fmt(p.get("hp") or 0), _pill))
+    # 2026-11-25 败局收场（用户「失败后给出不同的高反馈」）：只在败局追加。
+    # 排在代价之后——先看清损失，再给「不甘」；放前面会显得在找借口。
+    if not res.get("win"):
+        lines.append(txt.battle_defeat())
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append(txt.battle_hero_aid())
-    lv = int(p["lv"])
     if core.can_level(p):
         lines.append(txt.battle_ready(cfg.full_realm(lv)))
     lines.extend(_chance_lines(chance, qq))

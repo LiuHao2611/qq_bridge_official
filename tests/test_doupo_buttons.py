@@ -36,6 +36,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 _CH = _ROOT / "src/plugins/qq_bridge/channel"
 _DOUPO = _ROOT / "src/plugins/doupo"
 _CMD_PY = _DOUPO / "commands.py"
+#: 命令层全族（commands.py / commands_puppet.py / 以后继续拆出来的 commands_*.py）。
+#: 「函数是否存在」必须按全族判，只扫入口文件会把 re-export 的当成不存在。
+_CMD_FAMILY = tuple(sorted(_DOUPO.glob("commands*.py")))
 _DISPATCH_PY = _DOUPO / "button_dispatch.py"
 
 _MENU_CMDS = frozenset({"斗破菜单", "斗破口令", "修仙菜单", "帮助"})
@@ -80,12 +83,23 @@ def _baseline_real_commands() -> tuple[str, ...]:
 
 
 def _baseline_commands_functions() -> set[str]:
-    """独立 AST：commands.py 里所有 async def cmd_* 的函数名。"""
-    tree = ast.parse(_CMD_PY.read_text(encoding="utf-8"))
-    return {
-        n.name for n in tree.body
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("cmd_")
-    }
+    """独立 AST：commands*.py 里所有 async def cmd_* 的函数名。
+
+    2026-11-25：命令层已经按主题拆成 commands.py / commands_puppet.py 等多个模块
+    （commands.py 逼近 200KB 上传红线）。只扫 commands.py 会把**已外迁但仍有
+    re-export** 的函数判成「不存在」——`cmd_craft_puppet` 实际可调用
+    （`__init__.py` 与 `button_dispatch` 都在用），却被报成点击无反应。
+    改为扫 commands*.py 全族，以后继续拆分也不用再改这里。
+    """
+    out: set[str] = set()
+    for path in _CMD_FAMILY:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        out |= {
+            n.name for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("cmd_")
+        }
+    return out
 
 
 def _baseline_dispatch_plan() -> dict[str, tuple[str, str, str]]:

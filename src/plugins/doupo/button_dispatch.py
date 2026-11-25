@@ -43,6 +43,15 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "突破": ("cmd_break", "qq", ""),
     "战斗": ("cmd_fight", "qq", ""),
     "战斗评价": ("cmd_battle_comment", "qq", ""),
+    # 2026-11-25：战斗回执的按钮族里加了「战斗回看」，但这里漏登记 →
+    # 玩家点了没反应（test_doupo_buttons 的守门真抓到了）。
+    # card_key 留空是**故意的**：card.render_battle 签名是 (last_battle, qq)，
+    # 走通用 renderer(p) 分支会把玩家 dict 当 last_battle 渲出假卡
+    # （见下方「每张卡的入参形状不同」那段事故注释）。故走纯文本兜底
+    # cmd_battle_review —— 它本来就返回完整逐招文本。
+    "战斗回看": ("cmd_battle_review", "qq", ""),
+    # 同批漏掉的第二个：「任务」在战斗回执按钮族里，也没登记。
+    "任务": ("cmd_tasks", "qq", ""),
     "爬塔": ("cmd_tower", "qq_str", ""),
     "塔层": ("cmd_tower_status", "qq", ""),
     "装备": ("cmd_equip", "qq_str", ""),

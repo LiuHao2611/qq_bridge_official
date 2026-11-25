@@ -230,7 +230,7 @@ def test_source_gates():
     这几条行为测试只能覆盖「当前数值恰好撞上」的场景（例如 lv96 的强号
     用标尺玩家反解也不会输），所以必须另有一条钉子直接钉在源码上。
     """
-    path = os.path.join(ROOT, "src", "plugins", "doupo", "commands.py")
+    path = os.path.join(ROOT, "src", "plugins", "doupo", "commands_puppet.py")
     with open(path, encoding="utf-8") as f:
         src = f.read()
     i0 = src.index("async def cmd_puppet_ruin(")

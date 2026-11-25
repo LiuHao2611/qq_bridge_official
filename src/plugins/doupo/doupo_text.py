@@ -126,28 +126,127 @@ def chapter_line(ch: int, region: str, lv_lo: int, lv_hi: int = 0) -> str:
     return "📍 第 %d 章 · %s%s" % (int(ch), region or "未知之地", tail)
 
 
-def encounter_head(n: int, foes: str, rounds: int, win: bool, killed: int) -> str:
-    """战斗首行。保留「遭遇」锚点，补一句临场感。"""
-    verdict = "大捷" if win else f"力竭·斩{killed}/{n}"
-    return (f"⚔️ 遭遇 {n} 敌——{foes}拦在去路上。\n"
-            f"　{rounds} 回合，{verdict}。")
+#: 战斗首行里的「境界具象」短语（2026-11-25 用户：战斗回执要结合当前玩家的境界）。
+#: key 与 ``cfg.REALM_NAMES`` 的 13 阶一一对应，值取该阶在原著里的标志性体征：
+#: 斗之气气旋未成、斗师斗气纱衣、大斗师斗晶、斗王斗气化翼、斗宗踏虚、斗帝帝炎。
+#: 一律四字——首行要塞进境界称呼 + 回合 + 胜负，多一个字都会顶到 200 字骨架上限。
+#: 缺键时调用点回落空串（不抛 KeyError），新境界加档不会炸老战斗。
+REALM_FIGHT_TAG: dict[str, str] = {
+    "斗之气": "气机鼓荡",
+    "斗者": "气旋初凝",
+    "斗师": "纱衣浮体",
+    "大斗师": "斗晶映体",
+    "斗灵": "掌生兵刃",
+    "斗王": "翼展生风",
+    "斗皇": "虚空下陷",
+    "斗宗": "踏虚而立",
+    "斗尊": "空间随念",
+    "斗尊巅峰": "空间明灭",
+    "半圣": "法则低鸣",
+    "斗圣": "拳裂长空",
+    "斗帝": "帝炎焚天",
+}
 
 
-def battle_spot(spot: str) -> str:
-    """把 commands._battle_line 剪出的高光整段包装成世界观叙述。
+def encounter_head(n: int, foes: str, rounds: int, win: bool, killed: int,
+                   realm: str = "", tag: str = "", hp_ratio: float = 1.0,
+                   exhausted: bool = False) -> str:
+    """战斗首两行：遭遇 + 结算判词（2026-11-25 重构）。
 
-    spot 形如「佛怒火莲 6240（力量·斗气）」；拆不出伤害时原样包住，
-    绝不猜数值。
+    保留「遭遇」锚点（多个守门认这两个字）。第一行不动，第二行从旧的
+    「{回合} 回合，大捷。」升级为三段信息：
+
+      * **境界**——``realm``（``cfg.full_realm``，如「二星斗师」）+ ``tag``
+        （本模块 ``REALM_FIGHT_TAG``，如「纱衣浮体」），让玩家一眼看到
+        「我是拿这个境界在打」；
+      * **胜负分档**——胜不是只有「大捷」：气血 ≥50% 大捷、20%~50% 惨胜、
+        <20% 险胜；败单独一套「力竭·斩k/n」；
+      * **收束**——胜配「斗气未散 / 气血翻涌 / 一线之差」，斗气耗尽改
+        「斗气枯竭」；败配「气机溃散」。
+
+    ``hp_ratio`` 是战后气血占体力上限的比例，由调用点算好传入（本模块不做
+    数值计算，只出句）；缺省 1.0 等价于满血胜，老调用点行为可预期。
+    """
+    head = f"⚔️ 遭遇 {n} 敌——{foes}拦在去路上。"
+    if win:
+        if hp_ratio < 0.2:
+            verdict, tail = "险胜", "一线之差"
+        elif hp_ratio < 0.5:
+            verdict, tail = "惨胜", "气血翻涌"
+        else:
+            verdict, tail = "大捷", "斗气未散"
+        if exhausted:
+            tail = "斗气枯竭"
+    else:
+        verdict, tail = f"力竭·斩{killed}/{n}", "气机溃散"
+    r = str(realm or "").strip()
+    t = str(tag or "").strip()
+    who = f"{r}·{t}" if (r and t) else (r or t)
+    prefix = f"{who}，" if who else ""
+    return f"{head}\n　{prefix}{rounds} 回合{verdict}——{tail}。"
+
+
+def battle_spot(spot: str, tier: str = "", move: str = "") -> str:
+    """把高光条目包成一句叙述（2026-11-25 重构）。
+
+    ``spot`` 仍是 ``commands._battle_line`` 剪出的「招式 伤害（归因）」字符串；
+    ``tier``/``move`` 由调用点从 log 条目**直传**——品阶只存在于 log 里，
+    从拼接后的字符串反解析必然丢，所以不做字符串猜谜。
+
+    分档口径：普通/空品阶不加前缀（普通是缺省，每场刷「普通」是噪音），
+    只有高阶/特殊才亮出「高阶·」「特殊·」；普攻走另一套，不写「【普攻】」
+    这种把系统词当招式名的写法。
     """
     import re
     m = re.match(r"^(.+?)\s+(\d+(?:\.\d+)?[万亿]?)\s*(?:（.*）)?$", spot)
-    if m:
-        return f"💥 这一记【{m.group(1).strip()}】最重——{m.group(2)} 点伤害落在要害。"
-    return f"💥 最重的一记——{spot}。"
+    if not m:
+        return f"💥 最重的一记——{spot}。"
+    name = str(move or m.group(1)).strip()
+    dmg = m.group(2)
+    t = str(tier or "").strip()
+    if name in ("普攻", "拳脚", "拳头"):
+        return f"💥 一记拳脚砸实，{dmg} 点落在要害。"
+    if t == "特殊":
+        return f"💥 【特殊·{name}】气机一沉，{dmg} 点碾下。"
+    if t == "高阶":
+        return f"💥 【高阶·{name}】气劲贯体，{dmg} 点砸进。"
+    return f"💥 【{name}】一记砸实，{dmg} 点落在要害。"
 
 
-def battle_gain(foes: str, exp: str, gold: str, drops: str = "") -> str:
-    out = f"🎯 此战斩获 {foes} · 修为 +{exp} · 金币 +{gold}"
+def battle_puppet(name: str, dmg: str, skin: str = "") -> str:
+    """傀儡助阵行（2026-11-25 用户「或者高阶傀儡」）。
+
+    为什么必须独立成行、不并进 💥 句：log 里傀儡击是 ``puppet=True`` 的独立
+    条目，伤害归因是「傀儡的木桶五维」而不是玩家力量／斗气。并进高光句等于
+    把傀儡的功劳记到玩家属性上，与「人物卡属性↔战斗强关联」的脸面冲突。
+
+    ``name`` 取条目里的 ``helper``（如「天级傀儡·玄」），``skin`` 取铜/银/金，
+    有皮肤才加前缀（老档傀儡没有 skin 字段，不能硬拼「铜皮」）。
+    """
+    tag = f"{skin}皮" if skin else ""
+    return f"🧿 {tag}{name}掠阵，补 {dmg} 点。"
+
+
+def battle_defeat() -> str:
+    """失败收场（2026-11-25）：只在败局追加一行。
+
+    为什么败要比胜多说一句：胜的反馈由首行判词 + 高光 + 战果三行承担，
+    败只剩「力竭·斩k/n」一个数字，读起来像判词而不是邀请。这里给的是
+    「不甘」而不是「你不行」——留钩子，才有下一场。
+    """
+    return "🩹 气血枯竭，你被生生打退——这笔账，记下了。"
+
+
+def battle_gain(foes: str, exp: str, gold: str, drops: str = "",
+                win: bool = True) -> str:
+    """战果行。
+
+    2026-11-25：败局不能再写「斩获」——打输了还说斩获，读起来自相矛盾。
+    只换动词（斩获 / 未克），数值与锚点词「修为 +」「金币 +」原样保留，
+    守门与快照口径不变。
+    """
+    verb = "斩获" if win else "未克"
+    out = f"🎯 此战{verb} {foes} · 修为 +{exp} · 金币 +{gold}"
     return out + (" · " + drops if drops else "")
 
 
@@ -384,9 +483,25 @@ CALL_SAMPLES: tuple[str, ...] = (
     tiandi_fail_plain(35),
     encounter_head(3, "血灵蟒等3名", 6, True, 3),
     encounter_head(3, "血灵蟒等3名", 6, False, 1),
+    # 2026-11-25 新分支全登记：不登记就等于禁词守门扫不到这批句子。
+    encounter_head(3, "血灵蟒等3名", 6, True, 3, realm="二星斗师",
+                   tag="纱衣浮体", hp_ratio=0.9),
+    encounter_head(3, "血灵蟒等3名", 6, True, 3, realm="二星斗师",
+                   tag="纱衣浮体", hp_ratio=0.3),
+    encounter_head(3, "血灵蟒等3名", 6, True, 3, realm="二星斗师",
+                   tag="纱衣浮体", hp_ratio=0.1, exhausted=True),
+    encounter_head(3, "血灵蟒等3名", 6, False, 1, realm="二星斗师",
+                   tag="纱衣浮体", hp_ratio=0.0),
     battle_spot("佛怒火莲 6240（力量·斗气）"),
     battle_spot("身形一晃，避开了兽击（敏捷·闪避）"),
+    battle_spot("劈山掌 3621", tier="高阶", move="劈山掌"),
+    battle_spot("天火三玄变 9000", tier="特殊", move="天火三玄变"),
+    battle_spot("普攻 2100", move="普攻"),
+    battle_puppet("天级傀儡·玄", "7965", "金"),
+    battle_puppet("人级傀儡·铁", "120"),
+    battle_defeat(),
     battle_gain("血灵蟒", "一千八", "九百", "血灵草×2"),
+    battle_gain("血灵蟒等3名", "0", "0", win=False),
     battle_cost("三千", "一万二", 2),
     battle_hero_aid(),
     battle_ready("四星斗者"),
@@ -431,7 +546,7 @@ CALL_SAMPLES: tuple[str, ...] = (
 def all_player_texts() -> tuple[str, ...]:
     """守门测试用：全部玩家可见静态句 + 展开后的模板样本。"""
     out = list(STATIC_TEXTS) + list(CALL_SAMPLES)
-    for obj in (CROSS_LINES, STAR_LINES, CRAFT_SUCCESS):
+    for obj in (CROSS_LINES, STAR_LINES, CRAFT_SUCCESS, REALM_FIGHT_TAG):
         out.extend(str(x) for x in obj.values())
     out.extend(CRAFT_FAIL_LINES)
     return tuple(dict.fromkeys(out))
