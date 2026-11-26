@@ -1023,16 +1023,17 @@ async def cmd_fight(store, qq) -> str:
     # 代表敌人取等级最高那位（与 foes 同源），招式/品阶取最强一击（与 💥 行同源）。
     _foe_kind = str(max(detail, key=lambda x: int(x.get("lv") or 0)).get("kind") or "") \
         if detail else ""
-    _flavor_line = _flavor.flavor_line({
-        "win": bool(res.get("win")),
-        "tier": _wt,
-        "realm_idx": cfg.realm_index(lv),
-        "foe_kind": _foe_kind,
-        "move": str(high.get("move") or ""),
-        "move_tier": str(high.get("tier") or ""),
-        "seed": _seed,
-    })
-    if _flavor_line:
+    for _flavor_line in _flavor.flavor_lines({
+            "win": bool(res.get("win")),
+            "tier": _wt,
+            "realm_idx": cfg.realm_index(lv),
+            "foe_kind": _foe_kind,
+            "move": str(high.get("move") or ""),
+            "move_tier": str(high.get("tier") or ""),
+            "has_puppet": bool(pup_hits),
+            "rounds": int(res.get("rounds") or 0),
+            "seed": _seed,
+    }):
         lines.append("　" + _flavor_line)
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):

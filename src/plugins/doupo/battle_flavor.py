@@ -5,41 +5,46 @@
 素材库 ``docs/斗破苍穹出圈台词梗素材_战斗台词用.md`` 里的梗句**不能无脑贴进战报**：
 玩家在乌坦城后山（ch1）打一只嗜血鼠，回包里蹦出「斗宗强者，恐怖如斯」就是穿帮——
 不符合当前区域 / 境界 / 斗技。用户硬要求「别搞的不符合当前区域和斗技，境界等等，
-搞清楚再开始加」。所以这里把每句梗绑定一组**真实字段门控**，条件不满足就不出句
+搞清楚再开始加」。所以这里把每一句梗绑定一组**真实字段门控**，条件不满足就不出句
 （宁可不放，绝不硬塞——禁降级红线）。
 
-判定字段全部来自既有战斗上下文，来自：
-  - ``cfg.realm_index(p.lv)``         → 境界档（0..12）
+## 判定字段（全部来自既有战斗上下文）
   - ``detail[i]["kind"]``             → 敌人阵营（魂殿/黑盟/魔炎谷/魔兽/悍匪）
+  - ``cfg.realm_index(p.lv)``         → 境界档（0..12）
   - ``high["move"] / high["tier"]``   → 本场真实最强一击的招式 / 品阶
   - ``war_tier()``                    → 战况档（crush/narrow/sweep/great/lose）
-  - ``cfg.CHAPTER_REGION[chapter]``   → 区域（本模块只用来挡地名梗，见下）
+  - ``pup_hits`` / ``res["rounds"]``  → 是否傀儡助阵 / 本场回合数
+
+## 双槽设计（一场最多两句，各走各的门控）
+  - **登场口吻**：敌人阵营决定（魂殿/黑盟/魔炎谷才出反派梗），一场最多一句；
+  - **结算口吻**：本场招式 / 战况档 / 玩家境界 / 傀儡 / 拖沓 决定，一场最多一句。
+  两槽句子来自不同池，不会撞句。这是「梗味更足」与「不刷屏」的平衡。
 
 ## 与 doupo_text.py 的边界（勿越）
-``doupo_text.py`` 管**逐字原文台词 + 说话人绑定**（CHAPTER_QUOTE / NPC_SPEAKERS），
-出处核对、绑定角色、出处不进回执。本模块**不碰那套**：
-  1. 只出**无主旁白**（不加引号、不冒认角色说话），符合 doupo_text 硬纪律第 2 条；
-  2. 只用素材库里**筛掉人名**后的句子；
-  3. 与逐字原文重复的梗（第 1 章「莫欺少年穷」已在 CHAPTER_QUOTE）**不重复出**；
-  4. 含具体地名的梗（「上云岚宗」等）——调用点必须传 ``region``，只有区域串真含
-     该地名时才放行，否则宁可不出；本模块默认**不自动出任何地名梗**。
-  5. 输出恒为 0 或 1 行，确定性（同 ctx 同句）。
+``doupo_text.py`` 管**逐字原文台词 + 说话人绑定**（CHAPTER_QUOTE / NPC_SPEAKERS）。
+本模块**不碰那套**：只出**无主旁白**（不加引号、不冒认角色），符合其硬纪律第 2 条；
+只用素材库里**筛掉人名**后的句子；与逐字原文重复的（第 1 章「莫欺少年穷」）不重复出；
+技能库不存在的招（「毁灭火莲」）永久剔除；含具体地名的句子（「上云岚宗」）门控复杂、
+极易穿帮，**不自动落地**（只在素材库里保留，不做运行时注入）。
 
-## 优先级（越贴合当前实际越靠前，一场只出一句）
-  反派阵营口吻 > 本场真实喊招 > 越级/惨胜「侥幸」 > 惨胜「神清气爽」 > 斗宗境界惊叹
+## 剔除清单（素材库里没落地的，以及原因）
+  - 毁灭火莲 / 火莲变烟花 / 火莲不行上主角挂 —— 技能库无此招，落地即穿帮；
+  - 三十年河东莫欺少年穷 —— 已在 CHAPTER_QUOTE 第 1 章逐字出，不重复；
+  - 我天妖傀又何尝不是天才 —— 玩家傀儡未必是「天妖傀」，改用泛化句「我又何尝不是天才」；
+  - 上云岚宗 / 不把云岚宗灭了 —— 含具体地名，须区域门控且第一人称口吻易穿帮，暂不注入；
+  - 你躲开点技能老锁定你 —— 系统没有「目标锁错」事件，无可挂真实字段；
+  - 终章已至 / 再见了我的青春 / 莫欺中年穷 —— 情怀收尾，不进普通战斗；
+  - 斗气化马 / 三千雷动一动不动 等电视剧吐槽 —— 只做菜单彩蛋，不进正经战报。
 """
 from __future__ import annotations
 
-# 敌方阵营：只有这几类「反派势力」才配说反派口吻的梗（桀桀桀 / 猖狂）。
-# 取自 config.MONSTERS[*].kind 与 recipes_data.BOSS_KIND_TOKENS 的实际取值。
+# 敌方阵营：只有这几类「反派势力」才配说反派口吻的梗。
 _EVIL_KINDS = frozenset(("魂殿", "黑盟", "魔炎谷"))
 
-# 境界档（cfg.realm_index 返回值）：斗宗=7、斗尊=8、半圣=10、斗圣=11、斗帝=12。
-# 「斗宗强者，恐怖如斯」只有在场角色真到斗宗及以上才有意义，低境界出是穿帮。
+# 境界档（cfg.realm_index 返回值）：斗宗=7、半圣=10、斗圣=11、斗帝=12。
 _REALM_DOUZONG = 7
+_REALM_BANSHENG = 10
 
-# 战况档（doupo_text.war_tier 返回值）：crush=越级斩杀、narrow=惨胜/险胜。
-# sweep（无伤）/great（大捷）说「侥幸」「神清气爽」都是假的，不在此列。
 _TIER_CRUSH = "crush"
 _TIER_NARROW = "narrow"
 
@@ -62,51 +67,89 @@ def _pick(pool: tuple[str, ...], seed: int) -> str:
     return pool[int(seed) % len(pool)]
 
 
-def flavor_line(ctx: dict) -> str:
-    """按真实战斗上下文返回**至多一行**梗味旁白；无情境命中返回空串。
+def _opening(ctx: dict) -> str:
+    """登场口吻：敌方真是反派势力才出；普通魔兽/悍匪局绝不冒出反派笑声。"""
+    foe_kind = _ctx_str(ctx, "foe_kind")
+    seed = _ctx_int(ctx, "seed")
+    if foe_kind == "魂殿":
+        return _pick(("桀桀桀。", "今日谁保他，谁与我魂殿为敌！",
+                      "此子断不可留，否则日后必成大患！"), seed)
+    if foe_kind in _EVIL_KINDS:
+        return _pick(("猖狂。", "此子断不可留，否则日后必成大患！",
+                      "桀桀桀。"), seed)
+    return ""
 
-    ctx 字段（调用点从 cmd_fight 真实数据填，缺字段按「不满足」处理）：
-      win: bool          本场是否胜利
-      tier: str          war_tier 战况档 crush/narrow/sweep/great/lose
-      realm_idx: int     玩家境界档 cfg.realm_index(lv)，0..12
-      foe_kind: str      代表敌人阵营 kind
-      move: str          本场最强一击招式名（high["move"]）
-      move_tier: str     本场最强一击品阶（high["tier"]）
-      seed: int          确定性轮换种子
 
-    返回空串时调用点直接丢弃该行，**不得替换为任何通用句子**（禁兜底）。
-    """
-    if not isinstance(ctx, dict):
-        return ""
+def _closing(ctx: dict) -> str:
+    """结算口吻：本场招式 / 战况 / 境界 / 傀儡 / 拖沓，一场最多一句。"""
     win = bool(ctx.get("win"))
     tier = _ctx_str(ctx, "tier")
     realm_idx = _ctx_int(ctx, "realm_idx")
-    foe_kind = _ctx_str(ctx, "foe_kind")
     move = _ctx_str(ctx, "move")
+    has_puppet = bool(ctx.get("has_puppet"))
+    rounds = _ctx_int(ctx, "rounds")
     seed = _ctx_int(ctx, "seed")
 
-    # 情境 1 · 反派势力：敌方真是魂殿/黑盟/魔炎谷才出反派口吻。
-    # 普通魔兽/悍匪局绝不冒出反派笑声。两条按种子确定性轮换。
-    if foe_kind in _EVIL_KINDS:
-        return _pick(("桀桀桀。", "猖狂。"), seed)
-
-    # 情境 2 · 本场真实喊招：最强一击精确等于技能库里确有的一招。
-    # 比境界更具体，故排在境界前；玩家没打出的招绝不喊。
+    # 1) 本场真打出的招：最具体，优先于战况/境界。
     if move == "焰分噬浪尺":
         return "焰分噬浪尺！"
 
-    # 情境 3 · 越级斩杀的「侥幸」：真赢了 + 战况档 crush（敌方高出 2 级及以上）。
-    # 只有真越级，谦虚「侥幸」才有反差；顺风局说侥幸是假的。
+    # 2) 越级斩杀：真越级 + 真赢，才配「侥幸 / 撕裂虚空」。
     if win and tier == _TIER_CRUSH:
-        return _pick(("侥幸罢了。", "这一场，赢得侥幸。"), seed)
+        return _pick(("侥幸罢了。",
+                      "这一击，竟撕裂了虚空。他发出的斗气波动，竟然比我还强。"), seed)
 
-    # 情境 4 · 惨胜「神清气爽」：narrow（血量掉到一半以下才赢），濒死反杀的反差。
+    # 3) 惨胜险胜：血掉一半以下才赢，才有「神清气爽 / 想说一句猖狂」的反差。
     if win and tier == _TIER_NARROW:
-        return "神清气爽。"
+        return _pick(("神清气爽。", "怎么很想说一句猖狂。"), seed)
 
-    # 情境 5 · 斗宗境界惊叹：玩家真到斗宗档，作为无主旁白出，不冒充角色。
+    # 4) 傀儡助阵：本场真有傀儡出手才出召唤物梗。
+    if has_puppet:
+        return _pick(("平 A 尊者。", "我又何尝不是天才。"), seed)
+
+    # 5) 拖沓局：回合数真的多（≥10）才自嘲「卡点」。
+    if rounds >= 10:
+        return "别急，我在卡点。"
+
+    # 6) 斗宗及以上境界：作为无主旁白出，低境界绝不出。
+    #    放在大捷之前——「恐怖如斯」那批境界句不该被顺风局的普通梗抢走。
     if realm_idx >= _REALM_DOUZONG:
+        if realm_idx >= _REALM_BANSHENG:
+            return "半圣之下，皆为蝼蚁。"
         return "斗宗强者，恐怖如斯。"
 
-    # 其余一律不出：败局、普通刷怪、低境界、顺风局都不硬塞梗。
+    # 7) 败局：真输了才有轻蔑旁白（不加引号，不冒认角色）。
+    if not win:
+        return _pick(("无奈地摇了摇头。", "别急，我在卡点。"), seed)
+
+    # 8) 大捷/无伤（仅低境界）：顺风局按种子轻描一句，梗味更足。
+    #    句子专属本池，不与傀儡池/惨胜池/越级池复用（避免门控串味）。
+    if win and tier in ("great", "sweep"):
+        return _pick(("恐怖如斯。", "这一场，赢得干净。"), seed)
+
     return ""
+
+
+def flavor_lines(ctx: dict) -> list[str]:
+    """返回至多两行梗味旁白：登场口吻 + 结算口吻，各自独立门控。
+
+    任一槽不满足就少一行，绝不用通用句回填（禁兜底）。同 ctx 必得同结果。
+    """
+    if not isinstance(ctx, dict):
+        return []
+    # 无战斗数据守卫：一场真实战斗至少有 tier / foe_kind / move / 回合数之一。
+    # 全空（如误传空 dict）不该凭 win=False 就吐一句轻蔑——宁可不放。
+    if not (_ctx_str(ctx, "tier") or _ctx_str(ctx, "foe_kind")
+            or _ctx_str(ctx, "move") or _ctx_int(ctx, "rounds")):
+        return []
+    out: list[str] = []
+    for line in (_opening(ctx), _closing(ctx)):
+        if line:
+            out.append(line)
+    return out
+
+
+def flavor_line(ctx: dict) -> str:
+    """兼容单句入口：返回第一句（登场优先，无登场则结算）；无则空串。"""
+    lines = flavor_lines(ctx)
+    return lines[0] if lines else ""
