@@ -615,7 +615,7 @@ HERBS = [
 ]
 # 2026-11-16 原著考据扩充：32 种原著药材（有明确药方的丹药所需）并入宝库
 from .recipes_data import NOVEL_HERBS, NOVEL_RECIPES, GRADE_MIN_LV, RECIPES_PER_PAGE  # noqa: E402
-from .recipes_data import NOVEL_MATERIALS, MATERIAL_TIER_LV, MATERIAL_DROP_RATE, BOSS_KIND_TOKENS  # noqa: E402
+from .recipes_data import NOVEL_MATERIALS, MATERIAL_TIER_LV, MATERIAL_DROP_RATE, BOSS_KIND_TOKENS, DROSS_DROP_RATE, DROSS_DROP_QTY  # noqa: E402
 # 描写放 recipes_data：config 已贴 200KB 红线（2026-11-26）
 from .recipes_data import BEAST_ELITE_APPEARANCE  # noqa: E402
 # 天材地宝索引（服丹/炼化入口 + 分级掉落共用唯一数据源）
@@ -3139,7 +3139,7 @@ TIANFU_ALLSTAT = 0.04
 MISC_ITEMS: dict[str, dict] = {
     "药渣": {
         "kind": "炼药残渣",
-        "rows": ["炼药失败的残留，每次失败得 %d 份" % CRAFT_FAIL_DROSS,
+        "rows": ["炼药失败或战斗所得，每次 %d 份" % CRAFT_FAIL_DROSS,
                  "养火的唯一燃料：发「养火 <火名>」把现有药渣一次喂光"],
         "tip": "发「养火 青莲地心火」喂火升级 · 发「异火」看现有火种",
     },

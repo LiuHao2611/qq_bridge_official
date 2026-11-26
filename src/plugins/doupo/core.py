@@ -2518,6 +2518,13 @@ def _roll_drops(p, rng, mon=None, puppet_out=None) -> list:
                 if lv >= int(_minlv):
                     puppet_out.append((_nm, 1))
                     break
+    # ---- 药渣战斗掉落（2026-11-26 用户拍板：一只怪概率掉 3 个）----
+    # 追加在**所有既有判定之后**（含傀儡专用材料），rng 只增不插队——老掉落序列逐字节不变。
+    # 普通/精英/Boss 同概率：药渣是养火基础耗材，刻意不看 mon 等级、is_boss、kind。
+    # mon=None 的老调用（裸跑/旧入口）已在上面提前 return，不会走到这里。
+    if int(rng() * 1000) < int(cfg.DROSS_DROP_RATE):
+        add_item(p, "药渣", int(cfg.DROSS_DROP_QTY))
+        out.append(("药渣", int(cfg.DROSS_DROP_QTY)))
     return out
 
 
