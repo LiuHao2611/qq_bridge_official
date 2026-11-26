@@ -462,6 +462,98 @@ def test_auto_tower_rejects_when_session_pending():
     ts.STORE.clear("qq_auto2")
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-26 用户两项实测 BUG
+#   ① 「显示从 25 层开始，失败后怎么会显示止步 24 层？」
+#   ② 「自动爬塔扣血力竭是不是假的，我失败后查看人物卡还是满状态」
+# ---------------------------------------------------------------------------
+def test_exhaust_reports_the_floor_you_died_on():
+    """力竭层号必须自洽：从 checkpoint+1 出发，倒在哪层就报哪层。
+
+    prove-it：把 ``txt.tower_down(...)`` 的入参改回 ``res["floors"]``（已通过层），
+    这里「倒在第 25 层」立刻变「倒在第 24 层」，断言必红。
+    """
+    import asyncio
+    from doupo import commands
+
+    p = _player(1)                     # lv1 打第 25 层必输，只打一层就力竭
+    p["tower_checkpoint"] = 24
+    p["tower_paid_floor"] = 24
+    store = _MemStore(p)
+    ts.STORE.clear("qq_floor")
+    out = asyncio.run(commands.cmd_auto_tower(store, "qq_floor", "否"))
+
+    assert "从第 25 层出发" in out, out
+    assert "倒在第 25 层" in out, out
+    assert "止步第 24 层" not in out, out
+    assert ts.STORE.get("qq_floor") is None, "自动爬塔后会话没清理"
+
+
+def test_exhaust_really_drains_hp():
+    """力竭必须真扣血，且口径与普通战败一致（上限 × LOSE_HP_FLOOR）。
+
+    prove-it：删掉 ``cmd_auto_tower`` 里的 ``core.writeback_exhaustion`` 调用，
+    hp 会留在满血，这里必红 —— 这正是用户看到的「失败后人物卡还是满状态」。
+    """
+    import asyncio
+    from doupo import commands
+
+    p = _player(1)
+    p["tower_checkpoint"] = 24
+    p["tower_paid_floor"] = 24
+    full = int(core.stats(p)["体力"])
+    assert int(p["hp"]) == full, "夹具前提：出发时满血"
+
+    store = _MemStore(p)
+    ts.STORE.clear("qq_hp")
+    out = asyncio.run(commands.cmd_auto_tower(store, "qq_hp", "否"))
+
+    got = int(store.p["hp"])
+    floor_hp = max(1, int(core.stats(store.p)["体力"] * core.cfg.LOSE_HP_FLOOR))
+    assert got == floor_hp, "力竭后气血 %d，应为战败地板 %d（满血 %d）" % (got, floor_hp, full)
+    assert got < full, "力竭后气血没降（还是满血）：%s" % got
+    assert "气血 %d/" % floor_hp in out, out
+
+
+def test_manual_tower_loss_also_drains_hp():
+    """手动爬塔阵亡同口径：力竭扣血不分自动/手动两套。"""
+    import asyncio
+    from doupo import commands
+
+    p = _player(1)
+    p["tower_checkpoint"] = 24
+    p["tower_paid_floor"] = 24
+    store = _MemStore(p)
+    ts.STORE.clear("qq_hp2")
+    out = asyncio.run(commands.cmd_tower(store, "qq_hp2"))
+
+    assert "倒在第 25 层" in out, out
+    got = int(store.p["hp"])
+    floor_hp = max(1, int(core.stats(store.p)["体力"] * core.cfg.LOSE_HP_FLOOR))
+    assert got == floor_hp, (got, floor_hp)
+
+
+def test_winning_does_not_drain_permanent_hp():
+    """只有力竭才扣：赢着走下塔不该扣永久气血（塔的续航走会话 temp_hp）。
+
+    prove-it：把 writeback 挪到「无论胜负都写」，这条会红。
+    """
+    import asyncio
+    from doupo import commands
+
+    p = _player(70)
+    p["tower_checkpoint"] = 0
+    p["tower_paid_floor"] = 0
+    full = int(core.stats(p)["体力"])
+    store = _MemStore(p)
+    ts.STORE.clear("qq_win")
+    out = asyncio.run(commands.cmd_tower(store, "qq_win"))
+
+    assert "层【" in out, out[:160]
+    assert int(store.p["hp"]) == full, "赢了一层却被扣永久气血：%s/%s" % (store.p["hp"], full)
+    ts.STORE.clear("qq_win")
+
+
 def _main():
     fns = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

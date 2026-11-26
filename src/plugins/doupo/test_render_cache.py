@@ -205,6 +205,58 @@ def test_source_order():
           "_styled(data, style)" in body and "_render_cache_key(" in body, "")
 
 
+# ---------------------------------------------------------------------------
+# ⑦ 人物卡必须也走这条缓存（2026-11-26 用户「今天卡片发送又变慢了」）
+# ---------------------------------------------------------------------------
+def test_panel_goes_through_render_cache():
+    """``render_panel`` 是**唯一**自己重写了一遍渲染的入口，因而绕过了 LRU。
+
+    2026-11-26 排查发现：背包/斗技/物品/周本全走 ``_render_list``，只有人物卡
+    （最高频的一张）单独实现 ``_style_for`` + ``pic.render``，既不记 stats，
+    也没有「命中即字节稳定 → 素材 md5 可复用」的保证。
+
+    prove-it：把 ``render_panel`` 改回旧写法（自己调 pic.render），
+    下面「调的是 _render_list」立刻为假，断言必红。
+    """
+    p = _fresh({"破厄丹": 1})
+    p["qq"] = "10086"
+    card.render_cache_clear()
+
+    hits: list[tuple] = []
+    orig = card._render_list
+
+    async def spy(template, data, card_name, qq=None):
+        hits.append((template, card_name, qq))
+        return b"\x89PNG-fake"
+
+    try:
+        card._render_list = spy
+        asyncio.run(card.render_panel(p))
+    finally:
+        card._render_list = orig
+
+    check("人物卡走 _render_list（同一套缓存/主题/兜底）",
+          len(hits) == 1, hits)
+    if hits:
+        tpl, name, qq = hits[0]
+        check("模板/卡名正确（doupo / 斗破人物）",
+              tpl == "doupo" and name == card.CARD_NAME, (tpl, name))
+        check("玩家 QQ 透传（个人主题才对得上）", str(qq) == "10086", qq)
+
+
+def test_panel_source_has_no_private_render_path():
+    """源码级：``render_panel`` 体内不许再出现自己的 pic.render 调用。
+
+    防止有人「怕麻烦」又把它抄回去——那等于把最高频的卡踢出缓存。
+    """
+    src = pathlib.Path(__file__).with_name("card.py").read_text(encoding="utf-8")
+    body = src.split("async def render_panel(", 1)[1].split("\nasync def ", 1)[0]
+    check("render_panel 已委托 _render_list", "_render_list(" in body, body[:300])
+    check("render_panel 不再自己调 pic.render", "pic.render(" not in body, body[:300])
+    check("render_panel 不再自己注入主题", "_style_for(" not in body, body[:300])
+
+
+
 def _run():
     fns = [(k, v) for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

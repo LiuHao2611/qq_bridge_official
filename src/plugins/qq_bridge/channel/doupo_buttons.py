@@ -161,11 +161,25 @@ def quiz_buttons_for(cmd: str) -> tuple[Btn, ...]:
 
 @dataclass(frozen=True)
 class Btn:
-    """与 qq_keyboard.Btn 同构（label / cmd / primary），供 make_keyboard 直接消费。"""
+    """与 qq_keyboard.Btn 同构（label / cmd / primary / kind），供 make_keyboard 直接消费。"""
 
     label: str
     cmd: str
     primary: bool = False
+    #: 官方按钮的 ``action.type``（2026-11-26 补全）。平台一共只支持三种：
+    #:
+    #:   * ``callback``（type=1）—— 点击**回传事件**，客户端不发消息。本项目
+    #:     所有既有按钮都是这一类（靠 ``INTERACTION_CREATE`` 走 qq_interaction）。
+    #:     好处：能带任意 ``data``（如 ``doupo:bag``、``doupo:cbtn:炼制 破厄丹``），
+    #:     不必是玩家真打得出来的口令。
+    #:   * ``command``（type=2）—— 点击后客户端**替玩家发一条消息**，``data``
+    #:     就是那条消息的正文。好处：走普通消息链路，失败也能看到回执；
+    #:     坏处：``data`` 必须是真人可输入的完整口令。
+    #:   * ``link``（type=0）—— 纯跳转（网页/小程序），``data`` 是 https 地址，
+    #:     需要 ``unsupport_tips`` 兜底文案。不产生任何游戏事件。
+    #:
+    #: 默认 ``callback``：既有按钮行为一个字节都不变。
+    kind: str = "callback"
 
 
 def real_commands() -> tuple[str, ...]:
@@ -284,6 +298,8 @@ REPLY_CARD_KEY: dict[str, str] = {
     "交任务": "task_submit", "接任务": "task_submit",
     "战斗评价": "battle_text", "战斗回看": "review_text",
     "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
+    # 2026-11-26 隐藏样例口令：不出图，只挂「三种 action.type」的样例键盘。
+    "按钮样例": "btn_sample", "按钮测试": "btn_sample",
     "周副本": "weekly_text", "周本状态": "weekly_text",
     "修炼": "cult_text", "突破": "cult_text", "入塔": "cult_text",
     "出塔": "cult_text", "火能": "cult_text",
@@ -388,7 +404,27 @@ CARD_SELF = {
 #: 2026-11-25：**不出图、只挂按钮**的提示型 card_key（buttons_for_card 里特判返回）。
 #: 它们不是可渲染的卡（没有 render_*），但可以作为 keyboard_cmd 传给通道；
 #: validate 与守门都认这一族，否则「提示卡」会被当成未知卡拒掉。
-PROMPT_CARD_KEYS = frozenset({"auto_tower_prompt"})
+PROMPT_CARD_KEYS = frozenset({"auto_tower_prompt", "btn_sample"})
+
+#: 2026-11-26「按钮样例」：把官方**三种 action.type** 各做一颗，供真机点验。
+#:
+#: 平台只支持三种按钮动作（见 :class:`Btn.kind`），本项目此前只用过 callback
+#: （type=1）。这一组把三种混在一张键盘里，玩家点一遍就能看清区别：
+#:
+#:   ① ``人物``  callback/灰     —— 点它回传事件，出人物卡（现有全部按钮的样子）
+#:   ② ``背包``  callback/蓝     —— 同上，但 ``style=1`` 是主色（primary）
+#:   ③ ``爬塔``  command         —— 客户端**替玩家发一条「爬塔」**，走普通消息链路
+#:   ④ ``跳转·文档`` link        —— 只打开网页，不产生任何游戏事件
+#:   ⑤ ``自动爬塔·是`` callback 带参 —— data 是 ``doupo:cbtn:…``，点一下直接开自动爬塔
+#:
+#: 五行刚好用满平台上限（每行≤5 按钮、≤5 行）。
+SAMPLE_BUTTONS: tuple[Btn, ...] = (
+    Btn("人物", "doupo:panel", False, kind="callback"),
+    Btn("背包", "doupo:bag", True, kind="callback"),
+    Btn("爬塔", "爬塔", False, kind="command"),
+    Btn("跳转·文档", "https://bot.q.qq.com/wiki/", False, kind="link"),
+    Btn("自动爬塔·是", DOUPO_CUSTOM_PREFIX + "自动爬塔 是", False, kind="callback"),
+)
 
 #: 2026-11-25 晚：**纯文字回执**族 —— 回复本身是一段文本，卡片另有 render_* 负责
 #: （或压根不该出图），这些 key 只用来给那段文本挂一组「下一步做什么」的按钮。
@@ -412,7 +448,11 @@ TEXT_CARD_KEYS = frozenset({
 NO_RENDER_CARD_KEYS = TEXT_CARD_KEYS | PROMPT_CARD_KEYS
 
 #: 所有按钮 canonical 的并集 —— qq_interaction 据此识别「斗破按钮点击」。
-ALL_BUTTON_CMDS = frozenset(c for acts in CARD_ACTIONS.values() for c in acts)
+#: 2026-11-26：并入隐藏样例口令「按钮样例」——它不挂任何游戏卡（所以不在
+#: CARD_ACTIONS 里），但确是一颗真会被点的按钮（button_dispatch._PLAN 有登记）；
+#: 不并进来的话，守门会把它判成「dispatch 混入非按钮口令」。
+ALL_BUTTON_CMDS = (frozenset(c for acts in CARD_ACTIONS.values() for c in acts)
+                   | {"按钮样例"})
 
 
 def _item_detail_buttons(name: str) -> tuple[Btn, ...]:
@@ -486,6 +526,9 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
             Btn("随机加成", DOUPO_CUSTOM_PREFIX + "自动爬塔 是", False),
             Btn("无加成·掉落高", DOUPO_CUSTOM_PREFIX + "自动爬塔 否", False),
         )
+    # 2026-11-26 按钮样例（隐藏口令「按钮样例」）：三种 action.type 全家桶。
+    if k == "btn_sample":
+        return SAMPLE_BUTTONS
 
     acts = CARD_ACTIONS.get(k)
     if not acts:

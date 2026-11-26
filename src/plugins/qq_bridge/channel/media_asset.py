@@ -43,6 +43,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -269,7 +270,33 @@ def _new_request(method: str, url, **kw):
 
 
 #: 容器出网 COS 预签名直传超时上限（CLOSE-05：给足但绝不无限等）
-_PUT_TIMEOUT = 30.0
+_PUT_TOTAL_TIMEOUT = 30.0
+#: **连接阶段**单独压到 3s（2026-11-26 实测）。
+#: 线上慢卡证据：``23:26:06 pic_render`` → ``23:26:11 material_net_retry step=prepare
+#: NetworkError`` → ``23:26:17 material_net_retry step=put ConnectError`` →
+#: ``23:26:19 material_uploaded``，一张图 13s，其中 11s 全是「连不上」在等系统
+#: TCP 超时；而 0.4s 后的重试一次就通。故把 connect 单独压短：最坏路径从
+#: 「等满系统超时再重试」变成「3s 认输 + 0.4s 重试」，直接砍掉两位数的秒数。
+#: 注意只压 connect —— 上传本身要传 150~350KB，总超时仍留 30s 给弱网上行。
+_PUT_CONNECT_TIMEOUT = 3.0
+
+#: 复用同一个 AsyncClient：每张卡都新建 client 等于每次都重做一遍 DNS+TCP+TLS
+#: （手机 ARM 上 0.2~0.6s/张）。按 **事件循环** 持有，避免测试里
+#: ``asyncio.run()`` 反复起停导致「拿到上一条已关闭的 loop 的 client」。
+_put_client = None
+_put_client_loop = None
+
+
+def _put_client_for(loop):
+    """取当前事件循环专属的 PUT 客户端（惰性建、跨请求复用连接）。"""
+    global _put_client, _put_client_loop
+    if _put_client is None or _put_client.is_closed or _put_client_loop is not loop:
+        import httpx  # noqa: PLC0415 — 与 _http_put 同源，避免模块级硬依赖
+        _put_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(_PUT_TOTAL_TIMEOUT, connect=_PUT_CONNECT_TIMEOUT),
+        )
+        _put_client_loop = loop
+    return _put_client
 
 #: PIL format -> 官方 content_type。prepare 申报值与 PUT 的 Content-Type 头
 #: **必须完全一致**（真网络实验 2026-11-11 实证：不一致 COS 返回 403
@@ -393,10 +420,8 @@ async def _http_put(url: str, data: bytes, content_type: str) -> int:
     image/png→200、带官方鉴权头+image/png→200。故 CT 是唯一根因，鉴权头无害。
     收口成本函数、测试可 monkeypatch 注入假响应，不碰真实网络、不污染 sys.modules。
     """
-    import httpx  # noqa: PLC0415 — official.py 已依赖，容器有 0.28.x
-
-    async with httpx.AsyncClient(timeout=_PUT_TIMEOUT) as client:
-        resp = await client.put(url, content=data, headers={"Content-Type": content_type})
+    client = _put_client_for(asyncio.get_running_loop())
+    resp = await client.put(url, content=data, headers={"Content-Type": content_type})
     return int(getattr(resp, "status_code", 0))
 
 
@@ -525,6 +550,10 @@ async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict
 
     缓存命中不上传；未命中走 prepare→PUT→complete 三步。任一失败抛
     :class:`MaterialUploadError`（由上层降级，不静默吞）。成功后做 LRU 淘汰。
+
+    2026-11-26 加分段计时日志 ``material_timing``：出图慢到底是慢在
+    「接口往返」还是「上行带宽」只能靠数据说话，不许猜。``cached=True`` 表示
+    整段没走网络。
     """
     if not data:
         raise MaterialUploadError("empty_image_bytes")
@@ -533,9 +562,12 @@ async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict
     if cached:
         return {**cached, "md5": md5, "cached": True}
 
+    t0 = time.time()
     width, height, content_type = image_meta(data)
     prepared = await _prepare(bot, file_name, data, content_type)
+    t1 = time.time()
     md5_hex = await _put_bytes(prepared["presigned_url"], data, content_type)
+    t2 = time.time()
     completed = await _complete(bot, prepared["upload_id"], md5_hex)
     item = {
         "url": completed["url"],
@@ -547,8 +579,15 @@ async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict
     for old in _store._evict_candidates():
         if old.get("image_id"):
             await _delete(bot, old["image_id"])
+    t3 = time.time()
     log.info(jlog("material_uploaded", md5=md5[:12], width=width, height=height,
                   cached_store=len(_store)))
+    log.info(jlog("material_timing",
+                  prepare_ms=int((t1 - t0) * 1000),
+                  put_ms=int((t2 - t1) * 1000),
+                  complete_ms=int((t3 - t2) * 1000),
+                  total_ms=int((t3 - t0) * 1000),
+                  bytes=len(data)))
     return {**item, "md5": md5, "cached": False}
 
 

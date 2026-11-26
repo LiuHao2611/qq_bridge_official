@@ -93,6 +93,9 @@ class Btn:
     # 第四次修改后恒 False：primary 语义=「当前卡自己」，用户已要求移除该蓝色按钮。
     # 字段保留是为了 make_keyboard 的 style 表达式与历史注入测试兼容，不再有 True 值。
     primary: bool = False
+    #: 官方 action.type 语义（2026-11-26）：``callback``(type=1) / ``command``(type=2)
+    #: / ``link``(type=0)。默认 callback，与改造前逐字节一致。
+    kind: str = "callback"
 
 
 # 「帮助」是 game_tools 真实一级口令（dispatch:2078），点了出工具箱卡。
@@ -267,7 +270,8 @@ def buttons_for(text: str) -> tuple[Btn, ...]:
         except ImportError:  # 单文件直载（`_load()`）时同目录兜底
             from doupo_buttons import buttons_for_card as _doupo_buttons_for_card  # type: ignore[no-redef] # noqa: PLC0415
         try:
-            return tuple(Btn(b.label, b.cmd, b.primary) for b in _doupo_buttons_for_card(card_key))
+            return tuple(Btn(b.label, b.cmd, b.primary, getattr(b, "kind", "callback"))
+                         for b in _doupo_buttons_for_card(card_key))
         except Exception:  # noqa: BLE001 — 按钮是增强项，失败只当零按钮，绝不阻断出图
             return ()
 
@@ -439,6 +443,31 @@ def make_keyboard(text: str):
     )
 
     def _to_button(b):
+        # 2026-11-26：按 Btn.kind 映射官方 action.type —— 平台只认三种（0/1/2），
+        # 此前一律写死 type=1，等于把「指令按钮」「跳转按钮」两种能力闲置。
+        kind = str(getattr(b, "kind", "callback") or "callback")
+        if kind == "link":
+            # 跳转按钮：data 是 https 地址；unsupport_tips 是低版本客户端的兜底文案
+            # （官方文档要求填，不填部分端会点了没反应）。
+            action = Action(
+                type=0, permission=Permission(type=2), data=b.cmd,
+                reply=False, enter=False, unsupport_tips="请升级 QQ 后重试",
+            )
+        elif kind == "command":
+            # 指令按钮：客户端把 data 当作玩家发的消息，走普通消息链路。
+            # ``enter=True`` = 点一下直接发出（不必再按发送）；``reply=False`` =
+            # 不带上引用（带引用会让服务端收到 reply 型消息，没必要多一层语义）。
+            action = Action(
+                type=2, permission=Permission(type=2), data=b.cmd,
+                reply=False, enter=True,
+            )
+        else:
+            # 回调按钮（默认，本项目既有全部按钮）：回传 INTERACTION_CREATE，
+            # data 可以是任意哨兵（doupo:bag / doupo:cbtn:…）。
+            action = Action(
+                type=1, permission=Permission(type=2), data=b.cmd,
+                reply=False, enter=False,
+            )
         return Button(
             id="qb_%s" % (b.cmd or "menu"),
             render_data=RenderData(
@@ -446,13 +475,7 @@ def make_keyboard(text: str):
                 visited_label=b.label[:10],
                 style=1 if b.primary else 0,
             ),
-            action=Action(
-                type=1,
-                permission=Permission(type=2),
-                data=b.cmd,
-                reply=False,
-                enter=False,
-            ),
+            action=action,
         )
 
     rows = [

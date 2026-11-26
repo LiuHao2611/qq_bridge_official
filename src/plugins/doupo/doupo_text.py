@@ -827,8 +827,18 @@ def give_ok(amount: str = "", item: str = "") -> str:
     return f"🎁 你赠予对方 {amount} 金币，善缘结下，来日必有回响。"
 
 
-def tower_down(floor: int) -> str:
-    return f"💀 力竭倒下，止步第 {floor} 层。"
+def tower_down(fallen: int, cleared: int | None = None) -> str:
+    """力竭文案。``fallen`` = **倒下那一层**（正在打的层），``cleared`` = 已通过层数。
+
+    2026-11-26 用户实测口径矛盾：「从第 25 层开始」却「止步 24 层」。
+    根因是旧版只传 ``st['floor']``（已通过层），而出发层是 checkpoint+1 ——
+    在 25 层开打、25 层就输，通过数仍是 24，于是「出发 25 / 止步 24」自相矛盾。
+    现在一律报**倒下那一层**，必要时附上「此前已通 N 层」，两句话就对得上了。
+    """
+    fallen = int(fallen)
+    if cleared is None or int(cleared) <= 0 or int(cleared) == fallen:
+        return f"💀 力竭倒下，倒在第 {fallen} 层。"
+    return f"💀 力竭倒下，倒在第 {fallen} 层（此前已通 {int(cleared)} 层）。"
 
 
 def weekly_clear() -> str:
@@ -854,7 +864,7 @@ STATIC_TEXTS: tuple[str, ...] = (
     "　⚠ 斗气耗尽，提前收炉",
     "🏯 已转投【{name}】——山门易主，初心未改。",
     "🎁 善缘结下，来日必有回响。",
-    "💀 力竭倒下，止步第 {floor} 层。",
+    "💀 力竭倒下，倒在第 {floor} 层。",
     "🏆 七层通关！结算到账——此行不虚。",
     "发「战斗评价」听一句点评 · 只保留最后一场战斗",
     "先「服丹」回血再战 · 只保留最后一场战斗",
@@ -938,6 +948,7 @@ CALL_SAMPLES: tuple[str, ...] = (
     give_ok("八百"),
     give_ok(item="血灵丹"),
     tower_down(17),
+    tower_down(18, 17),
     weekly_clear(),
     battle_tip(True),
     battle_tip(False),

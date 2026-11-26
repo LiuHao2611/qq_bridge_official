@@ -58,6 +58,8 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "交任务": ("cmd_task_submit", "qq", "task_submit"),
     "接任务": ("cmd_task_accept", "qq", "task_submit"),
     "爬塔": ("cmd_tower", "qq_str", "tower_text"),
+    # 2026-11-26 隐藏样例：三种按钮动作的可点验样本（不出图，只挂样例键盘）。
+    "按钮样例": ("cmd_btn_sample", "qq", "btn_sample"),
     "塔层": ("cmd_tower_status", "qq", "tower_text"),
     "塔结算": ("cmd_tower_settle", "qq", "tower_text"),   # 2026-11-25 晚 tower_text 按钮
     "周本状态": ("cmd_weekly_status", "qq", "weekly_text"),  # 2026-11-25 晚 weekly_text 按钮

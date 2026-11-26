@@ -2062,6 +2062,29 @@ def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None,
     return out
 
 
+def writeback_exhaustion(p, r: dict) -> dict:
+    """力竭战损写回永久存档（2026-11-26 用户「扣血力竭是不是假的」）。
+
+    背景：塔与周副本的战斗都跑在 ``copy.deepcopy(p)`` 上，损耗只写回会话
+    ``st['temp_hp'/'temp_mp']``，结算从不动 ``p``。于是「💀 力竭倒下」之后
+    玩家打开人物卡仍是满血——文案在骗人。修法不是改文案（那是糊弄），
+    而是**真的把这一场战损落回存档**。
+
+    口径与 ``battle_core.fight`` 完全一致，不另造第二套：
+
+    * ``hp`` —— 取 ``r['hp']``。战败时 fight 已把它统一压到
+      「体力上限 × LOSE_HP_FLOOR（5%）」，与普通战斗、战斗回看卡同一个数
+      （见 battle_core 里 2026-11-19「回看 0 血/人物卡有血」的注释）。
+    * ``mp`` —— 取 ``r['mp']``（斗气结转），与普通战斗同口径。
+
+    只在**力竭（打输）**时调用。胜利或主动收手是活着走下塔：塔的续航由会话
+    ``temp_hp`` 承担，不扣永久气血，否则一轮爬塔要玩家反复服丹，破坏玩法。
+    """
+    p["hp"] = max(1, int(r.get("hp") or 0))
+    p["mp"] = max(0, int(r.get("mp") or 0))
+    return {"hp": p["hp"], "mp": p["mp"]}
+
+
 def tower_settle(p, st: dict) -> dict:
     """结算本轮：只发**未领过**的增量层数奖励、更新水位线/止步层/tower_best。仅调用一次。
 

@@ -2983,7 +2983,7 @@ def _expired_settle_line(p, qq) -> str:
     _loot = res.get("loot") or {}
     _loot_txt = ("、".join(f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
     return ("⏰ 上一轮闲置超时（%d 小时），已自动结算："
-            "+%d 金币、+%d 修为，止步第 %d 层%s%s"
+            "+%d 金币、+%d 修为，已通第 %d 层%s%s"
             % (ts.DEFAULT_TTL // 3600, res["gold"], res["exp"], res["floors"],
                ("　🎁 " + _loot_txt) if _loot_txt else "",
                "　🏆 新纪录！" if res["new_record"] else ""))
@@ -3102,14 +3102,18 @@ async def cmd_tower(store, qq, arg="") -> str:
         # 阵亡：结算
         res = core.tower_settle(p, st)
         ts.STORE.clear(qq)
+        # 2026-11-26 用户「扣血力竭是不是假的」：力竭必须真扣血，见 core 注释。
+        core.writeback_exhaustion(p, r)
         _loot = res.get("loot") or {}
         _loot_txt = ("\n　🎁 掉落：" + "、".join(
             f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
         lines = [
             f"{header}🗼 第 {r['floor']} 层【{kind_tag}】{r['name']} {aff}",
-            txt.tower_down(res["floors"]),
+            # 倒下层 = r['floor']（正在打的那层），不是 res['floors']（已通过层）。
+            txt.tower_down(int(r["floor"]), int(res["floors"])),
+            f"　气血 {p['hp']}/{core.stats(p)['体力']}　先「服丹」或「调息」再战。",
             f"　结算：+{res['gold']} 金币、+{res['exp']} 修为" + _loot_txt
-            + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"),
+            + ("　🏆 新纪录！" if res["new_record"] else f"（最远已通 {res['best']} 层）"),
         ]
         # 2026-11-25 去掉电梯：默认从上次止步层的下一层再冲。
         cp = int(p.get("tower_checkpoint", 0))
@@ -3227,6 +3231,32 @@ async def cmd_tower_status(store, qq) -> str:
     return "\n".join(lines)
 
 
+async def cmd_btn_sample(store, qq) -> str:
+    """隐藏样例口令「按钮样例」：把官方支持的**三种按钮动作**摆成一组供点验。
+
+    2026-11-26 用户：「整理下官方的机器人是不是支持各种类型按钮，你都做出来
+    测试我看看，分别讲清楚功能」。平台（bot.q.qq.com）``action.type`` 只有三种，
+    此前本项目只用过第一种（回传）。这里把三种各做一颗，玩家点一遍即可分辨：
+
+    * ``人物``/``背包`` —— 回传（type=1）：只把 data 回传，由服务端决定回什么；
+      ``背包`` 额外用 ``style=1`` 主色，用来看「蓝按钮」长什么样。
+    * ``爬塔`` —— 指令（type=2）：客户端**替玩家发一条消息**，等于手打「爬塔」。
+    * ``跳转·文档`` —— 跳转（type=0）：只开网页，不产生任何游戏事件。
+    * ``自动爬塔·是`` —— 带参回传：data 自带完整参数，点一下直接开自动爬塔。
+
+    不建号也能看（不需要存档），故本函数不读 p。
+    """
+    return (
+        "📱 按钮样例 · 点一遍就懂（同一张键盘上五种按钮）\n"
+        "　① 人物 · 灰　　回传按钮：只把标记回传给我，由我出人物卡\n"
+        "　② 背包 · 蓝　　同样是回传，改用主色标出（样式差别）\n"
+        "　③ 爬塔 · 灰　　指令按钮：QQ 客户端替你发一条「爬塔」\n"
+        "　④ 跳转·文档　　跳转按钮：只打开网页，不影响游戏\n"
+        "　⑤ 自动爬塔·是　带参回传：一条按钮自带完整参数\n"
+        "　平台只有这三种动作：回传 / 指令 / 跳转。前两类会回话，第三类只跳网页。"
+    )
+
+
 async def cmd_tower_settle(store, qq) -> str:
     """塔结算：主动收手，按已通过层数结算一次。"""
     p = await _player(store, qq)
@@ -3311,6 +3341,7 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
     weapons: list[str] = []
     last_floor = cp
     hit_cap = False
+    lost_r: dict | None = None
     for _ in range(AUTO_TOWER_MAX_FLOORS):
         r = core.tower_floor(p, st, rng,
                              temp_bonus=_temp_bonus(st), temp_effects=_temp_effects(st),
@@ -3324,6 +3355,7 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
         st["temp_hp"], st["temp_mp"] = r["hp"], r["mp"]
         last_floor = int(r["floor"])
         if not r["win"]:
+            lost_r = r
             break
         st["floor"] = last_floor
         cleared += 1
@@ -3349,6 +3381,9 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
     # 收手结算（自动模式无论力竭/到顶都结算一次，避免层数与奖励白丢）
     res = core.tower_settle(p, st)
     ts.STORE.clear(qq)
+    if lost_r is not None:
+        # 2026-11-26 用户「扣血力竭是不是假的」：力竭必须真扣血（见 core 注释）。
+        core.writeback_exhaustion(p, lost_r)
     await store.put_player(p)
 
     lines = []
@@ -3359,9 +3394,11 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
     if hit_cap:
         lines.append(f"　已达单次上限 {AUTO_TOWER_MAX_FLOORS} 层，自动收手结算。")
     else:
-        lines.append(txt.tower_down(res["floors"]))
+        # 倒下层 = last_floor（正在打的那层）；res['floors'] 是已通过层，两者不同。
+        lines.append(txt.tower_down(last_floor, int(res["floors"])))
+        lines.append(f"　气血 {p['hp']}/{core.stats(p)['体力']}　先「服丹」或「调息」再战。")
     lines.append(f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
-                 + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
+                 + ("　🏆 新纪录！" if res["new_record"] else f"（最远已通 {res['best']} 层）"))
     if chests:
         lines.append(f"　🎁 宝箱 {chests} 次"
                      + ("，开出神兵：" + "、".join(weapons) if weapons else ""))
@@ -3451,8 +3488,11 @@ async def cmd_weekly(store, qq) -> str:
         # 一命通关：失败 → 暂存奖励整段丢弃（含武器），会话清空，从头再来。
         lost = _staged_line(st)
         ws.STORE.clear(qq)
+        # 2026-11-26：力竭真扣血（与无限塔同一入口，见 core.writeback_exhaustion）。
+        core.writeback_exhaustion(p, r)
         await store.put_player(p)   # 快照已更新，但奖励一律不入账
-        return (head + f"\n　💀 力竭倒下，止步第 {r['floor']} 层。"
+        return (head + "\n　" + txt.tower_down(int(r["floor"]))
+                + f"\n　气血 {p['hp']}/{core.stats(p)['体力']}　先「服丹」或「调息」再战。"
                 f"\n　本轮暂存奖励（{lost}）全部清空，含神兵。"
                 f"\n　发「周副本」从第 1 层重来。")
 

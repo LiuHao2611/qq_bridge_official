@@ -414,6 +414,21 @@ tower_settle = on_regex(_pat(r"(?:塔结算|收手)"), priority=PRI, block=True,
                         rule=_mode_is("doupo"))
 
 
+# 按钮样例（2026-11-26 用户「官方的机器人是不是支持各种类型按钮，做出来测试看看」）：
+# 隐藏口令，不进菜单——它是能力点验，不是玩法。回执只挂键盘、不出图。
+btn_sample = on_regex(_pat(r"(?:按钮样例|按钮测试)"), priority=PRI, block=True,
+                      rule=_mode_is("doupo"))
+
+
+@btn_sample.handle()
+async def _(event: Event):
+    event = view(event)
+    await _need_group(event, btn_sample)
+    await finish_text(btn_sample, event,
+                      await commands.cmd_btn_sample(store, str(event.user_id)),
+                      card_key="btn_sample")
+
+
 @tower_settle.handle()
 async def _(event: Event):
     event = view(event)

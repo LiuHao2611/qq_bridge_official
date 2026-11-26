@@ -194,32 +194,18 @@ async def render_panel(p: dict, tip: str | None = None) -> bytes | None:
     """渲染人物卡，返回 PNG bytes；失败返回 None（调用方降级纯文本）。
 
     :param tip: 覆盖卡片底部提示；None = 不额外附加。
+
+    2026-11-26 用户「今天卡片发送又变慢了」：本函数原先**自己实现了一遍**
+    主题注入 + pic.render，绕过了 ``_render_list`` 里的 ``_RENDER_CACHE``
+    （既不记 stats，也没有「命中即字节稳定」的保证）。改为一律走
+    ``_render_list``，与背包/斗技/物品卡同一条路径。
     """
-    pic = _load_pic()
-    if pic is None or not p:
+    if not p:
         return None
     data = build_data(p)
     if tip is not None:
         data["tip"] = tip
-    data["__qq"] = str(p.get("qq") or "")
-    style, token, tpl = _style_for(data)
-    render_data = _styled(data, style)
-    try:
-        # 首选：走完整主题链路（卡片绑定 > 自定义主题 > PIC_THEME > 内置）+ 磁盘缓存
-        try:
-            return await pic.render("doupo", card=CARD_NAME, width=CARD_WIDTH, data=render_data)
-        except Exception as e:  # noqa: BLE001
-            log.debug("斗破卡片主题链路渲染失败，尝试内置 light 兜底：%s", e)
-        # 兜底：显式内置 light 主题，绕开主题解析（防止主题配置损坏导致整卡不可用）
-        try:
-            return await asyncio.to_thread(
-                pic.render_sync, "doupo", "light", CARD_NAME, width=CARD_WIDTH, data=render_data
-            )
-        except Exception as e:  # noqa: BLE001
-            log.warning("斗破卡片渲染失败（已降级为纯文本）：%s: %s", type(e).__name__, e)
-            return None
-    finally:
-        _reset_style(token, tpl)
+    return await _render_list("doupo", data, CARD_NAME, qq=p.get("qq"))
 
 
 def menu_cmd_label(cmd: str) -> str:

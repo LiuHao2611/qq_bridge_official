@@ -813,6 +813,51 @@ def test_source_contract_interaction_routes_doupo():
         "斗破分发必须早于 game_tools dispatch_normalized"
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-26 用户「官方的机器人是不是支持各种类型按钮，都做出来测试看看」
+# ---------------------------------------------------------------------------
+def test_sample_buttons_cover_all_three_action_types():
+    """样例键盘必须覆盖平台**全部三种** action.type，一颗不缺。
+
+    平台只有 回传(1) / 指令(2) / 跳转(0)，此前本项目只用过回传。样例少做一种，
+    就等于「没测过那种按钮」，用户点开也看不出区别。
+    """
+    kinds = [getattr(b, "kind", "callback") for b in db.SAMPLE_BUTTONS]
+    assert set(kinds) == {"callback", "command", "link"}, kinds
+    assert len(db.SAMPLE_BUTTONS) <= 5, "按钮数越界（平台每卡上限 5 行）"
+    for b in db.SAMPLE_BUTTONS:
+        assert 0 < len(b.label) <= 10, "label 越界：%r" % b.label
+        assert b.cmd.strip(), "样例按钮 data 不得为空：%r" % b.label
+    # 跳转按钮的 data 必须是 http(s)，否则点了没反应
+    links = [b for b in db.SAMPLE_BUTTONS if b.kind == "link"]
+    assert links and all(b.cmd.startswith("https://") for b in links), links
+
+
+def test_keyboard_maps_kind_to_action_type():
+    """``make_keyboard`` 必须真的按 kind 生成 action.type=0/1/2，不许全写死 1。
+
+    prove-it：把 ``_to_button`` 改回「恒 type=1」，这里立刻为假。
+    适配器模型在宿主没装，故本守门走源码契约（真 payload 由手机端实测复核）。
+    """
+    src = (_CH / "qq_keyboard.py").read_text(encoding="utf-8")
+    body = src.split("def _to_button(b):", 1)[1].split("rows = [", 1)[0]
+    assert 'kind == "link"' in body and "type=0" in body, "缺跳转按钮分支"
+    assert 'kind == "command"' in body and "type=2" in body, "缺指令按钮分支"
+    assert "type=1" in body, "缺回调按钮分支（既有按钮全靠它）"
+    assert "unsupport_tips" in body, "跳转按钮缺 unsupport_tips（低版本端点了没反应）"
+    # 默认仍必须是 callback：既有按钮一个字节都不许变
+    assert "callback" in body, "默认 kind 丢了"
+
+
+def test_btn_kind_defaults_to_callback():
+    """缺省 kind 必须是 callback —— 全部既有按钮都是回传，改默认值=全线改行为。"""
+    assert db.Btn("x", "y").kind == "callback"
+    # qq_keyboard 依赖 nonebot 适配器（宿主未装），故第二份 Btn 走源码契约。
+    src = (_CH / "qq_keyboard.py").read_text(encoding="utf-8")
+    body = src.split("class Btn:", 1)[1].split("def ", 1)[0]
+    assert "kind: str = \"callback\"" in body, body
+
+
 if __name__ == "__main__":
     import traceback
 
