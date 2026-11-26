@@ -1145,7 +1145,7 @@ async def cmd_skills(store, qq) -> str:
     if flames:
         out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
         for e in flames:
-            out.append(f"　{e['name']}（{e.get('flame', '异火')}·可学）")
+            out.append(f"　{e['name']}（{e.get('flame', '异火')}·已领悟，可上阵）")
 
     out.append("")
     out.append(f"　当前宗门【{fac_name}】；上面序号即上阵编号（上阵 1 3 5 7）")
@@ -1178,14 +1178,15 @@ async def cmd_faction_skills(store, qq) -> str:
         out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·mp_max")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
-            mark = "★上阵" if e["equipped"] else ("可学" if e["unlocked"] else "🔒未解锁")
+            mark = ("★上阵" if e["equipped"] else
+                    ("未领悟" if e["unlocked"] else "🔒未解锁"))
             tag = "〔通用〕" if e.get("origin") == "通用" else ""
             out.append(f"　{tag}{e['name']} Lv{lv}（lv{e['unlock']} 解锁·{mark}）")
     flames = [e for e in pool if e.get("faction") == "异火"]
     if flames:
         out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
         for e in flames:
-            mark = "★上阵" if e["equipped"] else "可学"
+            mark = "★上阵" if e["equipped"] else "已领悟（收服即会）"
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
     out.append("")
     out.append("　我领悟的全部斗技（含转宗保留的他宗技）见「斗技」")
@@ -1219,24 +1220,36 @@ async def cmd_skill_info(store, qq, name) -> str:
         return NOT_ENTERED
     name = (name or "").strip()
     pool = core.skill_pool(p)
-    if not pool:
+    # 2026-11-26：已领悟的跨宗技（转宗保留）与异火技必须能看细节；
+    # 旧代码只查本宗池，斗技卡明明列着「帝印决」，详情却说「不属于你的宗门」。
+    owned = core.equippable_entries(p)
+    lookup = owned + [e for e in pool if e["name"] not in {x["name"] for x in owned}]
+    if not lookup:
         return "你还没有斗技。"
     if not name:
-        return ("用法：斗技详情 <技名>\n本宗可选：" + "、".join(e["name"] for e in pool))
+        return ("用法：斗技详情 <技名>\n可选：" + "、".join(e["name"] for e in lookup))
 
-    hit = next((e for e in pool if e["name"] == name), None) or next(
-        (e for e in pool if name in e["name"] or e["name"] in name), None)
+    hit = next((e for e in lookup if e["name"] == name), None) or next(
+        (e for e in lookup if name in e["name"] or e["name"] in name), None)
     if not hit:
         book_hit = book.get(name)
         if book_hit is None:
-            return "无此斗技。本宗可选：" + "、".join(e["name"] for e in pool)
-        return f"【{book_hit['name']}】不属于你的宗门，无法查看细节。"
+            return "无此斗技。可查看：" + "、".join(e["name"] for e in lookup)
+        return f"【{book_hit['name']}】不属于你的宗门，尚未领悟，无法查看细节。"
 
     lv = int((p.get("skills") or {}).get(hit["name"], 1))
     st = core.stats(p)
     raw = (st["力量"] * 0.5 + st["斗气"] * 1.5) * float(hit["dmg"]) * (1 + 0.2 * (lv - 1))
     dmg = int(round(raw * (1 + core.crit_rate(p) / 100.0 * 0.5)))
-    state = "★上阵" if hit.get("equipped") else ("可学" if hit.get("unlocked") else "未解锁")
+    # 状态口径与「斗技」卡逐字同源：已领悟但未上阵的技不能再写「可学」，
+    # 否则玩家刚在卡上看到「已领悟」，详情又说「可学」，又是一对前后矛盾。
+    owned_names = {e["name"] for e in owned}
+    if hit.get("equipped"):
+        state = "★上阵"
+    elif hit["name"] in owned_names:
+        state = "已领悟（未上阵）"
+    else:
+        state = "可学（未领悟）" if hit.get("unlocked") else "未解锁"
 
     # 只有真打得出去的技才显示伤害系数；功法/增益/技艺的 130% 是倍率不是伤害，写出来会误导
     nfmt = f"斗气 {int(hit['mp'] * 100)}%·mp_max ｜ 冷却 {hit.get('cd', '-')} 回合"
@@ -1492,7 +1505,10 @@ async def cmd_loadout(store, qq, args) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    pool = [e for e in core.skill_pool(p) if e["unlocked"]]
+    # 2026-11-26 用户实测矛盾：斗技卡列得出「帝印决」还给了序号，上阵却回「未学习」。
+    # 卡面序号走 learned_no_map（跨宗已领悟 ∪ 异火技），判定必须同源；
+    # 旧的 skill_pool 只看本宗池，转宗保留的他宗技在这里被判死。
+    pool = core.equippable_entries(p)
     raw = (args or "").replace("，", ",").replace("、", ",").replace("/", ",").replace(" ", ",")
     names = [x.strip() for x in raw.split(",") if x.strip()]
     # 2026-11-25 用户根因修复：上阵序号改为「我的斗技」卡连续序号（只含已领悟
@@ -1538,9 +1554,16 @@ async def cmd_loadout(store, qq, args) -> str:
         hit = next((e for e in pool if e["name"] == n), None) or next(
             (e for e in pool if n in e["name"] or e["name"] in n), None)
         if not hit:
-            # 同一口径：这里也只列「已领悟」的，别再把未领悟的技当成可上阵（见上）。
-            return (f"「{n}」不可上阵（未解锁或非本宗）。当前可上阵："
-                    + ("、".join(core.equippable_names(p)) or "（无，先发「学斗技」）"))
+            # 2026-11-26：回包自相矛盾守门——旧实现用本宗池判 hit，错误文案却列
+            # equippable_names（含他宗技），于是「帝印决不可上阵…当前可上阵：帝印决」。
+            # 列表必须与判定同源，且排除本次被拒的技名。
+            ready = [e["name"] for e in pool if e["name"] != n]
+            hint = "当前可上阵：" + ("、".join(ready) or "（无，先发「学斗技」）")
+            if book.get(n) is not None:
+                # 真有这门技但玩家还没领悟 → 给下一步，别只说不可上阵。
+                return (f"还没领悟：{n}。先发「学斗技」或「学习 {n}」领悟后再上阵。"
+                        + hint)
+            return f"「{n}」不可上阵（无此斗技）。" + hint
         if hit["name"] not in chosen:
             chosen.append(hit["name"])
     if len(chosen) > cfg.LOADOUT_SIZE:
@@ -1833,7 +1856,9 @@ async def cmd_recipes(store, qq, page=1) -> str:
         out.append(f"【{grade}丹药】")
         for r in rows:
             need = r.get("need") or {}
-            rate, diff = cfg.craft_rate_for(alch_idx, r.get("grade", ""))
+            # 2026-11-26：唯一入口 recipe_rate，兽火单方走引火通道固定 0.70；
+            # 旧代码用 craft_rate_for(品阶) 显示，卡面/文本与实炼成功率打架。
+            rate, diff = core.recipe_rate(p, r)
             tag = cfg.effect_tag(r.get("effect", ""))
             badge = f"〔{tag}〕" if tag else ""
             if diff > 0:
@@ -1842,8 +1867,9 @@ async def cmd_recipes(store, qq, page=1) -> str:
                 rate_txt = f"{cfg.rate_cn(rate)}把握"
             if need:
                 mats = "、".join(f"{k}×{v}" for k, v in need.items())
-                ok = all(core.count_item(p, k) >= v for k, v in need.items())
-                mark = "✅" if ok else "　"
+                gate = core.craft_flame_gate(p, r)
+                ok = (not gate and all(core.count_item(p, k) >= v for k, v in need.items()))
+                mark = "✅" if ok else ("〔无火〕" if gate == "nofire" else "　")
                 out.append(f"　{mark}{badge}{r['name']}　（{mats}）　{rate_txt}")
             else:
                 out.append(f"　{badge}{r['name']}　（{int(r.get('buy', 0))} 金购买）　{rate_txt}")

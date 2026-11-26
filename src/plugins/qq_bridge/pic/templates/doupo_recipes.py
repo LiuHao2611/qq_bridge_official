@@ -290,11 +290,14 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             rec("b%d_%d.name" % (ent["y"], ci), name, ix, ny, FS_NAME, "bold", "lm")
 
             buyonly = bool(row.get("buyonly"))
-            if buyonly:
+            gate = str(row.get("gate") or "")
+            if buyonly or gate == "buyonly":
                 rtxt, rcolor = "购买", p["accent_color"]
             else:
                 ready = bool(row.get("ready"))
-                rtxt = "可炼" if ready else "缺料"
+                # 无火玩家材料齐备时旧版亮「可炼✅」，真炼却报 nofire（2026-11-26）；
+                # 卡面直接写明缺火，与 core.craft_flame_gate 同源。
+                rtxt = "可炼" if ready else ("无火" if gate == "nofire" else "缺料")
                 rcolor = p["accent_color"] if ready else p["dim_color"]
             rx = right - READY_W
             if not buyonly and row.get("ready"):

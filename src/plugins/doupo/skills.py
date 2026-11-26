@@ -177,10 +177,15 @@ def learned_names(p) -> list[str]:
     return [e["name"] for e in learnable(p)]
 
 
+def flame_skill_names(p) -> set[str]:
+    """已收服异火的主动技名（收服即会，不占领悟、不随转宗丢失）。"""
+    return {e["name"] for e in fs.entries_for(p)}
+
+
 def equippable_names(p) -> set[str]:
     """允许上阵的技名 = 已领悟 ∪ 已收服异火的主动技（收服即会，不占领悟）。"""
     out = set(learned_names(p))
-    out |= {e["name"] for e in fs.entries_for(p)}
+    out |= flame_skill_names(p)
     return out
 
 
@@ -281,16 +286,24 @@ def ensure_loadout(p) -> list[str]:
         p["loadout"] = cur[:cfg.LOADOUT_SIZE]
         return p["loadout"]
 
+    # 2026-11-26 用户实测矛盾：斗技卡列得出他宗已学技、还给了上阵序号，
+    # 但四槽这里旧代码还要求 `n in names`（本宗 learnable）→ 上阵后被静默丢弃。
+    # 允许集合与卡片/equippable_names 同源：已领悟（含转宗保留的他宗技）∪ 异火技。
+    # 不能调 learned_entries() 取名字——那个函数会调本函数取 equipped，会递归。
     allowed = equippable_names(p)
-    cur = list(dict.fromkeys(
-        n for n in (p.get("loadout") or []) if n in names and n in allowed))
+    cur = list(dict.fromkeys(n for n in (p.get("loadout") or []) if n in allowed))
     p["loadout"] = cur[:cfg.LOADOUT_SIZE]
     return p["loadout"]
 
 
 def loadout_entries(p) -> list[dict]:
-    """已上阵四槽（或不足四个）的完整技能对象。"""
-    by = {e["name"]: e for e in entries_for(p)}
+    """已上阵四槽（或不足四个）的完整技能对象。
+
+    2026-11-26：条目来源改为 ``learned_entries``（跨宗已领悟 ∪ 收服即会异火技）。
+    旧版只从 ``entries_for``（本宗池 + 异火）取，转宗保留的他宗技即便已在四槽
+    也会在战斗选招时**静默消失**（卡片却显示已上阵）——展示/战斗前后矛盾。
+    """
+    by = {e["name"]: e for e in learned_entries(p)}
     out = []
     for n in ensure_loadout(p):
         if n in by:

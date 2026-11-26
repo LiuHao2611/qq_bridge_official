@@ -1288,8 +1288,13 @@ def change_faction(p, key: str) -> dict:
         # 四槽仍按新宗可用技重配（test_switch_works_at_pool_level 约束：四槽全属新派），
         # 但候选只从「已领悟」里选，不凭空上阵未学的技。
         new_names = {e["name"] for e in sk_mod.catalog(hit["faction"])}
-        new_loadout = [n for n in p["learned"] if n in new_names][:cfg.LOADOUT_SIZE]
-        p["loadout"] = new_loadout or list(p["learned"])[:cfg.LOADOUT_SIZE]
+        # 2026-11-26 矛盾修复：异火技跟着火走，不跟着宗门走。转宗只换师门，
+        # 已收服的火还在，火赋予的招式却从四槽静默消失——回执与下次读档对不上。
+        flame_names = sk_mod.flame_skill_names(p)
+        flame_kept = [n for n in (p.get("loadout") or []) if n in flame_names]
+        new_loadout = [n for n in p["learned"] if n in new_names]
+        p["loadout"] = (flame_kept + [n for n in new_loadout if n not in flame_kept]
+                        or list(p["learned"]))[:cfg.LOADOUT_SIZE]
     else:
         p["loadout"] = []                  # 老档保持原行为：清空后按新派补满
         sk_mod.ensure_loadout(p)
@@ -1390,7 +1395,7 @@ def learned_no_map(p) -> dict[int, str]:
         if n not in seen:
             seen.add(n)
             ordered.append(n)
-    for e in learned_skill_pool(p):  # ② 其余已领悟，三阶稳定排序
+    for e in equippable_entries(p):  # ② 其余已领悟，三阶稳定排序
         n = e["name"]
         if n not in seen:
             seen.add(n)
@@ -1412,9 +1417,20 @@ def loadout_entries(p) -> list[dict]:
     return _loadout_entries(p)
 
 
+def equippable_entries(p) -> list[dict]:
+    """可上阵斗技的完整条目（唯一真源）：已领悟（含转宗保留的他宗技）∪ 异火技。
+
+    2026-11-26 用户实测「斗技卡里有帝印决、上阵却说未学习」的根因就是展示走
+    ``learned_skill_pool``、判定走 ``skill_pool``（只看本宗）。卡片序号、上阵、
+    详情、战斗取招一律走本函数，任何一侧另写一份池子都会再次前后矛盾。
+    """
+    allowed = equippable_names(p)
+    return [e for e in learned_skill_pool(p) if e["name"] in allowed]
+
+
 def set_loadout(p, names) -> list[str]:
-    """设置四槽：只保留本宗已解锁技能，最多 4 个。"""
-    allowed = {e["name"] for e in skill_pool(p) if e["unlocked"]}
+    """设置四槽：只保留已领悟技能（含跨宗/异火技），最多 4 个。"""
+    allowed = equippable_names(p)
     p["loadout"] = [n for n in names if n in allowed][:cfg.LOADOUT_SIZE]
     return sk_mod.ensure_loadout(p)
 
@@ -2661,19 +2677,38 @@ def craft_cd_left(p, now_ts=None) -> int:
     return max(0, left)
 
 
+def recipe_rate(p, rec) -> tuple[float, int]:
+    """该玩家炼这枚丹的真实成功率（唯一入口，卡面/文本/实炼共用）。"""
+    return cfg.rate_for_recipe(p, rec, craft_rate_bonus(p))
+
+
+def craft_flame_gate(p, rec) -> str:
+    """炼药「与有没有火有关」的前置闸（唯一真源）：'' / 'buyonly' / 'nofire'。
+
+    2026-11-26 用户实测矛盾：空火玩家的材料齐备丹方在卡上亮「可炼✅」，真去炼
+    却回 `nofire`。根因是卡面只查材料、命令层另外查火。卡面、单发、批量一律
+    调本函数，禁止在渲染层或命令层再写一份判定。
+
+    顺序不可换：无药方的丹只能买，与有无火焰无关，必须先报 buyonly。
+    兽火单方是引火通道，是 nofire 的唯一例外（见 config.rate_for_recipe）。
+    """
+    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
+        return "buyonly"
+    if (str(rec.get("effect") or "") != "beast_flame"
+            and not _flame_bonus.has_any_flame(p)):
+        return "nofire"
+    return ""
+
+
 def craft(p, name, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
-    # 2026-11-16：原著未载药方的丹药没有炼制路径，只能金币购买。
-    # 🚨 必须排在 nofire **之前**（2026-11-26 修）：否则没火的玩家去炼养魂涎会先拿到
-    # 「你尚未拥有火焰」，以为搞到火就能炼，结果还是炼不了 —— 空耗一段养成期待。
-    # 这丹根本不存在炼制路径，与有没有火无关，先如实告知「只能买」。
-    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
-        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
-    # 空火禁炼药；兽火单方是引火途径，例外
-    if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
-        return {"ok": False, "reason": "nofire"}
+    # 卡面/文本/单发/批量共用一个前置闸，杜绝「卡说可炼、命令说无火」。
+    gate = craft_flame_gate(p, rec)
+    if gate:
+        return {"ok": False, "reason": gate,
+                **({"buy": int(rec["buy"])} if gate == "buyonly" else {})}
     now_ts = time.time() if now_ts is None else now_ts
     cd = craft_cd_left(p, now_ts)
     if cd > 0:
@@ -2698,7 +2733,7 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
                 >= cfg.alch_grade_idx(cfg.PUPPET_HIGH_GRADE_FROM))
 
     # 成功率唯一入口：兽火单方走引火通道，其余按炼药师品阶判定（见 config）。
-    rate, diff = cfg.rate_for_recipe(p, rec, craft_rate_bonus(p))
+    rate, diff = recipe_rate(p, rec)
     _danhui = danhui_bonus(p)  # 丹塔丹会：仅加成>0挂键，非丹塔字节不变
     if rng() < rate:
         add_item(p, name, 1)
@@ -2771,12 +2806,11 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
-    # buyonly 先于 nofire：无药方的丹与有没有火无关，别让玩家空跑一趟（同上）
-    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
-        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
-    # 兽火单方引火，例外
-    if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
-        return {"ok": False, "reason": "nofire"}
+    # 与单发共用前置闸（buyonly 先于 nofire；兽火单方例外）。
+    gate = craft_flame_gate(p, rec)
+    if gate:
+        return {"ok": False, "reason": gate,
+                **({"buy": int(rec["buy"])} if gate == "buyonly" else {})}
     now_ts = time.time() if now_ts is None else now_ts
     cd = craft_cd_left(p, now_ts)
     if cd > 0:
@@ -2784,7 +2818,7 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
 
     n = max(1, min(int(n), cfg.CRAFT_BATCH_MAX))
     grade_idx = cfg.alch_grade_idx(rec.get("grade", ""))
-    rate, diff = cfg.rate_for_recipe(p, rec, craft_rate_bonus(p))
+    rate, diff = recipe_rate(p, rec)
     exp_factor = cfg.low_grade_exp_factor(p.get("alch", 0), grade_idx)
     mp_per = max(1, int(mp_max(p) * cfg.CRAFT_MP_PER))
 

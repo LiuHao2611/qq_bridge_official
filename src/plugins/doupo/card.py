@@ -632,7 +632,9 @@ def build_roster_data(p: dict) -> dict:
         if equipped:
             state, state_kind = "上阵", "on"
         elif unlocked:
-            state, state_kind = "可学", "learn"
+            # 2026-11-26：旧文案「可学」被玩家读成「已学」，于是照着点名上阵
+            # 却报未领悟。本卡是本宗名录，状态必须写明这些技还没领悟。
+            state, state_kind = "未领悟", "learn"
         else:
             state, state_kind = "未解锁", "lock"
         row = _roster_row(e, None, sk, state, state_kind, show_lv=False)
@@ -661,7 +663,8 @@ def build_roster_data(p: dict) -> dict:
                      f"上阵 {on}/{cfg.LOADOUT_SIZE}"),
         "groups": groups,
         "rows": rows,
-        "tip": "发「斗技」看我的斗技与对应的上阵序号 ｜ 斗技详情 <技名> 看招式来历",
+        # 卡脚注单行，长度与原 tip 持平（36 字），长了会被模板截断（真截图验过）。
+        "tip": "未领悟先发「学习 <技名>」 ｜ 序号见「斗技」 ｜ 斗技详情 <技名>",
     }
 
 
@@ -713,7 +716,7 @@ def build_learned_data(p: dict) -> dict:
 
     # ② 其余已领悟，按三阶稳定排序（与「宗门斗技」同序，便于对照）
     by_tier: dict[str, list[dict]] = {}
-    for e in core.learned_skill_pool(p):
+    for e in core.equippable_entries(p):
         if e["name"] in lo_names:
             continue
         row = _roster_row(e, no_by_name.get(e["name"]), sk,
@@ -1024,7 +1027,8 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
     与 ``commands.cmd_recipes`` 严格同源：
       * 可见丹方 = ``core.recipes_page(p, page)``（内含等级过滤 + 分页夹取）；
       * 分组顺序 = ``cfg.GRADE_ORDER``（与纯文本一致）；
-      * 齐备标记 = ``core.count_item`` 逐味判（与纯文本 `ok` 判据逐字一致）；
+      * 齐备标记 = ``core.craft_flame_gate`` + ``core.count_item`` 逐味判
+        （与纯文本 / 单发 / 批量 `craft` 判据逐字一致，2026-11-26 起含火焰闸）；
       * 功效标签 = ``cfg.effect_tag``，单丹成功率 = ``cfg.craft_rate_for``
         （2026-11-18 原著口径：够格用基础率、越 1 档×0.35、越≥2 档×0.05）。
         标签与成功率都拼进 ``desc``，由模板自适应折行，不动坐标骨架。
@@ -1053,12 +1057,17 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
             if r["grade"] != grade:
                 continue
             need = r.get("need") or {}
+            # 2026-11-26 矛盾修复：空火玩家材料齐备时旧代码亮「可炼✅」，真炼却报
+            # nofire。闸口统一走 core.craft_flame_gate，与单发/批量完全同源。
+            gate = core.craft_flame_gate(p, r)
             rows.append({
                 "name": r["name"],
                 "mats": [[k, int(v)] for k, v in need.items()],
                 # 只印本效（唯一源 cfg.recipe_impl，2026-11-18 诚实契约不变）
                 "desc": cfg.recipe_impl(r),
-                "ready": all(core.count_item(p, k) >= int(v) for k, v in need.items()),
+                "ready": (not gate
+                          and all(core.count_item(p, k) >= int(v) for k, v in need.items())),
+                "gate": gate,
                 # 无药方丹药：卡面改为「N 金购买」而非空材料行（与原著考据口径一致）
                 "buyonly": not bool(need),
                 "buy": int(r.get("buy", 0)),
@@ -1206,9 +1215,12 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
             "active": bool(pu.get("id") == elig.get("active_id")),
         })
     if not roster and p is not None:
+        # 2026-11-26：文本版列五道、卡片只列四道，卡上却写「五道资格齐备」。
+        # 与 commands_puppet.cmd_puppet / puppet_gate 同源补齐第五道「斗气」。
         checks = [
             ("境界", pc.gate_realm(p, 0)), ("灵魂境界", pc.gate_soul(p)),
             ("控火", pc.gate_fire_ctrl(p)), ("异火", pc.gate_flame(p)),
+            ("斗气", pc.mp_endurance_ok(p, 0)),
         ]
         out["gates"] = [{"name": name, "ok": ok, "why": reason}
                         for name, (ok, reason) in checks]
