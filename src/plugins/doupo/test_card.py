@@ -139,10 +139,17 @@ def test_build_and_render_list_cards():
     d_sh = card.build_shop_data(p)
     d_bg = card.build_bag_data(p)
     assert d_sk["title"] == "斗技" and len(d_sk["rows"]) >= 1
-    # 2026-11-16：异火卡首行加「本宗传承异火」+「可自行收服」提示，其余仍是 5 种养成异火
-    assert d_fl["title"] == "异火" and len(d_fl["rows"]) >= len(cfg.FLAMES)
-    assert any("本宗传承" in str(r.get("title", "")) for r in d_fl["rows"]), \
-        "异火卡缺本宗传承行"
+    # 2026-11-26 异火卡重构（用户「看着很乱，没获得的就不要显示出来了」）：
+    # 卡面只许出现**已收服**的火名——未获得的 11 朵不再铺满整屏。这条是全量守门：
+    # 逐个火名核对存档等级，只要有一朵 lv=0 的名字出现就红。
+    assert d_fl["title"] == "异火"
+    _fl_titles = {str(r.get("title") or "") for r in d_fl["rows"]}
+    _fl_lv = {str(n): int(v or 0) for n, v in (p.get("flames") or {}).items()}
+    for _f in list(cfg.FLAMES) + list(cfg.BONUS_FLAMES) + list(cfg.OTHER_FLAMES):
+        if int(_fl_lv.get(_f["name"], 0)) > 0 or (
+                _f["name"] == cfg.FLAME_DIYAN and p.get("diyan")):
+            continue
+        assert _f["name"] not in _fl_titles, "未获得的火不该出现在卡面：%s" % _f["name"]
     # 宝库卡片直接消费 core.shop_list()（与纯文本兜底同源）；
     # 2026-11-24 起分两卡（基础/兽火），两卡行数之和必须等于商品总数
     d_sh_beast = card.build_shop_data(p, beast=True)

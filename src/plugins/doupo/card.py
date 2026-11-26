@@ -804,96 +804,80 @@ async def render_faction(p: dict) -> bytes | None:
     return await _render_list("doupo_faction", build_faction_data(p), "斗破宗门", qq=p.get("qq"))
 
 def build_flames_data(p: dict) -> dict:
-    """异火列表 → doupo_list 模板参数。
+    """异火列表 → doupo_list 模板参数（2026-11-26 整体重构：只列已收服）。
 
-    2026-11-16 修复：首行先列「本宗传承异火」（原著考证文字），本宗无传承则
-    明确提示；其后才是可自行收服/喂养的 5 种异火，并标明与本宗传承无关，
-    消除「本宗没异火却列一堆异火」的矛盾感。养成列表本身不变。
+    用户「现在看着很乱，没获得的就不要显示出来了」。旧版把 11 朵没到手的火连同
+    「未收服」状态、获取提示、三个分类标题全铺在卡上，玩家真正拥有的火被挤到
+    看不见的位置。现在只保留两块：
+
+      ① **本宗传承**（一行，师门背景，不算持有——「异火」口令本就只在本宗有传承
+         时才出卡，见 ``commands.has_tradition_flame``）；
+      ② **已收服**（只列 lv>0 的火，按 招式异火 → 数值异火 → 兽火/新生 排序）；
+         一朵都没有时给一条「尚未收服」+ 获取路径，不铺 11 行「未收服」。
+
+    数值口径仍只做展示，加成聚合唯一源是 :mod:`flame_bonus`，这里不重算数值。
     """
     fl = p.get("flames") or {}
     dross = core.count_item(p, "药渣")
     fid = str(p.get("faction") or "")
     fdef = fac.FACTIONS.get(fid, {})
     fname = str(p.get("faction_name") or fdef.get("name") or "本宗")
-    trad = list(fdef.get("flames", []) or [])
-    rows = []
+    trad = [str(t) for t in (fdef.get("flames", []) or [])]
+
+    rows: list[dict] = []
     if trad:
-        for i, t in enumerate(trad):
-            rows.append({"title": (f"{fname}·本宗传承" if i == 0 else "　"),
-                         "right": "", "head": i == 0, "sub": str(t), "note": ""})
-    else:
-        rows.append({"title": f"{fname}·本宗传承", "right": "无", "head": True,
-                     "sub": "本宗无传承异火。以下异火皆为游历中所遇，与师门无关。", "note": ""})
-    # head=True：这两行是**分类标题**不是条目，模板据此画成「菱形 + 楷体金字」，
-    # 否则它和「青莲地心火」一样是白色粗体，玩家读不出层级（2026-11-22 实拍）。
-    rows.append({"title": "可收服的异火", "right": "", "head": True,
-                 "sub": "须先收服才可喂养；未收服不显示下级需求。", "note": ""})
+        rows.append({"title": f"{fname}·本宗传承", "right": "", "head": True,
+                     "sub": "、".join(trad), "note": ""})
+
+    owned: list[dict] = []
+
+    def _lv_right(lv: int) -> str:
+        return f"{lv}/{cfg.FLAME_MAX_LV} 级" + ("（圆满）" if lv >= cfg.FLAME_MAX_LV else "")
+
+    def _need_note(lv: int, need: int) -> str:
+        return "" if lv >= cfg.FLAME_MAX_LV else \
+            f"下级需 {commands._fmt(int(need) * (lv + 1))} 药渣"
+
+    # ① 招式异火（S/A/B 榜位火，走招式与剧情特效）
     for f in cfg.FLAMES:
         name = f["name"]
-        lv = int(fl.get(name, 0))
-        note = ""
         if name == cfg.FLAME_DIYAN:
-            state = "已收服" if p.get("diyan") else "未得（成就斗帝自燃）"
-            sub = f["desc"]
-        elif lv <= 0:
-            # 2026-11-18 A 方案：未收服不得喂养，卡面也不许再写「下级需 N 药渣」
-            # 2026-11-19 三层投放：不再有「本宗异火入道即得」——starter 是全宗门统一的
-            # B 线数值火，S 走境界+主线、A 藏隐藏支线。获取提示与文本层同一真值源。
-            state = "未收服"
-            sub = f["desc"]
-            note = commands._unflame_hint(name)
-        elif lv >= cfg.FLAME_MAX_LV:
-            state = f"{lv} 级（圆满）"
-            sub = f["desc"]
-        else:
-            need = int(f["need"]) * (lv + 1)
-            state = f"{lv}/{cfg.FLAME_MAX_LV} 级"
-            sub = f["desc"]
-            # 2026-11-15 card-design：「下级需 N 药渣」独立成 note 行，用显式
-            # NOTE_GAP 与描述拉开；旧版用全角空格拼进 sub，长描述折行后会连读。
-            note = f"下级需 {commands._fmt(need)} 药渣"
-        rows.append({"title": name, "right": state, "sub": sub, "note": note})
-    # B 线数值异火（2026-11-19）：只列已收服的，避免新号卡片一下铺 11 行。
-    # 加成聚合唯一源 = flame_bonus 模块，这里只做展示，不重算数值。
-    b_owned = [f for f in getattr(cfg, "BONUS_FLAMES", [])
-               if int(fl.get(f["name"], 0)) > 0]
-    if b_owned:
-        rows.append({"title": "数值异火（炼药/傀儡加成）", "right": "",
-                     "sub": "无招式特效，按等级给炼药或傀儡加成；可喂药渣升级。", "note": ""})
-        for f in b_owned:
-            name = f["name"]
-            lv = int(fl.get(name, 0))
-            state = f"{lv}/{cfg.FLAME_MAX_LV} 级（圆满）" if lv >= cfg.FLAME_MAX_LV \
-                else f"{lv}/{cfg.FLAME_MAX_LV} 级"
-            kind = "炼药" if f["kind"] == "alchemy" else "傀儡"
-            sub = f"{kind}加成每级 +{int(round(float(f['value']) * 100))}%　{f['desc']}"
-            note = "" if lv >= cfg.FLAME_MAX_LV else \
-                f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
-            rows.append({"title": name, "right": state, "sub": sub, "note": note})
-    # 兽火 + 新生异火（九星掉落 / 兽火单方）：只列已收服，加成聚合与文本层同源。
-    o_owned = [f for f in getattr(cfg, "OTHER_FLAMES", [])
-               if int(fl.get(f["name"], 0)) > 0]
-    if o_owned:
-        rows.append({"title": "兽火 · 新生异火", "right": "",
-                     "sub": "九星突破或炼制单方所得，按等级给加成；可喂药渣升级。", "note": ""})
-        for f in o_owned:
-            name = f["name"]
-            lv = int(fl.get(name, 0))
-            state = f"{lv}/{cfg.FLAME_MAX_LV} 级（圆满）" if lv >= cfg.FLAME_MAX_LV \
-                else f"{lv}/{cfg.FLAME_MAX_LV} 级"
-            kind = "兽火" if f["name"] in cfg.BEAST_FLAME_NAMES else "异火"
-            stat = {"alchemy": "炼药", "atk": "攻击", "hp": "气血"}.get(
-                f["bonus"], "数值")
-            sub = f"{kind}·{stat}每级 +{int(round(float(f['value']) * 100))}%　{f['desc']}"
-            note = "" if lv >= cfg.FLAME_MAX_LV else \
-                f"下级需 {commands._fmt(int(f['need']) * (lv + 1))} 药渣"
-            rows.append({"title": name, "right": state, "sub": sub, "note": note})
+            if not p.get("diyan"):
+                continue
+            owned.append({"title": name, "right": "已得",
+                          "sub": f["desc"], "note": ""})
+            continue
+        lv = int(fl.get(name, 0))
+        if lv <= 0:
+            continue
+        owned.append({"title": name, "right": _lv_right(lv), "sub": f["desc"],
+                      "note": _need_note(lv, int(f["need"]))})
+
+    # ② 数值异火（B 线） / ③ 兽火+新生异火：desc 本身已写明「炼药成功率每级 +N%」，
+    #    不再额外拼一行加成前缀（拼了就是同一个数字说两遍，卡面更乱）。
+    for f in list(getattr(cfg, "BONUS_FLAMES", [])) + list(getattr(cfg, "OTHER_FLAMES", [])):
+        lv = int(fl.get(f["name"], 0))
+        if lv <= 0:
+            continue
+        owned.append({"title": f["name"], "right": _lv_right(lv),
+                      "sub": f["desc"], "note": _need_note(lv, int(f["need"]))})
+
+    if owned:
+        rows.append({"title": "已收服", "right": "", "head": True,
+                     "sub": "", "note": ""})
+        rows.extend(owned)
+    else:
+        rows.append({"title": "尚未收服异火", "right": "无",
+                     "sub": "发「收服 <火名>」认主，或九星突破、炼制兽火单方可得火种。",
+                     "note": ""})
+
     return {
         "icon": "star", "title": "异火",
-        "subtitle": f"药渣 ×{dross}",
+        "subtitle": f"已收服 {len(owned)} 朵 · 药渣 ×{dross}",
         "rows": rows,
         "tip": commands.flame_usage_hint(p),
     }
+
 
 
 def _shop_is_beast(name: str) -> bool:
@@ -1235,73 +1219,63 @@ CARD_CODEX_NAME = "斗破傀儡图鉴"
 
 
 def build_codex_data(mats: dict | None = None, p: dict | None = None) -> dict:
-    """傀儡图鉴 → doupo_list 模板参数（2026-11-26）。
+    """傀儡图鉴 → doupo_list 模板参数（2026-11-26 重做）。
 
-    全部 18 条配方按标称档分组（人/地/天/特殊）。每条配方：
-      * title = 配方名；right = 档位标称；
-      * sub = 五维用料全清单（灰字）；
-      * note = **已有且够数的材料**，金色高亮并标「持有/需」——满足用户
-        「已有对应材料，材料要高亮而且显示数量」；
-      * accent = 整条配方可开炉时主标题高亮。
+    用户对上一版的两条意见：**「做的是个什么垃圾设计，搞这么长」** +
+    **「已拥有材料名称还没高亮」**。所以这一版：
 
-    材料数量口径与 ``commands_puppet.cmd_puppet_codex`` / ``puppet_core`` 同源：
-    mats 是 ``puppet_store.materials(qq)`` 的真值，不在渲染层另算。
+      * **双列**（``columns=2``）——18 条单列铺 2000+px，双列 9 行收进一屏；
+      * **每条两行**：标题行（配方名 + 右侧档位／可炼）+ 一行材料。删掉原来那条
+        独立的「已备：…」——它既多占一行，颜色又是与正文同档的暗红，跟没高亮一样；
+      * 材料**名称行内分色**（``sub_segs``）：够数的 = 金色且写成「名 持有/需」，
+        没有的 = 灰且只写「名×需」。扫一眼就知道哪条能开炉。
+
+    材料数量口径与 ``commands_puppet.cmd_puppet_codex`` / ``puppet_core`` 同源，
+    不在渲染层另算。
     """
     from . import puppet_core as pc
 
     mats = {str(k): int(v or 0) for k, v in (mats or {}).items()}
-    groups_rows = []
-    # 按配方在 cfg.PUPPET_RECIPES 中的顺序分组（标称档由五维最弱一环决定）
-    buckets: dict[str, list] = {}
+    rows = []
+    ready_n = 0
     for r in cfg.PUPPET_RECIPES:
         slots = pc.recipe_slots(r)
         tier = pc.recipe_tier(slots)
         tier_label = (cfg.PUPPET_TIER_BY_IDX[max(0, tier)][0]
                       if tier >= 0 else "五维不全")
         need = pc.recipe_materials(r)
-        owned_parts = []
-        all_parts = []
+        segs: list[tuple[str, str]] = []
+        ready = True
         for n, q in need.items():
             have = int(mats.get(n, 0) or 0)
-            all_parts.append("%s×%d" % (n, q))
-            if have >= q:
-                owned_parts.append("%s %d/%d" % (n, have, q))
-        ready = bool(owned_parts) and len(owned_parts) == len(need)
-        buckets.setdefault(tier_label, []).append({
+            ok = have >= q
+            ready = ready and ok
+            if segs:
+                segs.append(("　", "dim"))
+            segs.append((("%s %d/%d" % (n, have, q)) if have > 0 else ("%s×%d" % (n, q)),
+                         "gold" if ok else "dim"))
+        ready_n += 1 if ready else 0
+        rows.append({
             "title": r["name"],
-            "right": tier_label.split("傀儡")[0],
-            "sub": "　".join(all_parts),
-            "note": ("已备：" + "、".join(owned_parts)) if owned_parts else "",
+            "right": tier_label.split("傀儡")[0] + ("·可炼" if ready else ""),
+            "sub_segs": segs,
             "accent": ready,
         })
 
-    rows = []
-    for tier_label in ("人级傀儡", "地级傀儡", "天级傀儡", "特殊傀儡"):
-        if tier_label not in buckets:
-            continue
-        rows.append({"title": tier_label, "head": True})
-        rows.extend(buckets[tier_label])
-    # 兜底：出现未归类的档位也要显示，绝不静默丢配方
-    for tier_label, items in buckets.items():
-        if tier_label in ("人级傀儡", "地级傀儡", "天级傀儡", "特殊傀儡"):
-            continue
-        rows.append({"title": tier_label, "head": True})
-        rows.extend(items)
-
-    ready_n = sum(1 for g in buckets.values() for x in g if x["accent"])
     return {
         "icon": "shield",
         "title": "傀儡图鉴",
-        "subtitle": "共 %d 条配方 · 已备齐 %d 条（金色为已备材料）" % (
+        "columns": 2,
+        "subtitle": "共 %d 条配方 · 已备齐 %d 条（金色＝已拥有的料）" % (
             len(cfg.PUPPET_RECIPES), ready_n),
         "rows": rows,
-        "tip": "金色材料＝你已备齐并显示持有/所需 · 发「炼制傀儡 <配方名>」开炉",
+        "tip": "发「炼制傀儡 <配方名>」开炉 · 金色材料＝已拥有且够数",
     }
 
 
 async def render_codex(mats: dict | None = None, p: dict | None = None,
                        qq: str | None = None) -> bytes | None:
-    """「傀儡图鉴」出图：双列分组配方卡；失败由调用方回文本兜底。"""
+    """「傀儡图鉴」出图：双列配方卡（2026-11-26 重做，两行一条）；失败由调用方回文本。"""
     data = build_codex_data(mats, p)
     return await _render_list("doupo_list", data, CARD_CODEX_NAME, qq=qq)
 

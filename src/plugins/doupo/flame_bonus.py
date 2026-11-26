@@ -13,6 +13,7 @@
 口径：
   * 已收服 = p["flames"][name] > 0；等级 lv 即加成级数（与喂养等级同源）。
   * alchemy → 炼药成功率加成（小数，如 0.06 = +6 个百分点），调用方封顶 CRAFT_RATE_CAP；
+    **一炉只认加成最强的 ALCHEMY_FLAME_LIMIT 朵**（见 :func:`_alchemy_contribs`）；
   * atk/hp → 六维比例加成；puppet → 傀儡攻防加成。
   * S/A 榜位火不参与（它们走招式/剧情特效）。
 """
@@ -38,17 +39,47 @@ def _numeric_flames():
     return list(cfg.BONUS_FLAMES) + list(cfg.FUSION_FLAMES) + list(cfg.BEAST_FLAMES)
 
 
-def alchemy_rate_bonus(p: dict) -> float:
-    """已收服火焰的炼药成功率加成（小数，未封顶；调用方封顶 CRAFT_RATE_CAP）。
+#: 一炉同时投入的火种上限（2026-11-26 用户拍板「取最强 2 种」）。
+#:
+#: 原著口径是「一炉一火种」（第六章：材料、火种、灵魂感知力三条件），同时操控多种
+#: 火焰是极少数天才的天赋（第 1100 章旁白）。本作放宽到 2，既不再是「11 朵全叠」
+#: 的人人天才，也不再逼玩家只养一朵。**玩家可见文案不声明这条限制**（用户要求
+#: 「不要声明、不要多话」）——卡面只如实列已收服的火，不解释为什么只有两朵在算。
+ALCHEMY_FLAME_LIMIT = 2
 
-    异火（B 线）/ 兽火 / 新生异火的 alchemy 型同源聚合，卡面与实战成功率一致。
+
+def _alchemy_contribs(p: dict) -> list[dict]:
+    """已收服的 alchemy 型火，按**当前加成**降序取前 :data:`ALCHEMY_FLAME_LIMIT` 朵。
+
+    返回 ``[{"name","lv","value","contrib"}]``，``contrib = value × lv``。
+    排序键：贡献降序 → 单级 value 降序 → 名字（兜底保证同存档多次调用结果稳定，
+    否则卡面写 A 朵、成功率按 B 朵算，又是「两张皮」）。
+
+    这是 ``alchemy_rate_bonus`` 与 ``alchemy_flame_names`` 的**唯一**选择口径：
+    改上限只改常量，加成数值与播报名单自动同步。
     """
-    total = 0.0
+    out: list[dict] = []
     for f in _numeric_flames():
         is_alchemy = (f.get("kind") == "alchemy") or (f.get("bonus") == "alchemy")
-        if is_alchemy:
-            total += float(f["value"]) * _owned_level(p, f["name"])
-    return total
+        if not is_alchemy:
+            continue
+        lv = _owned_level(p, f["name"])
+        if lv <= 0:
+            continue
+        val = float(f["value"])
+        out.append({"name": f["name"], "lv": lv, "value": val, "contrib": val * lv})
+    out.sort(key=lambda x: (-x["contrib"], -x["value"], x["name"]))
+    return out[:ALCHEMY_FLAME_LIMIT]
+
+
+def alchemy_rate_bonus(p: dict) -> float:
+    """炼药成功率加成（小数，未封顶；调用方封顶 CRAFT_RATE_CAP）。
+
+    只累加加成最强的 :data:`ALCHEMY_FLAME_LIMIT` 朵（异火/兽火/新生异火同源），
+    与 :func:`alchemy_flame_names` 同一份选择结果，卡面与实战成功率一致。
+    """
+    return sum(c["contrib"] for c in _alchemy_contribs(p))
+
 
 
 def other_flame_ratio(p: dict) -> dict:
@@ -104,25 +135,17 @@ def breakdown(p: dict) -> list[dict]:
 
 
 def alchemy_flame_names(p: dict) -> list[dict]:
-    """播报用：玩家已收服、**真正参与炼药成功率**的火焰明细。
+    """播报用：真正参与炼药成功率的火焰明细（最多 :data:`ALCHEMY_FLAME_LIMIT` 朵）。
 
-    2026-11-26 用户「异火兽火加成要在炼药播报体现，别太生硬」。判定刻意与
-    ``alchemy_rate_bonus`` 同源（同一个 is_alchemy 判据、同一个 _numeric_flames
-    遍历），只列「卡面说在帮忙 → 成功率也真算了」的火，杜绝两张皮。
-    identity 只保留异火 / 兽火两种身份（新生异火归入异火），与玩家口径一致。
+    2026-11-26 用户「异火兽火加成要在炼药播报体现，别太生硬」。判定与
+    ``alchemy_rate_bonus`` **同一份选择结果**（``_alchemy_contribs``），只列
+    「播报说在帮忙 → 成功率也真算了」的火，杜绝两张皮。identity 只保留异火 /
+    兽火两种身份（新生异火归入异火），与玩家口径一致。
 
-    返回 ``[{"name": str, "identity": "异火"|"兽火", "lv": int}]``，只列已收服。
+    返回 ``[{"name": str, "identity": "异火"|"兽火", "lv": int}]``，按加成降序。
     """
     beast_names = {f["name"] for f in cfg.BEAST_FLAMES}
-    out: list[dict] = []
-    for f in _numeric_flames():
-        is_alchemy = (f.get("kind") == "alchemy") or (f.get("bonus") == "alchemy")
-        if not is_alchemy:
-            continue
-        lv = _owned_level(p, f["name"])
-        if lv <= 0:
-            continue
-        out.append({"name": f["name"],
-                    "identity": "兽火" if f["name"] in beast_names else "异火",
-                    "lv": lv})
-    return out
+    return [{"name": c["name"],
+             "identity": "兽火" if c["name"] in beast_names else "异火",
+             "lv": c["lv"]}
+            for c in _alchemy_contribs(p)]

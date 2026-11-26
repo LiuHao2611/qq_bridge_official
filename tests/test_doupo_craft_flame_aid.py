@@ -181,6 +181,61 @@ def test_cmd_craft_renders_aid_line_end_to_end():
     assert _XIAN not in no_fire, no_fire
 
 
+# ---------------------------------------------------------------------------
+# 3 一炉只认最强的两朵（2026-11-26 用户拍板「取最强 2 种」）
+# ---------------------------------------------------------------------------
+def _alch_flames():
+    """全部 alchemy 型火（B 线异火 + 兽火/新生异火），按 config 顺序。"""
+    return [f for f in cfg.BONUS_FLAMES if f.get("kind") == "alchemy"] + \
+           [f for f in cfg.BEAST_FLAMES if f.get("bonus") == "alchemy"]
+
+
+def test_only_top_two_alchemy_flames_count():
+    """三朵同等级时，第三朵不得再进加成，也不得进播报名单（防「说在帮忙却没用」）。"""
+    fl = _alch_flames()
+    assert len(fl) >= 3, "配置里应至少有三朵 alchemy 火，否则这条守门没意义"
+    vals = {f["name"]: float(f["value"]) for f in fl}
+    p = {"flames": {n: 1 for n in vals}}
+    # 实现口径：贡献（value×lv）降序 → value 降序 → 名字；lv 全 1 时等价于 value 降序
+    top2 = [n for n, _v in sorted(vals.items(), key=lambda kv: (-kv[1], kv[0]))[:2]]
+    assert abs(fb.alchemy_rate_bonus(p) - sum(vals[n] for n in top2)) < 1e-9
+    assert {d["name"] for d in fb.alchemy_flame_names(p)} == set(top2), \
+        "播报名单必须就是计分的那两朵"
+
+
+def test_ranking_uses_contribution_not_base_value():
+    """排序按**当前贡献**（value×等级），不是按单级 value：喂得高可以反超。"""
+    fl = sorted(_alch_flames(), key=lambda f: -float(f["value"]))
+    hi, mid, lo = fl[0], fl[1], fl[-1]
+    p = {"flames": {hi["name"]: 1, mid["name"]: 1, lo["name"]: cfg.FLAME_MAX_LV}}
+    cands = [(hi["name"], float(hi["value"]) * 1, float(hi["value"])),
+             (mid["name"], float(mid["value"]) * 1, float(mid["value"])),
+             (lo["name"], float(lo["value"]) * cfg.FLAME_MAX_LV, float(lo["value"]))]
+    # 文档口径：贡献降序 → 单级 value 降序 → 名字（同分时才用到后两级）
+    cands.sort(key=lambda c: (-c[1], -c[2], c[0]))
+    expect = {cands[0][0], cands[1][0]}
+    got = {d["name"] for d in fb.alchemy_flame_names(p)}
+    assert got == expect, (cands, got)
+    # 加成额必须正好是这两朵的**贡献**之和（lv 已经乘进去，不是单级 value×2）
+    assert abs(fb.alchemy_rate_bonus(p) - (cands[0][1] + cands[1][1])) < 1e-9
+
+
+def test_flame_limit_constant_is_the_only_knob():
+    """变异反证：只改 ALCHEMY_FLAME_LIMIT，加成与播报同步跟随（不是写死 2）。"""
+    p = {"flames": {f["name"]: 1 for f in _alch_flames()}}
+    old = fb.ALCHEMY_FLAME_LIMIT
+    try:
+        fb.ALCHEMY_FLAME_LIMIT = 1
+        one = fb.alchemy_rate_bonus(p)
+        assert len(fb.alchemy_flame_names(p)) == 1
+        fb.ALCHEMY_FLAME_LIMIT = 3
+        three = fb.alchemy_rate_bonus(p)
+        assert len(fb.alchemy_flame_names(p)) == 3
+        assert three > one, "放宽上限必须真的多算"
+    finally:
+        fb.ALCHEMY_FLAME_LIMIT = old
+
+
 if __name__ == "__main__":
     _fails = 0
     for _name, _fn in sorted(globals().items()):

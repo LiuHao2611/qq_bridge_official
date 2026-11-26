@@ -171,8 +171,31 @@ def _puppet_recipe_text(p, mats: dict) -> str:
     return "\n".join(lines)
 
 
-async def cmd_puppet_deploy(store, qq, pstore=None, arg="") -> str:
-    """「傀儡出战」按钮入口：无参列出可切换清单，带序号则切换。"""
+def deploy_button_pairs(roster, active_id) -> list[tuple[str, str]]:
+    """「傀儡出战」回执上每具傀儡一颗**直接出战**按钮：``((label, 口令), ...)``。
+
+    2026-11-26 用户「我要的出战按钮是直接出战傀儡的按钮，你回复个当前出战是啥意思，
+    多此一举」。所以按钮 = 动作本身：点「人级·强」就切到那具，不再回文本让玩家
+    二次打「傀儡 出战 序号」。label 上限 10 字（平台硬限），★ 标当前出战。
+
+    口令走 custom 带参哨兵（``傀儡出战 <序号>``），由 ``button_dispatch`` 拼成
+    ``doupo:cbtn:`` 按钮；本函数零通道依赖，纯数据，可直接单测。
+    """
+    out: list[tuple[str, str]] = []
+    act = int(active_id or 0)
+    for i, x in enumerate(list(roster or []), 1):
+        name = str(x.get("name") or "")
+        label = ("★" + name) if int(x.get("id") or 0) == act else name
+        out.append((label[:10], "傀儡出战 %d" % i))
+    return out[:12]   # 平台行数有限；超过 12 具的极端名录只挂前 12 颗
+
+
+async def cmd_puppet_deploy(store, qq, arg="", pstore=None) -> str:
+    """「傀儡出战」按钮入口：无参列出可切换清单，带序号/名字则切换。
+
+    ``arg`` 第三位（2026-11-26）：按钮点击走 ``qq_str`` 形态直传参数，
+    与 ``_cmd_puppet_deploy`` 的「出战 N」写法共用同一套解析。
+    """
     pstore = pstore or _cmds.DEFAULT_PUPPET_STORE
     p = await _cmds._player(store, qq)
     if not p:
@@ -183,6 +206,30 @@ async def cmd_puppet_deploy(store, qq, pstore=None, arg="") -> str:
     return await _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg)
 
 
+def _arm_deploy_buttons(roster, active_id) -> None:
+    """把「每具一颗直接出战按钮」登记到本回合的回复按钮里。
+
+    为什么在命令层 arm（而不是分发层）：``傀儡 出战`` 的**文本入口**和
+    ``傀儡出战`` **按钮入口**最后都走 ``_cmd_puppet_deploy``，回执都挂
+    ``puppet_text`` 这族按钮；只在分发层 arm 会让文本入口显示「点下方按钮」
+    却配一排通用按钮（说了却做不到）。唯一入口 arm 一次，两条路一致。
+
+    通道模块缺失（纯业务单测 / 宿主无 channel）时静默跳过——按钮是增强项，
+    绝不能因为 arm 失败而让回执发不出去。
+    """
+    try:
+        from src.plugins.qq_bridge.channel import doupo_buttons as _db
+    except Exception:  # noqa: BLE001 — 无通道环境（单测）直接跳过
+        return
+    try:
+        pairs = deploy_button_pairs(roster, active_id)
+        if pairs:
+            _db.arm_dynamic("puppet_text", tuple(
+                _db.Btn(lbl, _db.DOUPO_CUSTOM_PREFIX + c, False) for lbl, c in pairs))
+    except Exception:  # noqa: BLE001 — 同上，按钮失败不阻断回执
+        return
+
+
 async def _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg) -> str:
     """傀儡出战（2026-11-26）：主动切换当前出战傀儡，带明确回执。
 
@@ -191,21 +238,28 @@ async def _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg) -> str:
     ``active_puppet()`` 同一真值，切完立刻生效（下场战斗就换人）。
 
     用法：``傀儡 出战`` 列清单；``傀儡 出战 2`` 或 ``傀儡 出战 <名中关键字>`` 切换。
+    按钮点击则直接带序号（``出战 2`` / ``2`` 两种写法都收）。
     """
     from . import puppet_core as pc
 
     qq = str(qq)
-    a = str(arg or "").strip()[len("出战"):].strip()
+    a = str(arg or "").strip()
+    if a.startswith("出战"):
+        a = a[len("出战"):].strip()
     cur = next((x for x in roster if x["id"] == elig.get("active_id")), None)
     if not roster:
         return "【傀儡出战】你尚未拥有傀儡，先发「炼制傀儡」炼一具。"
+    # 回执的按钮族 = 每具一颗「直接出战」（★ 是当前那具）；两条入口共用。
+    _arm_deploy_buttons(roster, elig.get("active_id"))
+
     if not a:
-        lines = ["【傀儡出战】当前出战：%s" % (cur["name"] if cur else "无"),
-                 "发「傀儡 出战 序号」切换（序号见下）："]
+        # 2026-11-26：不再念「当前出战：X / 发「傀儡 出战 序号」切换」——按钮就是动作，
+        # 清单只用 ★ 标出当前那具（用户明确说那段开场白是多此一举）。
+        lines = ["【傀儡出战】点下方按钮直接出战"]
         for i, x in enumerate(roster, 1):
             tier_name, _skin = cfg.PUPPET_TIER_BY_IDX.get(
                 int(x.get("tier", 0)), ("人级傀儡", "铜"))
-            mark = " ★出战" if cur and x["id"] == cur["id"] else ""
+            mark = " ★" if cur and x["id"] == cur["id"] else ""
             lines.append("　%d. %s（%s）· 攻 %d%s" % (
                 i, x["name"], tier_name, int(pc.puppet_attack(x, p)), mark))
         return "\n".join(lines)

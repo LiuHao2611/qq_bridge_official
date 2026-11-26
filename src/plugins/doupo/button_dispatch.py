@@ -89,7 +89,10 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "傀儡": ("cmd_puppet", "qq", "puppet"),
     # 2026-11-26 傀儡图鉴（出图卡）+ 出战切换（文本回执带按钮）
     "傀儡图鉴": ("cmd_puppet_codex", "qq", "codex"),
-    "傀儡出战": ("cmd_puppet_deploy", "qq", "puppet_text"),
+    # 「傀儡出战」按钮：回执本身是文本（puppet_text 按钮族），但下面 dispatch_button
+    # 会按玩家名录**动态 arm** 每具一颗「直接出战」按钮覆盖掉固定族（用户要求点一下
+    # 就换人，不要再打序号）。shape 用 qq_str：按钮带参直传「2」/「重击」。
+    "傀儡出战": ("cmd_puppet_deploy", "qq_str", "puppet_text"),
 }
 
 
@@ -380,6 +383,9 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
     # 2026-11-25：card_key 非空时**连按钮一起发**。此前只发 text，导致
     # 「提示型 card_key」（如 auto_tower_prompt，没有 render_* 可出图）点进去
     # 只看到一段没有按钮的提示——玩家还得手打，等于白加按钮。
+    # 2026-11-26 傀儡出战：回执上「每具一颗直接出战按钮」由命令层 arm（见
+    # commands_puppet._arm_deploy_buttons），此处不重复取数——文本入口与按钮入口
+    # 共用同一个 arm 点，两边的按钮族不会漂移。
     _kcmd = ("doupo:" + card_key) if card_key else ""
     try:
         await get_channel(OFFICIAL).send(

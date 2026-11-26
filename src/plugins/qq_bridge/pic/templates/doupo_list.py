@@ -94,6 +94,67 @@ def _rows_of(data) -> list:
     return [r for r in (data.get("rows") or []) if isinstance(r, dict)]
 
 
+#: 富文本副行（``sub_segs``）的语义角色 → 调色板键。模板只认这四档，不做任意色名
+#: 透传——颜色必须来自主题，否则深色/浅色主题下会出现「白底白字」。
+SUB_ROLE_COLOR = {
+    "dim": "dim_color",       # 普通说明（未拥有的材料、分隔符）
+    "gold": "gold_hi",        # 高亮：已拥有的材料名
+    "accent": "accent_color",  # 次高亮：价格 / 状态等
+    "text": "text_color",     # 正文白
+}
+
+
+def _sub_w(content_w: int, item: dict) -> int:
+    """富文本副行可用宽度（与 build 里的 ``(cx0+cw) - title_x - 8`` 逐字节一致）。
+
+    度量与绘制必须同宽，否则 _measure 少算一行 → 文字压到下一行条目上。
+    """
+    off = (BADGE_W + 4) if item.get("badge") else 14
+    return content_w - off - 8
+
+
+def _rich_lines(segs, size: int, max_w: int) -> list[list[tuple[str, str]]]:
+    """把「带颜色的分段文本」按宽度折行，返回每行的 ``[(文字, role), ...]``。
+
+    ``segs`` = ``[(text, role), ...]``，role ∈ :data:`SUB_ROLE_COLOR`。
+
+    两条硬规则（否则材料/标签会被读残）：
+      * **整段能装进一行就绝不拆开**——「无主灵魂」被切成「无主 / 灵魂」两截后，
+        玩家认不出是哪种材料；只有整段比一行还宽才逐字断。
+      * **纯空白段不落行首**，也绝不溢出右边界（行首留一个全角空格等于缩进错乱）。
+    """
+    lines: list[list[tuple[str, str]]] = [[]]
+    used = 0
+    for text, role in (segs or []):
+        text = str(text)
+        if not text:
+            continue
+        seg_w = Canvas.text_width(text, size, "regular")
+        if not text.strip():
+            if lines[-1] and used + seg_w <= max_w:
+                lines[-1].append((text, role))
+                used += seg_w
+            continue
+        if seg_w <= max_w and used > 0 and used + seg_w > max_w:
+            lines.append([])
+            used = 0
+        buf = ""
+        for ch in text:
+            w = Canvas.text_width(ch, size, "regular")
+            if used + w > max_w and (lines[-1] or buf):
+                if buf:
+                    lines[-1].append((buf, role))
+                    buf = ""
+                lines.append([])
+                used = 0
+            buf += ch
+            used += w
+        if buf:
+            lines[-1].append((buf, role))
+    return lines if lines != [[]] else [[("", "dim")]]
+
+
+
 #: 网格模式固定格高（4 列，每格只放名称 + 数量 + 角标）。
 #: 2026-11-24：52 → 60。格子右上/左上要放「几纹」「锁」角标；52 高时角标
 #: 与名称上缘会黏在一起，加 8px 拉开净空。
@@ -213,8 +274,13 @@ def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
     if grid:
         return GRID_CELL_H
     h = FS_ITEM + 12
+    segs = item.get("sub_segs")
     sub = item.get("sub") or ""
-    if sub:
+    if segs:
+        # 富文本副行（行内分色，如傀儡图鉴的「已拥有材料金色」）：宽度与 build 同源
+        lines = _rich_lines(segs, FS_SMALL, _sub_w(content_w, item))
+        h += max(1, len(lines)) * DESC_LH + TITLE_SUB_GAP
+    elif sub:
         lines = Canvas.wrap(sub, FS_SMALL, "regular", content_w - BADGE_W - 14)
         h += max(1, len(lines)) * DESC_LH + TITLE_SUB_GAP
     note = item.get("note") or ""
@@ -425,6 +491,21 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
         # 副行（折行，小字明确不加粗）
         cy = ty + FS_ITEM // 2 + 8 + TITLE_SUB_GAP
+        segs = item.get("sub_segs")
+        if segs:
+            # 行内分色副行：逐段绘制，颜色取自主题（gold=已拥有材料、dim=说明）。
+            # 段内折行由 _rich_lines 按同一宽度算好，此处只按行推进 y。
+            rlines = _rich_lines(segs, FS_SMALL, (cx0 + cw) - title_x - 8)
+            for i, line in enumerate(rlines):
+                lx = title_x
+                for txt_seg, role in line:
+                    if txt_seg:
+                        S.small(c, (lx, cy + i * DESC_LH), txt_seg, size=FS_SMALL,
+                                color=p[SUB_ROLE_COLOR.get(role, "dim_color")])
+                        lx += Canvas.text_width(txt_seg, FS_SMALL, "regular")
+                rec("r%d.sub%d" % (ri, i), "".join(t for t, _r in line),
+                    title_x, cy + i * DESC_LH, FS_SMALL, "regular", "lm")
+            cy += len(rlines) * DESC_LH
         sub = item.get("sub") or ""
         if sub:
             lines = Canvas.wrap(sub, FS_SMALL, "regular", (cx0 + cw) - title_x - 8)

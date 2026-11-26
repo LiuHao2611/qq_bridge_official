@@ -71,6 +71,35 @@ _quiz_options: ContextVar[dict] = ContextVar("doupo_quiz_options", default={})
 DOUPO_CUSTOM_PREFIX = "doupo:cbtn:"
 _custom_buttons: ContextVar[dict] = ContextVar("doupo_custom_buttons", default={})
 
+#: 2026-11-26 per-task 的**动态按钮**表：card_key -> (Btn, ...)。
+#:
+#: 与上面 `_custom_buttons`（玩家在存档里自定义的按钮）分开：这一层是**业务按
+#: 玩家实时数据现算**的按钮，如「傀儡出战」回执要按名录给每具一颗直接出战按钮。
+#: 固定 CARD_ACTIONS 无法表达（按钮数量/文字都随存档变），所以走 ContextVar 由
+#: 分发层 arm，:func:`buttons_for_card` 命中本卡时优先返回。
+_dynamic_buttons: ContextVar[dict] = ContextVar("doupo_dynamic_buttons", default={})
+
+
+def arm_dynamic(card_key: str, buttons: tuple[Btn, ...]) -> object:
+    """登记本回合某卡的动态按钮，返回 ContextVar token 供 detach。
+
+    与 :func:`arm_custom` 的区别：这里收的是**已经构好的 Btn**（业务层自己决定
+    label 与 data，含 ``doupo:cbtn:`` 带参哨兵），本函数不做任何编码/截断。
+    同名 card_key 后 arm 覆盖先 arm（同一次回复只可能有一组）。
+    """
+    k = (card_key or "").strip()
+    table = dict(_dynamic_buttons.get() or {})
+    table[k] = tuple(buttons or ())
+    return _dynamic_buttons.set(table)
+
+
+def disarm_dynamic(token) -> None:
+    try:
+        _dynamic_buttons.reset(token)
+    except (ValueError, TypeError):
+        pass
+
+
 
 def arm_custom(buttons: tuple[tuple[str, str], ...], card_key: str) -> object:
     """登记本回合某卡的玩家自定义按钮，返回 ContextVar token 供 detach。
@@ -521,6 +550,12 @@ def buttons_for_card(card_key: str) -> tuple[Btn, ...]:
     （那会污染档位族守门），也不对闲聊/斜杠命令给按钮。
     """
     k = (card_key or "").strip()
+    # 2026-11-26 动态按钮优先（业务现算，如傀儡出战按名录逐具给一颗）：本回合
+    # arm 了该 card_key 就先返回它，压过固定 CARD_ACTIONS 与该卡的玩家自定义按钮
+    # ——「点一下就换这具」比任何固定按钮族都更具体，不能被通用族盖掉。
+    dyn = (_dynamic_buttons.get() or {}).get(k)
+    if dyn:
+        return tuple(dyn)
     # 2026-11-25 晚：查看丹药卡动态按钮（用户「丹药就加炼制+买材料按钮」）。
     # card_key = "item:<丹名>" → 按该丹配方生成带参按钮；非丹药走普通 item。
     if k.startswith("item:"):

@@ -3650,6 +3650,7 @@ from .commands_puppet import (  # noqa: E402
     cmd_puppet_ruin,
     cmd_puppet_codex,
     cmd_puppet_deploy,
+    deploy_button_pairs,
     _puppet_recipe_text,
     _cmd_puppet_deploy,
     _cmd_puppet_temper,
