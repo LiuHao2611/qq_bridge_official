@@ -1940,16 +1940,17 @@ def _parse_craft_count(arg: str) -> tuple[str, int]:
     return s, 1
 
 
-def _craft_flame_aid_line(p) -> str:
+def _craft_flame_aid_line(p, success: bool = True) -> str:
     """炼药播报的护炉行（2026-11-26）：按玩家**实有且真进成功率**的火分组。
 
     与 ``alchemy_rate_bonus`` 同源判定，无炼药火返回空串（空火开局不会被硬塞一句）。
+    ``success`` 区分成败用两组文案：失败时绝不出现「恰到好处」这类成功向旁白。
     """
     from . import flame_bonus as _fb
     detail = _fb.alchemy_flame_names(p)
     xian = tuple(d["name"] for d in detail if d["identity"] == "异火")
     beast = tuple(d["name"] for d in detail if d["identity"] == "兽火")
-    return txt.craft_flame_aid(xian, beast)
+    return txt.craft_flame_aid(xian, beast, success=success)
 
 
 async def cmd_craft(store, qq, name) -> str:
@@ -1989,7 +1990,9 @@ async def cmd_craft(store, qq, name) -> str:
         if res.get("reason") in ("fail",):
             msg = txt.craft_fail(res["dross"], cfg.rate_cn(res["rate"]), over_hint,
                                  seed=int(res["dross"]))
-            aid = _craft_flame_aid_line(p)
+            # 2026-11-26 用户反馈：失败还讲「火候恰到好处」自相矛盾。
+            # 失败回执改接失败专用护炉旁白（火竭力相护却没压住）。
+            aid = _craft_flame_aid_line(p, success=False)
             if aid:
                 msg += "\n" + aid
             if res.get("alch_up"):
@@ -2043,7 +2046,8 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
 
     lines = [txt.craft_batch_head(hit, res["n_done"], res["n_ok"], res["n_fail"],
                                   cfg.rate_cn(res["rate"]))]
-    aid = _craft_flame_aid_line(p)
+    # 批量里只要有一炉失败，就不说「恰到好处」这类成功向旁白（2026-11-26）。
+    aid = _craft_flame_aid_line(p, success=(int(res.get("n_fail", 0)) == 0))
     if aid:
         lines.append(aid)
     detail = txt.craft_batch_detail(res["n_ok"], res["dross"], res["exp"])

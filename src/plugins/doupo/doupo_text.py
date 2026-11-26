@@ -694,27 +694,52 @@ CRAFT_FLAME_AID_MIX = (
     "　【{names}】同炉而燃，异火主势、兽火托底，火候被烘得恰到好处。",
 )
 
+#: 失败专用护炉旁白（2026-11-26 用户反馈「都炼药失败了还在说火焰恰到好处」）。
+#: 成功旁白讲的是「火候被稳住/恰到好处」，用在失败回执里自相矛盾。失败时火确实
+#: 仍在护炉，只是这次没能压住药力——另起一组旁白，只讲「火尽了力却没能挽回」，
+#: 同样不报数字、不说术语。三类仍按异火/兽火/混合分组，与成功组一一对应。
+CRAFT_FLAME_AID_FAIL_XIAN = (
+    "　异火【{names}】也全力托住炉底，只是这一炉药力太烈，终究没能压住。",
+    "　【{names}】在鼎中拼命镇压躁动的药力，奈何差了最后一线。",
+)
+CRAFT_FLAME_AID_FAIL_BEAST = (
+    "　兽火【{names}】已把炉温守到极稳，可药性一生变，温火也护不住这一炉。",
+    "　【{names}】伏在炉壁苦苦支撑，火色虽稳，仍没能拉回散尽的药力。",
+)
+CRAFT_FLAME_AID_FAIL_MIX = (
+    "　【{names}】同炉而燃，异火兽火都已竭力相护，这一炉却仍失了分寸。",
+)
+
 
 def craft_flame_aid(xian: tuple[str, ...] = (), beast: tuple[str, ...] = (),
-                    seed: int = 0) -> str:
+                    seed: int = 0, success: bool = True) -> str:
     """炼药播报的护炉行：有炼药火才回一句原著化旁白，无火回空串。
 
     xian / beast 是调用点按 ``flame_bonus.alchemy_flame_names`` 分组的名字。
     只描述火在护持，绝不出现百分比、成数、「加成」「成功率」等开发向术语。
+
+    ``success``（2026-11-26 新增）：成功/失败用**两组互不混用**的文案。
+    失败时绝不能再出现「恰到好处」「稳住」「三分定相」这类只属于成功的措辞。
     """
     xian = tuple(n for n in xian if n)
     beast = tuple(n for n in beast if n)
     if not xian and not beast:
         return ""
     k = max(0, int(seed))
+    if success:
+        x_pool, b_pool, m_pool = (CRAFT_FLAME_AID_XIAN, CRAFT_FLAME_AID_BEAST,
+                                  CRAFT_FLAME_AID_MIX)
+    else:
+        x_pool, b_pool, m_pool = (CRAFT_FLAME_AID_FAIL_XIAN, CRAFT_FLAME_AID_FAIL_BEAST,
+                                  CRAFT_FLAME_AID_FAIL_MIX)
     if xian and beast:
-        body = CRAFT_FLAME_AID_MIX[k % len(CRAFT_FLAME_AID_MIX)]
+        body = m_pool[k % len(m_pool)]
         names = "、".join(xian + beast)
     elif xian:
-        body = CRAFT_FLAME_AID_XIAN[k % len(CRAFT_FLAME_AID_XIAN)]
+        body = x_pool[k % len(x_pool)]
         names = "、".join(xian)
     else:
-        body = CRAFT_FLAME_AID_BEAST[k % len(CRAFT_FLAME_AID_BEAST)]
+        body = b_pool[k % len(b_pool)]
         names = "、".join(beast)
     return body.format(names=names)
 

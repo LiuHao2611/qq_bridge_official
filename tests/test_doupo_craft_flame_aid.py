@@ -4,11 +4,12 @@
 用户原话：「确认异火和兽火是否对炼药真的有加成……炼药结果播报应该体现，
 而且说法不要太生硬，要符合原著」。
 
-本文件守四件事：
+本文件守五件事：
   1. alchemy_flame_names 只列「真进成功率」的火，异火/兽火身份分对；
   2. 护炉行有火才出、无火空串，三类文案互斥且按 seed 轮换；
   3. 玩家可见护炉行**不出现**百分比/成数/「加成」「成功率」等开发向术语；
-  4. cmd_craft 单炉成功/失败、批量回包三处都接了护炉行（AST 接线守门）。
+  4. cmd_craft 单炉成功/失败、批量回包三处都接了护炉行（AST 接线守门）；
+  5. 2026-11-26 成败分流：失败回执绝不出现「恰到好处/稳住/三分定相」成功向措辞。
 """
 from __future__ import annotations
 
@@ -127,6 +128,71 @@ def test_flame_aid_no_dev_jargon():
     for s in samples:
         for w in JARGON:
             assert w not in s, "护炉行不该出现 %r：%s" % (w, s)
+
+
+SUCCESS_ONLY_WORDS = ("恰到好处", "稳住", "三分定相", "本就占了几分天时",
+                      "少了大起大落", "被一点点揉开", "丹成更稳")
+
+
+def test_flame_aid_fail_never_uses_success_words():
+    """失败护炉行不得出现任何只属于成功的措辞（2026-11-26 用户实测矛盾）。"""
+    for x, b in ((_XIAN, ()), ((), _BEAST), (_XIAN, _BEAST)):
+        for seed in range(4):
+            s = txt.craft_flame_aid(x, b, seed=seed, success=False)
+            assert s, "有火就该有失败护炉行"
+            for w in SUCCESS_ONLY_WORDS:
+                assert w not in s, "失败护炉行出现成功向措辞 %r：%s" % (w, s)
+            for w in JARGON:
+                assert w not in s, "护炉行不该出现 %r：%s" % (w, s)
+
+
+def test_flame_aid_success_and_fail_distinct():
+    """同一朵火，成功/失败两句必须不同（防两组池被改回同一句）。"""
+    for x, b in ((_XIAN, ()), ((), _BEAST), (_XIAN, _BEAST)):
+        ok = txt.craft_flame_aid(x, b, seed=0, success=True)
+        ng = txt.craft_flame_aid(x, b, seed=0, success=False)
+        assert ok != ng, "成败护炉行不得雷同：%s" % ok
+
+
+def test_cmd_craft_fail_reply_has_no_success_flavor():
+    """端到端：强制炼药失败，回包不得出现「恰到好处」等成功向旁白。"""
+    import asyncio
+
+    from doupo import commands, core
+
+    class _Mem:
+        def __init__(self, p):
+            self.p = p
+
+        async def get_player(self, qq):
+            return dict(self.p)
+
+        async def put_player(self, p):
+            self.p = dict(p)
+
+    p = core.create_player("flame-fail-test", "护炉", "g")
+    p["alch"] = cfg.alch_grade_idx("一品")
+    p["flames"] = {_XIAN: 1, _BEAST: 1}  # 同时有异火+兽火 → 命中 MIX 营销句
+    p["last_craft"] = 0
+    p["mp"] = core.mp_max(p) * 5
+    rec = cfg.RECIPE_BY_NAME["聚气散"]
+    for mat, qty in rec["need"].items():
+        core.add_item(p, mat, qty * 5)
+    # 直接钉 core.craft 的返回为「失败」，测命令层文案拼接（rng 不暴露到命令层）。
+    orig_craft = core.craft
+
+    def _fail_craft(pp, name, *a, **k):
+        return {"ok": False, "reason": "fail", "dross": 3, "rate": 0.6,
+                "diff": 0, "mp_used": 20, "mp_left": 100}
+
+    core.craft = _fail_craft
+    try:
+        reply = asyncio.run(commands.cmd_craft(_Mem(p), "90003", "聚气散"))
+    finally:
+        core.craft = orig_craft
+    for w in SUCCESS_ONLY_WORDS:
+        assert w not in reply, "失败回包出现成功向措辞 %r：%s" % (w, reply)
+    assert "异火" in reply and "兽火" in reply, "失败回包仍应点名两朵火：%s" % reply
 
 
 # ---------------------------------------------------------------------------
