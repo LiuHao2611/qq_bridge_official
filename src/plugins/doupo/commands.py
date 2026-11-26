@@ -26,6 +26,7 @@ from . import temp_buff as tb
 from . import danwen as dw
 from . import duel_challenge as dc
 from . import factions as fac
+from . import battle_flavor as _flavor
 from . import flame_drop as _fdrop
 from . import flame_skills as fs
 from . import skill_book as book
@@ -1016,6 +1017,23 @@ async def cmd_fight(store, qq) -> str:
     # 台词只在苦战/败局必出（那才是喊得出口的时候），其余场次按种子轮换。
     lines.append(txt.quote_line(_ch, _seed,
                                 special=(not res.get("win")) or _hp_ratio < 0.5))
+    # 2026-11-26 情境化梗味旁白（用户「插入的语句一定要符合玩家当前实际情况」）：
+    # 每一句梗绑真实字段门控（敌人阵营 / 本场招式 / 战况档 / 玩家境界），
+    # 条件不满足就不出句，绝不硬塞——见 battle_flavor.py。所有字段都取自本场真实数据：
+    # 代表敌人取等级最高那位（与 foes 同源），招式/品阶取最强一击（与 💥 行同源）。
+    _foe_kind = str(max(detail, key=lambda x: int(x.get("lv") or 0)).get("kind") or "") \
+        if detail else ""
+    _flavor_line = _flavor.flavor_line({
+        "win": bool(res.get("win")),
+        "tier": _wt,
+        "realm_idx": cfg.realm_index(lv),
+        "foe_kind": _foe_kind,
+        "move": str(high.get("move") or ""),
+        "move_tier": str(high.get("tier") or ""),
+        "seed": _seed,
+    })
+    if _flavor_line:
+        lines.append("　" + _flavor_line)
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append(txt.battle_hero_aid())
