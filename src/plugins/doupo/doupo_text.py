@@ -762,8 +762,21 @@ def craft_cd(left: int) -> str:
     return f"丹炉尚温，炉火未熄，丹香尚在——再候 {left} 秒开炉。"
 
 
-def craft_mat(missing: str) -> str:
-    return f"❌ 材料不足：炉火已起，药材却凑不齐——缺 {missing}。\n　去「宝库」买药。"
+def craft_mat(missing: str, n: int = 1) -> str:
+    """缺料回执（2026-11-26：缺口按本次炉数算，并指向下方买齐按钮）。"""
+    n = max(1, int(n))
+    if n > 1:
+        head = (f"❌ 材料不足：欲炼 {n} 炉，药材却凑不齐——缺 {missing}"
+                f"（{n} 炉所需）。")
+    else:
+        head = f"❌ 材料不足：炉火已起，药材却凑不齐——缺 {missing}。"
+    return head + "\n　点下方药材按钮可一次买齐，买完再点「炼制」即可开炉（也可发「宝库」自己挑）。"
+
+
+def craft_need(missing: str, n: int = 1) -> str:
+    """连炼中途药材见底：列「再炼这批还缺多少」（与 craft_mat 的括号口径一致）。"""
+    n = max(1, int(n))
+    return f"　再炼 {n} 炉尚需：{missing}——点下方药材按钮一次买齐。"
 
 
 def craft_mp() -> str:

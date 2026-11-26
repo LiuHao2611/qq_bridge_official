@@ -130,18 +130,27 @@ def test_batch_limited_by_materials():
 
 def test_batch_zero_furnace_reports_missing_detail():
     """2026-11-26 黑盒 N2：连炼一炉都没开成（药材不足）时必须带缺料明细，
-    口径与单发 craft 逐字一致，否则命令层只能回泛化的「炉中火候难成」。"""
+    口径与单发 craft 同源，否则命令层只能回泛化的「炉中火候难成」。
+
+    2026-11-26 二次修正（用户：「我一次炼制10个丹药，缺少的材料应该是10个丹药
+    所需的材料」）：缺口按**本次请求炉数**算，所以 5 炉的明细是单发的 5 倍，
+    不再与单发逐字相等——单发只在 1 炉时才与之同源。
+    """
     p = _p(alch=8)   # 一味药材都没有
     r = core.craft_batch(p, "回灵丹", 5, rng=lambda: 0.0, now_ts=1000)
     check(not r.get("ok") and r.get("reason") == "mat", "一炉没开成→reason=mat")
     check(bool(r.get("missing")), "必须带 missing 明细")
+    check(bool(r.get("gaps")), "必须带 gaps 明细（按钮层据此算数量）")
     need = cfg.RECIPE_BY_NAME["回灵丹"]["need"]
-    for mat in need:
-        check(any(mat in m for m in r.get("missing", [])),
-              "缺料明细列出 %s" % mat)
-    # 与单发逐字同源
-    single = core.craft(p, "回灵丹", rng=lambda: 0.0, now_ts=1000)
-    check(single.get("missing") == r.get("missing"), "连炼/单发缺料明细逐字一致")
+    for mat, qty in need.items():
+        check(any("%s×%d(有0)" % (mat, qty * 5) in m for m in r.get("missing", [])),
+              "缺料明细按 5 炉报量：%s×%d" % (mat, qty * 5))
+    check(all(g["gap"] == g["need"] - g["have"] for g in r["gaps"]), "gap = need - have")
+    # 1 炉的批量与单发同源（同一函数 core._mat_short，不许两套算法）
+    p2 = _p(alch=8)
+    b1 = core.craft_batch(p2, "回灵丹", 1, rng=lambda: 0.0, now_ts=1000)
+    single = core.craft(p2, "回灵丹", rng=lambda: 0.0, now_ts=1000)
+    check(single.get("missing") == b1.get("missing"), "1 炉时连炼/单发缺料逐字一致")
 
 
 def test_batch_zero_furnace_mp_reason():

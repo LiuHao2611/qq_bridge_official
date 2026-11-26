@@ -294,6 +294,11 @@ CARD_ACTIONS = {
     # 按钮设置/自定义按钮的回执（隐藏口令，不进菜单）。配完就该回去玩，
     # 给三个不重叠的常用入口；绝不给「斗破菜单」那一套主菜单按钮。
     "setup_text": ("人物", "背包", "战斗"),
+    # 2026-11-26「尚未开放」提示回包（签到/炼器/驯兽/擂台/成就/战力/闭关/主线任务
+    # 这 8 个词在 __init__.py 里有正则、点了只会回一句「暂未开放」）。此前它们
+    # 一条按钮都没登记 → 官方群兜底成主菜单按钮（入道/人物/修炼/战斗/宝库），
+    # 玩家点完还是原地。这里给「去做点正经事」的三键，与守门用例一一对齐。
+    "tip_text": ("战斗", "修炼", "宝库"),
 }
 
 #: 按钮 label 覆盖（card_key → ((label, cmd), ...)）：cmd 仍是 canonical 真口令，
@@ -362,6 +367,11 @@ REPLY_CARD_KEY: dict[str, str] = {
     # 按钮设置（隐藏口令，不进菜单）——回执也要有自己的按钮组，
     # 否则又是一排「入道/人物/修炼/战斗/宝库」。
     "按钮设置": "setup_text", "自定义按钮": "setup_text",
+    # 2026-11-26 「尚未开放」的 8 个词（__init__.py 有一条兜底正则，回一句
+    # 「暂未开放」）。没有这一组，它们的回执会回落主菜单按钮 —— 玩家点了原地。
+    "签到": "tip_text", "炼器": "tip_text", "驯兽": "tip_text",
+    "擂台": "tip_text", "成就": "tip_text", "战力": "tip_text",
+    "闭关": "tip_text", "主线任务": "tip_text",
 }
 
 #: 入站**别名** → 主口令（主口令必须已在 ``REPLY_CARD_KEY`` 里）。
@@ -434,7 +444,7 @@ CARD_SELF = {
     "buy_text": "购买回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
     "shop_text": "商店回执", "enter_text": "入道回执", "puppet_text": "傀儡回执",
     "duel_text": "切磋回执",
-    "setup_text": "按钮设置",
+    "setup_text": "按钮设置", "tip_text": "未开放提示",
 }
 
 #: 2026-11-25：**不出图、只挂按钮**的提示型 card_key（buttons_for_card 里特判返回）。
@@ -478,6 +488,7 @@ TEXT_CARD_KEYS = frozenset({
     "buy_text", "craft_text", "use_text", "shop_text",       # 买 / 炼 / 服 / 商店
     "enter_text", "puppet_text", "duel_text",                # 入道 / 傀儡 / 切磋
     "setup_text",                                            # 按钮设置回执
+    "tip_text",                                              # 「尚未开放」提示回执
 })
 
 #: 以上两族的并集：**没有 render_***、但可以当 keyboard_cmd 用。
@@ -491,12 +502,62 @@ ALL_BUTTON_CMDS = (frozenset(c for acts in CARD_ACTIONS.values() for c in acts)
                    | {"按钮样例"})
 
 
+#: 官方按钮 label 的显示上限（项目自定，超了会被客户端截断成看不懂的残字）。
+LABEL_MAX = 10
+
+
+def _fit_label(prefix: str, name: str, tail: str = "") -> str:
+    """``prefix + name + tail`` 压进 :data:`LABEL_MAX`：超长只截 name，前缀后缀不丢。
+
+    为什么截名字而不是截数量：玩家看按钮时**数量必须一眼可见**（「一次买够」是
+    本功能的全部意义），名字在回执正文里本来就有一行完整版，截短还能认出来。
+    """
+    room = LABEL_MAX - len(prefix) - len(tail)
+    if room < 2:
+        return (prefix + name + tail)[:LABEL_MAX]
+    return prefix + (name if len(name) <= room else name[:room]) + tail
+
+
+def mat_buy_button(dan: str, mat: str, qty: int, furnace: int = 1) -> Btn:
+    """一颗「一次买够某味药材」按钮（2026-11-26 用户要求）。
+
+    ``data = doupo:cbtn:买 <药材> <数量> @<丹名> <炉数>``：前半段是玩家手打也认的
+    真口令，``@`` 之后是本作的**上下文尾巴**（``craft_ctx.split_ctx`` 解析），
+    买完据此重算剩余缺口并把「炼制此丹」挂回回执——点完这味，下一味就在手边。
+    """
+    q = max(1, int(qty))
+    tail = "×%d" % q
+    cmd = "%s买 %s %d @%s %d" % (DOUPO_CUSTOM_PREFIX, mat, q, dan, max(1, int(furnace)))
+    return Btn(_fit_label("买", mat, tail), cmd, False)
+
+
+def craft_mat_buttons(dan: str, pairs, furnace: int = 1) -> tuple[Btn, ...]:
+    """按 ``((药材, 数量), ...)`` 派生「每味一颗买齐按钮 + 一颗炼制此丹」。
+
+    ``pairs`` 的数量由调用方按语义算好：
+      * 查看丹药卡 —— 单炉用量（玩家只是在看图鉴，没指定炉数）；
+      * 缺料回执   —— **本次炉数 × 单炉用量 − 已有** 的缺口（见 craft_ctx）。
+    炉数 >1 时炼制按钮带炉数（``炼制 <丹> 10``），买完点一下就是整批，不用重打。
+    """
+    n = max(1, int(furnace))
+    acts: list[Btn] = [mat_buy_button(dan, m, q, n) for m, q in (pairs or ()) if int(q) > 0]
+    if dan:
+        cmd = DOUPO_CUSTOM_PREFIX + "炼制 " + dan + ("" if n == 1 else " %d" % n)
+        acts.append(Btn(_fit_label("炼制", dan), cmd, False))
+    return tuple(acts)
+
+
 def _item_detail_buttons(name: str) -> tuple[Btn, ...]:
-    """查看物品详情卡：丹药给「炼制此丹 + 买材料 + 炼药/背包」，非丹药给通用按钮。
+    """查看物品详情卡：丹药给「每味材料买齐 + 炼制此丹 + 炼药/背包」，非丹药给通用按钮。
 
     按钮 data 用 custom 前缀带参（``doupo:cbtn:炼制 <丹名>``），点击走
     ``dispatch_custom`` → ``commands.cmd_craft(arg)``，直接开炉这味丹，不用玩家
     再手打口令。零 nonebot 依赖：只读 config 的纯数据表。
+
+    2026-11-26 用户原话：「查看丹药时，底部的按钮应该有全部材料的购买按钮，
+    注意有的材料需要不止一个，必须要保证一次买够」——此前只挂第一味材料且不带
+    数量（点一下买 1 份，缺 3 份就得点三次、还得自己记数），现在**每味一颗**、
+    数量就是该丹单炉用量，一键买齐。
     """
     base = CARD_ACTIONS.get("item", ("服丹", "炼药", "宝库", "背包"))
     if not name:
@@ -531,16 +592,12 @@ def _item_detail_buttons(name: str) -> tuple[Btn, ...]:
     if not need:
         # 非丹药（药材/天材地宝/傀儡料）：给通用「炼药/宝库/背包」，不加炼制按钮。
         return tuple(Btn(c, c, False) for c in base)
-    first_mat = next(iter(need), "")
-    acts: list[Btn] = [
-        Btn("炼制%s" % name[:6], DOUPO_CUSTOM_PREFIX + "炼制 " + name, False),
-    ]
-    if first_mat:
-        acts.append(Btn("买%s" % first_mat[:6],
-                        DOUPO_CUSTOM_PREFIX + "买 " + first_mat, False))
+    # 每味材料一颗「买X×N」（N=单炉用量），再挂「炼制此丹」+「炼药」「背包」。
+    # 药材最多 6 味 → 最多 9 颗；qq_keyboard.wrap_button_rows 自动切成多行（≤5 行）。
+    acts: list[Btn] = list(craft_mat_buttons(name, tuple(need.items()), 1))
     acts.append(Btn("炼药", "炼药", False))
     acts.append(Btn("背包", "背包", False))
-    return tuple(acts[:5])
+    return tuple(acts)
 
 
 def buttons_for_card(card_key: str) -> tuple[Btn, ...]:

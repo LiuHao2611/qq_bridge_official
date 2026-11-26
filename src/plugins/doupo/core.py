@@ -2721,6 +2721,27 @@ def craft_flame_gate(p, rec) -> str:
     return ""
 
 
+def _mat_short(p, rec, n_furnace: int = 1):
+    """按「本次请求的炉数」算每味药材缺口 → ``(missing 文本, gaps 明细)``。
+
+    2026-11-26 用户原话：「我一次炼制10个丹药，缺少的材料应该是10个丹药所需的
+    材料」。旧口径只报**下一炉**的用量，玩家买回来还是只够炼一炉，得再发一遍
+    口令再看一遍缺料——缺口必须按整批算：``单炉用量 × 炉数 − 已有``。
+
+    missing 与 gaps 同源：``{药}×{需}(有{有})`` 是文本行，gaps 给按钮层算数量。
+    """
+    n = max(1, int(n_furnace))
+    missing: list[str] = []
+    gaps: list[dict] = []
+    for mat, qty in rec["need"].items():
+        need = int(qty) * n
+        have = count_item(p, mat)
+        if have < need:
+            missing.append(f"{mat}×{need}(有{have})")
+            gaps.append({"mat": mat, "need": need, "have": have, "gap": need - have})
+    return missing, gaps
+
+
 def craft(p, name, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
@@ -2735,12 +2756,9 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     if cd > 0:
         return {"ok": False, "reason": "cd", "left": cd}
 
-    missing = []
-    for mat, n in rec["need"].items():
-        if count_item(p, mat) < n:
-            missing.append(f"{mat}×{n}(有{count_item(p, mat)})")
+    missing, gaps = _mat_short(p, rec, 1)
     if missing:
-        return {"ok": False, "reason": "mat", "missing": missing}
+        return {"ok": False, "reason": "mat", "missing": missing, "gaps": gaps}
 
     for mat, n in rec["need"].items():
         take_item(p, mat, n)
@@ -2880,15 +2898,19 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
 
     if n_done == 0:
         # 2026-11-26 第二玩家黑盒 N2：连炼一炉没开成时必须带**缺料明细**，
-        # 口径与单发 craft 逐字一致（{药}×{需}(有{有})），否则命令层只能回
+        # 口径与单发 craft 同源（{药}×{需}(有{有})），否则命令层只能回
         # 泛化的「炉中火候难成」，玩家不知道去宝库买什么。
+        # 缺口按**本次请求炉数**算（n 炉的量），不是下一炉那点 —— 见 _mat_short。
         out = {"ok": False, "reason": limited or "mat", "rate": rate,
                "diff": diff, "n_done": 0}
         if limited == "mat":
-            out["missing"] = [f"{mat}×{qty}(有{count_item(p, mat)})"
-                              for mat, qty in rec["need"].items()
-                              if count_item(p, mat) < qty]
+            out["missing"], out["gaps"] = _mat_short(p, rec, n)
         return out
+
+    # 药材中途见底：同样把「再炼完这批还缺多少」算出来（命令层挂买齐按钮）。
+    miss, gaps = ([], [])
+    if limited == "mat":
+        miss, gaps = _mat_short(p, rec, n)
 
     p["alch_exp"] = int(p.get("alch_exp", 0)) + exp
     alch_up = _alch_level_up(p)
@@ -2899,7 +2921,8 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
             "exp": exp, "exp_factor": exp_factor, "mp_used": mp_per * n_done,
             "mp_left": int(p.get("mp", 0)), "dross": cfg.CRAFT_FAIL_DROSS * n_fail,
             "alch_up": alch_up, "alch": int(p.get("alch", 0)),
-            "alch_exp": int(p.get("alch_exp", 0)), "limited": limited}
+            "alch_exp": int(p.get("alch_exp", 0)), "limited": limited,
+            "missing": miss, "gaps": gaps}
 
 
 def _advance_one(p) -> int:

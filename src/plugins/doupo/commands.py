@@ -21,6 +21,7 @@ from . import bagview
 from . import card_theme
 from . import config as cfg
 from . import core
+from . import craft_ctx as cctx
 from . import doupo_text as txt
 from . import temp_buff as tb
 from . import danwen as dw
@@ -1832,6 +1833,11 @@ async def cmd_buy(store, qq, args) -> str:
     args = (args or "").strip()
     if not args:
         return "用法：买 血灵草 2（发「宝库」看货）"
+    # 2026-11-26 药材料按钮的上下文尾巴（@丹名 炉数）：剥掉后再按老格式解析，
+    # 买完据此重算剩余缺口、把「还缺的药材 + 炼制此丹」挂回回执（见 craft_ctx）。
+    args, _ctx_dan, _ctx_n = cctx.split_ctx(args)
+    if not args:
+        return "用法：买 血灵草 2（发「宝库」看货）"
     parts = args.split()
     name = parts[0]
     n = 1
@@ -1863,12 +1869,28 @@ async def cmd_buy(store, qq, args) -> str:
                     f"强服只会爆体（到 {res['need_lv']} 级再来）。")
         # 2026-11-26 用户红线：能炼制的丹药一律不卖（堵住「低价扫丹跳玩法」漏洞）。
         if res.get("reason") == "craftonly":
+            # 回执已经把「去炼制」说出口了，顺手给颗按钮，别让玩家再手打丹名。
+            cctx.arm_materials("buy_text", name, [], 1, tail=False)
             return (f"【{name}】乃炼制之物，宝库不售。\n"
                     f"　发「炼制 {name}」备齐药材与火自己开炉 —— 丹成全凭本事，非金币可买。")
         return f"没有【{name}】这样货。发「宝库」看全部。"
     out = [f"✅ 购入【{res['name']}】×{res['n']}，花费 {res['total']} 金，余 {p['gold']}。"]
     out.extend(_chance_lines(chance, qq))
+    # 买的是炼丹药材且带上下文尾巴：重算「还缺哪几味、各差多少」，连按钮一起挂。
+    if _ctx_dan and _ctx_dan in cfg.RECIPE_BY_NAME:
+        cctx.arm_buy(p, _ctx_dan, _ctx_n)
+        _gaps = cctx.mat_gaps(p, _ctx_dan, _ctx_n)
+        if _gaps:
+            out.append(txt.craft_need(_detail_of(_gaps), _ctx_n))
+        else:
+            out.append(f"　药材已齐 —— 点下方「炼制」即可开炉 {_ctx_n} 炉。")
     return "\n".join(out)
+
+
+def _detail_of(gaps) -> str:
+    """缺口明细文本 ``{药}×{需}(有{有})``（与 core._mat_short 同格式，一处措辞）。"""
+    return "、".join("%s×%d(有%d)" % (g["mat"], int(g["need"]), int(g["have"]))
+                     for g in gaps)
 
 
 async def cmd_recipes(store, qq, page=1) -> str:
@@ -1988,7 +2010,9 @@ async def cmd_craft(store, qq, name) -> str:
     over_hint = txt.craft_over(over) if over else ""
     if not res.get("ok"):
         if res.get("reason") == "mat":
-            return txt.craft_mat("、".join(res["missing"]))
+            # 2026-11-26 用户要求：缺料提示底部直接给每味药材的购买按钮（一次买够）。
+            cctx.arm_craft(p, hit, 1)
+            return txt.craft_mat("、".join(res["missing"]), 1)
         if res.get("reason") in ("fail",):
             msg = txt.craft_fail(res["dross"], cfg.rate_cn(res["rate"]), over_hint,
                                  seed=int(res["dross"]))
@@ -2013,6 +2037,8 @@ async def cmd_craft(store, qq, name) -> str:
         msg += "\n" + txt.alch_up(res["alch_up"])
     out = [msg]
     out.extend(_chance_lines(chance, qq))
+    # 2026-11-26：炼成后最自然的下一步是吃掉 —— 服丹/查看/再炼/炼药 四颗按钮。
+    cctx.arm_done(p, hit, 1)
     return "\n".join(out)
 
 
@@ -2034,10 +2060,12 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
         return txt.craft_cd(res["left"])
     if not res.get("ok"):
         # craft_batch 的 not-ok：nodrug / buyonly / cd / nofire / mat / mp。
-        # 2026-11-26 黑盒 N2：缺料走与单发逐字一致的 craft_mat（带「缺什么」），
+        # 2026-11-26 黑盒 N2：缺料走与单发同一套 craft_mat（带「缺什么」），
         # 斗气不足走 craft_mp；都不再落到泛化的「炉中火候难成」。
+        # 缺口按**本次炉数**算（10 炉就报 10 炉的量），底部挂每味药材的买齐按钮。
         if res.get("reason") == "mat" and res.get("missing"):
-            return txt.craft_mat("、".join(res["missing"]))
+            cctx.arm_craft(p, hit, n)
+            return txt.craft_mat("、".join(res["missing"]), n)
         if res.get("reason") == "mp":
             return txt.craft_mp()
         return txt.craft_generic_fail()
@@ -2061,10 +2089,18 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
     lines.append(f"　斗气 -{res['mp_used']}（余{res['mp_left']}）")
     if res.get("limited") in ("mat", "mp"):
         lines.append(txt.craft_batch_limited(res["limited"]))
+        # 药材中途见底：把「再炼完这批还缺多少」写明，并挂买齐按钮（点完直接开炉）。
+        if res["limited"] == "mat" and res.get("gaps"):
+            cctx.arm_craft(p, hit, n)
+            lines.append(txt.craft_need(_detail_of(res["gaps"]), n))
     if res.get("alch_up"):
         lines.append(txt.alch_up(res["alch_up"]))
     out = ["\n".join(lines)]
     out.extend(_chance_lines(chance, qq))
+    if res["n_ok"] and res.get("limited") != "mat":
+        # 一批炼出几十枚，最自然的下一步是吃掉（按钮同单发：服丹/查看/再炼/炼药）。
+        # 药材见底时**不覆盖**上面的买齐按钮——那时补料比吃丹更急。
+        cctx.arm_done(p, hit, n)
     return "\n".join(out)
 
 
@@ -2631,9 +2667,31 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
     guzzle = txt.pill_guzzle(succeeded)
     if guzzle:
         body += "\n　" + guzzle
+    # 2026-11-26：服完最顺手的下一步是「再服一枚 / 看这味丹的详情 / 回包裹」。
+    _arm_use_buttons(hit)
     if hit in cfg.MATERIAL_BY_NAME:
         return f"✨ 炼化 {succeeded} 份【{hit}】，{body}{note}"
     return f"{head}，{body}{note}"
+
+
+def _arm_use_buttons(hit: str) -> None:
+    """服丹回执的动态按钮（再服 / 查看 / 背包）。通道缺失时静默跳过。
+
+    取通道走 ``craft_ctx._channel()``（唯一入口）：按钮靠 ContextVar 传递，
+    必须全进程同一份模块实例，否则 arm 了也没人读得到。
+    """
+    try:
+        db = cctx._channel()
+        if db is None:
+            return
+        pre = db.DOUPO_CUSTOM_PREFIX
+        db.arm_dynamic("use_text", (
+            db.Btn(db._fit_label("再服", hit), pre + "服丹 " + hit, False),
+            db.Btn(db._fit_label("查看", hit), pre + "查看 " + hit, False),
+            db.Btn("背包", "背包", False),
+        ))
+    except Exception:  # noqa: BLE001 — 按钮是增强项，失败不影响回执
+        return
 
 
 # ---------------------------------------------------------------------------

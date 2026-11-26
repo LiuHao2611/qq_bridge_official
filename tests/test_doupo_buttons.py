@@ -278,6 +278,9 @@ def test_each_card_buttons_are_relevant_family():
         # 2026-11-25 晚：按钮设置回执（隐藏口令）。配完就回去玩，给三个常用入口，
         # 绝不给「斗破菜单」那套默认主菜单按钮。
         "setup_text": {"人物", "背包", "战斗"},
+        # 2026-11-26：「尚未开放」提示回执（签到/炼器/驯兽/擂台/成就/战力/闭关/
+        # 主线任务）。此前零映射 → 回执挂主菜单按钮，玩家点了原地打转。
+        "tip_text": {"战斗", "修炼", "宝库"},
     }
     assert set(db.CARD_ACTIONS) == set(expected), \
         "卡片集合不一致：impl-only=%s base-only=%s" % (
@@ -550,15 +553,46 @@ def test_label_overlay_continue_battle():
     assert ft.get("战斗") == "继续战斗"
 
 
+_CFG_CACHE: dict = {}
+
+
+def _cfg_need(name: str) -> dict:
+    """按文件加载 config，读某丹的 ``need``（独立基准：不借用被测模块的加载结果）。"""
+    if "cfg" not in _CFG_CACHE:
+        import types
+
+        pkg = types.ModuleType("_cfg_probe")
+        pkg.__path__ = [str(_DOUPO)]  # type: ignore[attr-defined]
+        sys.modules.setdefault("_cfg_probe", pkg)
+        for sub in ("recipes_data", "config"):
+            key = "_cfg_probe." + sub
+            if key not in sys.modules:
+                _m = _load(_DOUPO / (sub + ".py"), key)
+                sys.modules[key] = _m
+        _CFG_CACHE["cfg"] = sys.modules["_cfg_probe.config"]
+    rec = _CFG_CACHE["cfg"].RECIPE_BY_NAME.get(name) or {}
+    return dict(rec.get("need") or {})
+
+
 def test_item_detail_dynamic_buttons():
-    """查看丹药卡：炼制此丹 + 买第一味材料；非丹药/未知回落通用按钮。"""
+    """查看丹药卡：每味材料一颗「买齐」+ 炼制此丹；非丹药/未知回落通用按钮。
+
+    2026-11-26 用户「底部的按钮应该有全部材料的购买按钮，有的材料需要不止一个，
+    必须保证一次买够」：按钮数不再是「≤5 的固定族」，而是**材料味数 + 3**
+    （最多 6 味 → 9 颗），由 qq_keyboard.wrap_button_rows 自动折行（平台限 5 行）。
+    """
     dan = db.buttons_for_card("item:破厄丹")
     cmds = [b.cmd for b in dan]
     assert "doupo:cbtn:炼制 破厄丹" in cmds, "丹药卡缺炼制按钮：%s" % cmds
     assert any(c.startswith("doupo:cbtn:买 ") for c in cmds), \
         "丹药卡缺买材料按钮：%s" % cmds
     assert "炼药" in cmds and "背包" in cmds
-    assert len(dan) <= 5 and all(not b.primary for b in dan)
+    need = _cfg_need("破厄丹")
+    assert sum(1 for c in cmds if c.startswith("doupo:cbtn:买 ")) == len(need), \
+        "每味材料一颗买齐按钮（材料 %d）：%s" % (len(need), cmds)
+    assert all(c.endswith(" @破厄丹 1") for c in cmds if c.startswith("doupo:cbtn:买 ")), \
+        "买药按钮必须带上下文尾巴（买完能续上炼制）：%s" % cmds
+    assert len(dan) <= 25 and all(not b.primary for b in dan), "超平台上限或有主色按钮"
     assert all(0 < len(b.label) <= 10 for b in dan)
     # 两味不同丹药的炼制按钮带参不同（不能全挂同一个）
     assert "doupo:cbtn:炼制 回灵丹" in [
