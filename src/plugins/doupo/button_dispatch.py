@@ -44,12 +44,11 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "战斗": ("cmd_fight", "qq", "fight_text"),
     "战斗评价": ("cmd_battle_comment", "qq", "battle_text"),
     # 2026-11-25：战斗回执的按钮族里加了「战斗回看」，但这里漏登记 →
-    # 玩家点了没反应（test_doupo_buttons 的守门真抓到了）。
-    # card_key 留空是**故意的**：card.render_battle 签名是 (last_battle, qq)，
-    # 走通用 renderer(p) 分支会把玩家 dict 当 last_battle 渲出假卡
-    # （见下方「每张卡的入参形状不同」那段事故注释）。故走纯文本兜底
-    # cmd_battle_review —— 它本来就返回完整逐招文本。
-    "战斗回看": ("cmd_battle_review", "qq", "review_text"),
+    # 玩家点了没反应（test_doupo_buttons 的守门真抓到了）。当时为避免
+    # renderer(p) 假卡而走 review_text 纯文本兜底；2026-11-26 用户实测
+    # 「原来出卡，现在点按钮只回文字」——改用 battle 键 + 下面专用分支
+    # render_battle_for(qq, p) 出真卡（与手打口令同一渲染真源）。
+    "战斗回看": ("cmd_battle_review", "qq", "battle"),
     # 同批漏掉的第二个：「任务」在战斗回执按钮族里，也没登记。
     "任务": ("cmd_tasks", "qq", "task_panel"),
     # 2026-11-25 晚：任务/主线类按钮（task_panel/main_submit/task_submit 的按钮族）——
@@ -360,6 +359,10 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
             elif card_key == "codex":
                 if p:
                     png = await card_mod.render_codex_for(openid, p)
+            elif card_key == "battle":
+                # render_battle(last_battle, qq) 首参是战报不是玩家 dict；
+                # 统一 renderer(p) 会渲出假卡，故走按 qq 取数的唯一入口。
+                png = await card_mod.render_battle_for(openid, p)
             else:
                 renderer = getattr(card_mod, "render_" + card_key, None)
                 if p and renderer is not None:
@@ -387,6 +390,10 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
     # commands_puppet._arm_deploy_buttons），此处不重复取数——文本入口与按钮入口
     # 共用同一个 arm 点，两边的按钮族不会漂移。
     _kcmd = ("doupo:" + card_key) if card_key else ""
+    if card_key == "battle":
+        # 无战报/出图失败时与手打口令的文本兜底同键，保住「继续战斗/任务」
+        # 三个按钮；不然只挂「战斗评价」，玩家又得手打。
+        _kcmd = "doupo:review_text"
     try:
         await get_channel(OFFICIAL).send(
             full_ctx, Outgoing(text=msg, keyboard_cmd=_kcmd))

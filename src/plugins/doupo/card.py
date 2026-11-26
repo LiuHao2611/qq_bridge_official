@@ -1126,6 +1126,19 @@ async def render_battle(last_battle: dict, qq: str | None = None) -> list[bytes]
                               CARD_BATTLE_NAME, qq=qq)
 
 
+async def render_battle_for(qq: str, p: dict | None) -> list[bytes]:
+    """战斗回看「按玩家取数」的唯一出卡入口（按钮点击用）。
+
+    ``render_battle`` 首参是 ``last_battle`` 而不是玩家 dict —— 按钮分发
+    **不许**统一 ``renderer(p)`` 糊过去（会把玩家当战报渲出假卡，且不报错）。
+    无战报返回 ``[]``，调用方回纯文本兜底，绝不编造卡面。
+    """
+    last = (p or {}).get("last_battle")
+    if not isinstance(last, dict) or not last.get("log"):
+        return []
+    return await render_battle(last, qq=qq)
+
+
 # ---------------------------------------------------------------------------
 # 傀儡卡（2026-11-18）
 # 数据来自 puppet_store 的独立 SQLite 真实列；这里只做展示映射，不重算数值。
