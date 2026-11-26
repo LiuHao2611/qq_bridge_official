@@ -368,7 +368,8 @@ def test_card_shows_guard_panel():
 
 def test_command_layer_uses_same_profile():
     """命令层必须调 guard_profile，不许自己拼一套数字。"""
-    src = open(os.path.join(PLUGINS, "doupo", "commands.py"),
+    # 2026-11-26：cmd_puppet 已从 commands.py 拆到 commands_puppet.py，扫描路径跟着搬家。
+    src = open(os.path.join(PLUGINS, "doupo", "commands_puppet.py"),
                encoding="utf-8").read()
     fn = None
     tree = ast.parse(src)
@@ -539,7 +540,9 @@ def test_awakened_intercepts_small_hits():
 
 def test_awakened_skips_hurt_penalty():
     """有灵＝悍不畏死：自身残血不再乘 0.5 惩罚（源码级钉死整段条件）。"""
-    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
+    # 2026-11-26：fight 内核已从 core.py 搬到 battle_core.py，源码断言必须跟着搬家，
+    # 否则扫 core.py 永远找不到 → 假红（业务实现本身一直在，见 battle_core.py 有灵分支）。
+    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "battle_core.py"),
                encoding="utf-8").read()
     # 🚨 必须钉整段结构：只搜子串会被 `if (True or not ...)` 这种注入骗过（实测白守）。
     check(bool(re.search(r'if \(not _pup_prof\.get\("awakened"\)', src)),

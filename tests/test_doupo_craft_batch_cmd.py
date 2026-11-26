@@ -71,6 +71,9 @@ async def _cmd_test():
     await store.load()
     p = core.create_player(A, "测试", "900001")
     p["alch"] = 8
+    # 2026-11-26：入道空火开局会撞 craft 的「尚未拥有火焰」前置，把 4 条连炼断言
+    # 全挡在门外（夹具过期，非业务 bug）。这里给一盏兽火，与 alchemy_grade 同口径。
+    p["flames"]["紫火"] = 1
     p["last_craft"] = 0
     for mat, qty in cfg.RECIPE_BY_NAME["回灵丹"]["need"].items():
         core.add_item(p, mat, qty * 8)

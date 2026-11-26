@@ -616,6 +616,8 @@ HERBS = [
 # 2026-11-16 原著考据扩充：32 种原著药材（有明确药方的丹药所需）并入宝库
 from .recipes_data import NOVEL_HERBS, NOVEL_RECIPES, GRADE_MIN_LV, RECIPES_PER_PAGE  # noqa: E402
 from .recipes_data import NOVEL_MATERIALS, MATERIAL_TIER_LV, MATERIAL_DROP_RATE, BOSS_KIND_TOKENS  # noqa: E402
+# 描写放 recipes_data：config 已贴 200KB 红线（2026-11-26）
+from .recipes_data import BEAST_ELITE_APPEARANCE  # noqa: E402
 # 天材地宝索引（服丹/炼化入口 + 分级掉落共用唯一数据源）
 MATERIAL_NAMES = [m["name"] for m in NOVEL_MATERIALS]
 MATERIAL_BY_NAME = {m["name"]: m for m in NOVEL_MATERIALS}
@@ -2033,6 +2035,8 @@ CHARACTER_APPEARANCE: dict[str, str] = {
     "远古人傀": "灰白布条缠满的躯体自石座旁立起，软得像旧布，落上去却比玄铁还硬，"
                 "枪尖一点血色在殿中格外刺眼。",
 }
+# 兽火精英 6 只（2026-11-26）：描写在 recipes_data，config 已贴 200KB 红线
+CHARACTER_APPEARANCE.update(BEAST_ELITE_APPEARANCE)
 
 
 def character_appearance(name: str) -> str:

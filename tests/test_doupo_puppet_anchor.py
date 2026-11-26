@@ -140,8 +140,11 @@ def test_command_layer_passes_puppet():
     """
     path = os.path.join(ROOT, "src", "plugins", "doupo", "commands.py")
     tree = ast.parse(open(path, encoding="utf-8").read())
+    # 2026-11-26：裸 fight 内核已搬到 battle_core.fight，命令层不再直接调
+    # core.fight —— 从 want 里移除，改由 battle_core 侧守门（见文件末）。
+    # 其余 5 类仍在 commands.py，且全部带 puppet=。
     want = {"encounter": 1, "tower_floor": 1, "weekly_floor": 1,
-            "nine_star_breakthrough": 1, "duel": 2, "fight": 1}
+            "nine_star_breakthrough": 1, "duel": 2}
     seen = {k: [] for k in want}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -510,11 +513,28 @@ def test_fight_single_source():
     用 ``puppet_attack`` 会漏掉结阵与异火，而 ``monster_scaled`` 的反解是按前者
     让怪变厚的 —— 两处不同源就是「带结阵反而吃亏」（第二轮遗留 bug，本轮修）。
     """
-    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "core.py"),
+    # 2026-11-26：fight 内核从 core.py 搬到 battle_core.py，守门跟着搬家。
+    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "battle_core.py"),
                encoding="utf-8").read()
     check("_pup_atk = _pc0.puppet_expected_damage(" in src,
           "fight 的 _pup_atk 没走 puppet_expected_damage —— 结阵/异火会漏算，"
           "而怪血反解是按它算的，带结阵反而吃亏")
+
+
+def test_battle_core_fight_accepts_puppet():
+    """fight 搬到 battle_core 后仍须接收 puppet —— 补上从 commands.py 移除的那条覆盖。"""
+    src = open(os.path.join(ROOT, "src", "plugins", "doupo", "battle_core.py"),
+               encoding="utf-8").read()
+    tree = ast.parse(src)
+    fn = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "fight":
+            fn = node
+            break
+    check(fn is not None, "battle_core.py 里找不到 fight 定义")
+    if fn is not None:
+        args = {a.arg for a in fn.args.args}
+        check("puppet" in args, "battle_core.fight 签名丢了 puppet —— 傀儡参战会被静默吞")
 
 
 def test_tower_anchors_reference_not_player():
@@ -596,6 +616,7 @@ def _run() -> int:
                test_five_battle_entries_bring_puppet,
                test_card_shows_realm_label,
                test_fight_single_source,
+               test_battle_core_fight_accepts_puppet,
                test_tower_anchors_reference_not_player,
                test_formation_burst_same_tier_three,
                test_formation_burst_low_level_not_zero,

@@ -2658,12 +2658,15 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # 2026-11-16：原著未载药方的丹药没有炼制路径，只能金币购买。
+    # 🚨 必须排在 nofire **之前**（2026-11-26 修）：否则没火的玩家去炼养魂涎会先拿到
+    # 「你尚未拥有火焰」，以为搞到火就能炼，结果还是炼不了 —— 空耗一段养成期待。
+    # 这丹根本不存在炼制路径，与有没有火无关，先如实告知「只能买」。
+    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
+        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     # 空火禁炼药；兽火单方是引火途径，例外
     if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
         return {"ok": False, "reason": "nofire"}
-    # 2026-11-16：原著未载药方的丹药没有炼制路径，只能金币购买
-    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
-        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     now_ts = time.time() if now_ts is None else now_ts
     cd = craft_cd_left(p, now_ts)
     if cd > 0:
@@ -2761,11 +2764,12 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
+    # buyonly 先于 nofire：无药方的丹与有没有火无关，别让玩家空跑一趟（同上）
+    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
+        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     # 兽火单方引火，例外
     if str(rec.get("effect") or "") != "beast_flame" and not _flame_bonus.has_any_flame(p):
         return {"ok": False, "reason": "nofire"}
-    if not rec.get("need") and int(rec.get("buy", 0)) > 0:
-        return {"ok": False, "reason": "buyonly", "buy": int(rec["buy"])}
     now_ts = time.time() if now_ts is None else now_ts
     cd = craft_cd_left(p, now_ts)
     if cd > 0:

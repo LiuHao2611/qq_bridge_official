@@ -154,7 +154,13 @@ def test_image_seg_official_uses_file_image():
 
 
 def test_image_seg_napcat_uses_image():
-    pytest.importorskip("nonebot.adapters.onebot.v11")
+    # 2026-11-26：`importorskip` 只验模块存在，挡不住别的测试文件在模块级
+    # 把 `nonebot.adapters.onebot.v11` 换成空壳 stub（MessageSegment 没有 .image）。
+    # 同进程跑时会拿到假适配器 → 这里显式验真适配器能力，stub 环境跳过而非误报。
+    mod = pytest.importorskip("nonebot.adapters.onebot.v11")
+    seg_cls = getattr(mod, "MessageSegment", None)
+    if seg_cls is None or not hasattr(seg_cls, "image"):
+        pytest.skip("onebot.v11 被别的测试 stub 成空壳，非真适配器")
     seg = gc.image_seg(FakeNapCatEvent(), b"\x89PNG_fake")
     assert getattr(seg, "type", "") == "image"
 

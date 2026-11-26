@@ -45,3 +45,64 @@ def run(coro):
 def anyio_backend():
     """固定用 asyncio 作为 anyio 后端。"""
     return "asyncio"
+
+
+# ---------------------------------------------------------------------------
+# 隐藏失败守门（2026-11-26）：让 check() 只记不抛的脚本在 pytest 下也真红
+# ---------------------------------------------------------------------------
+# 背景：23+ 个脚本式测试文件自带 `check()`，失败只 append 到模块级收集器、不抛
+# 异常。单独 `python 文件.py` 时结尾的 `_run()` 会统计并 exit(1)，但 **pytest 只
+# 收集 test_* 函数、不调 _run()** → 失败全被吞，`pytest tests/` 假绿。
+# 已知因此藏了 12 条失败（craft_batch/puppet_anchor/guard/soul/immersion）。
+#
+# 修法放在 conftest（一处覆盖全部文件、脚本直跑行为零改变）：每个 test 函数
+# 执行后，比对它所在模块的收集器长度，本次新增的失败立刻转成 pytest 失败。
+# 两种收集器形状都支持：
+#   * A 类 `_FAILS/FAILS/fails/FAILED/_failed`：非布尔列表，元素即失败描述
+#   * B 类 `_RES/RESULTS`：装 (name, ok, detail) 三元组，筛 ok=False
+_FAIL_COLLECTORS = ("_FAILS", "FAILS", "fails", "FAILED", "_failed")
+_TUPLE_COLLECTORS = ("_RES", "RESULTS")
+
+
+def _collector_len(module):
+    """返回 {收集器名: 当前条目数}；B 类只数 ok=False 的条目。"""
+    out = {}
+    for name in _FAIL_COLLECTORS:
+        v = getattr(module, name, None)
+        if isinstance(v, (list, tuple, set)):
+            out[name] = len(v)
+    for name in _TUPLE_COLLECTORS:
+        v = getattr(module, name, None)
+        if isinstance(v, (list, tuple)):
+            out[name] = sum(1 for row in v
+                            if isinstance(row, (list, tuple)) and len(row) >= 2
+                            and not row[1])
+    return out
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    """每个用例体跑完后，把 check() 记下的新失败转成 pytest 失败。"""
+    module = getattr(item, "module", None)
+    before = _collector_len(module) if module is not None else {}
+    outcome = yield
+    # 用例自身已经失败时不再重复报，避免噪声盖掉真正的异常栈
+    if outcome.excinfo is not None:
+        return
+    after = _collector_len(module) if module is not None else {}
+    for name, n_after in after.items():
+        delta = n_after - before.get(name, 0)
+        if delta <= 0:
+            continue
+        v = getattr(module, name)
+        # 取本次新增的那几条做错误文案
+        if name in _TUPLE_COLLECTORS:
+            new = [row for row in v
+                   if isinstance(row, (list, tuple)) and len(row) >= 2 and not row[1]][-delta:]
+        else:
+            new = list(v)[-delta:]
+        pytest.fail(
+            "%s 新增 %d 条隐藏失败（check() 只记不抛，已被守门拦截）：\n  %s"
+            % (name, delta, "\n  ".join(str(x)[:200] for x in new)),
+            pytrace=False,
+        )
