@@ -377,7 +377,14 @@ def wrap_button_rows(btns: tuple) -> tuple[tuple, ...]:
 
     * 每行至多 :data:`ROW_MAX_BUTTONS` 个、累计宽度至多 :data:`ROW_MAX_WIDTH`；
     * 单个按钮超宽也独占一行（绝不截断 label）；
-    * 总行数最多 5（QQ 平台硬限）——超出部分并入最后一行（宁可拥挤不丢按钮）。
+    * **总行数最多 5**（QQ 平台硬限）——超了就重新均分，绝不丢按钮。
+
+    2026-11-26 修既有 bug：旧「尾部并成一行」写成
+    ``rows[:4] + [b for r in rows[4:] for b in r]``，把 Btn **对象**摊进了行列表，
+    于是 ``tuple(r) for r in rows`` 撞上裸 Btn 抛 ``TypeError: 'Btn' object is not
+    iterable``——通道侧 try/except 兜住后**整张键盘消失**（按钮全没，还只记一条
+    warning）。触发条件正是「一行放不下、又超过 5 行」的宽按钮卡（如查看六味材料
+    丹药的 9 颗按钮）。改为按行数反算每行个数（``ceil(n/5)``），稳稳压进 5 行。
     """
     rows: list[list] = []
     cur: list = []
@@ -392,7 +399,9 @@ def wrap_button_rows(btns: tuple) -> tuple[tuple, ...]:
     if cur:
         rows.append(cur)
     if len(rows) > 5:
-        rows = rows[:4] + [b for r in rows[4:] for b in r]  # 尾部并成一行
+        flat = [b for r in rows for b in r]
+        per = min(ROW_MAX_BUTTONS, -(-len(flat) // 5))   # 每行至少几个才能压进 5 行
+        rows = [flat[i:i + per] for i in range(0, len(flat), per)]
     return tuple(tuple(r) for r in rows)
 
 

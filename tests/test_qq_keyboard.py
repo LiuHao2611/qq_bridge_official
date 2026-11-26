@@ -451,6 +451,15 @@ def test_wrap_button_rows_by_width():
     assert flat == mix, "换行丢/改了按钮"
     assert len(kb.wrap_button_rows(mix)) <= 5, "超过 5 行平台上限"
 
+    # 2026-11-26 修 bug 的回归：**宽按钮**（一颗就占满 16 宽 → 一行一个）原来会
+    # 撞上「尾部并成一行」的写法，把 Btn 对象摊进行列表 → TypeError → 整张键盘
+    # 消失。真实触发点是查看六味材料丹药卡（9 颗「买万年青灵藤×2」式按钮）。
+    wide = tuple(B("买万年青灵藤×2", "c%d" % i) for i in range(9))
+    rows = kb.wrap_button_rows(wide)
+    assert len(rows) <= 5, "宽按钮组压不进 5 行：%s" % [len(r) for r in rows]
+    assert tuple(b for r in rows for b in r) == wide, "压行时丢了按钮"
+    assert all(len(r) <= 5 for r in rows), "某行超过平台 5 个上限"
+
 
 if __name__ == "__main__":
     import traceback
