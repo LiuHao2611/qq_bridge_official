@@ -113,6 +113,14 @@ class MaterialUploadError(RuntimeError):
 _NET_RETRY = 1
 _NET_RETRY_DELAY = 0.4
 
+#: prepare 单独放宽到 2 次（2026-11-26 线上：一次 30s 窗口里 5 次 prepare 全撞 5s
+#: connect 超时 → 整张卡发不出去）。依据有两条：
+#:   * prepare **幂等**——只为拿 presigned_url，未 complete 的上传任务 4 小时后自然
+#:     失效、不占配额（官方「素材管理」文档），多试几次没有副作用；
+#:   * 连接阶段的失败请求**没到服务端**，不存在「重复创建上传任务」的代价。
+#: 实测多一次尝试就能跨过这种秒级的坏边窗口。PUT 不放宽：单次总超时 30s。
+_PREPARE_RETRIES = 2
+
 #: 视为瞬时网络错误的异常名（httpx 的 ConnectError 里还包着 OSError/gaierror）
 _TRANSIENT_NAMES = frozenset({
     "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
@@ -130,17 +138,21 @@ def _is_transient(e: BaseException, depth: int = 0) -> bool:
     return False
 
 
-async def _retry_net(make_coro, step: str):
-    """执行 ``make_coro()``，遇上瞬时网络错误重试 ``_NET_RETRY`` 次。
+async def _retry_net(make_coro, step: str, retries: int | None = None):
+    """执行 ``make_coro()``，遇上瞬时网络错误重试 ``retries`` 次（默认 ``_NET_RETRY``）。
 
     用工厂而不是现成 coroutine：每次重试都要新建请求对象（适配器会往 Request
     上挂状态，复用同一个对象不安全）。
+
+    ``retries`` 仅供**幂等**步骤放宽（2026-11-26：prepare 给 2 次）。PUT 保持 1 次——
+    它单次总超时就 30s，再多几次会把被动回复窗口吃光。
     """
-    for attempt in range(_NET_RETRY + 1):
+    n = _NET_RETRY if retries is None else max(0, int(retries))
+    for attempt in range(n + 1):
         try:
             return await make_coro()
         except Exception as e:  # noqa: BLE001
-            if attempt >= _NET_RETRY or not _is_transient(e):
+            if attempt >= n or not _is_transient(e):
                 raise
             log.info(jlog("material_net_retry", step=step,
                           error=type(e).__name__, attempt=attempt + 1))
@@ -416,7 +428,8 @@ async def _prepare_once(bot, file_name: str, data: bytes, content_type: str) -> 
         )
 
     async def _attempt():
-        return await _retry_net(lambda: bot._request(_make_req()), "prepare")
+        return await _retry_net(lambda: bot._request(_make_req()), "prepare",
+                                retries=_PREPARE_RETRIES)
 
     try:
         ret = await _prepare_hedged(_attempt)

@@ -58,6 +58,38 @@ GROUP_PREFIX = "official:g:"
 #: 图片下载超时（主项目 7788 在本机，给足但绝不无限等，CLOSE-05）
 _DOWNLOAD_TIMEOUT = 30.0
 
+#: 纯「连接阶段」失败的重发次数（2026-11-26 生产实测，见 _is_connect_phase_error）。
+_SEND_CONNECT_RETRY = 2
+_SEND_RETRY_BASE_DELAY = 0.6
+#: 被动回复只剩这么点寿命就不再重试（重试要花 connect 超时的钱，别把窗口耗穿）
+_SEND_RETRY_MIN_REMAIN = 20.0
+
+
+def _is_connect_phase_error(e: BaseException, depth: int = 0) -> bool:
+    """异常链里是否含「连接阶段失败」（httpx.ConnectError / ConnectTimeout / gaierror）。
+
+    🔴 2026-11-26 线上铁证：``channel_send_failed`` 的 ``duration_ms`` 是
+    5033 / 5031 / 5025 —— 而 nonebot 驱动的 httpx 默认 ``connect=5.0``
+    （read=30.0，见 ``nonebot.internal.driver.model.DEFAULT_TIMEOUT``）。耗时卡在 5s
+    说明**连接压根没建立**，不是服务端慢、也不是报文有问题；同一时刻手测
+    ``api.sgroup.qq.com`` 20/20 次 TLS 握手 140ms 通 —— 是某条边缘 IP 的瞬时不可达
+    （该域按 DNS 轮询多个节点，5GHz 手机重连后可能钉在一条坏边上）。
+
+    连接没建立 ⇒ 请求**绝无到达服务端** ⇒ 重发不会重复投递，这是唯一能安全重试的
+    一类错误。ReadTimeout / WriteTimeout **一律不重试**：那可能是服务端已处理、
+    只是回包丢了，重发会真的给玩家发两条（宁可少发一条，也不重复轰炸）。
+
+    适配器把底层异常包成 ``NetworkError("API request failed") from e``，所以必须顺着
+    ``__cause__``/``__context__`` 往下看，不能只看最外层类名。
+    """
+    if type(e).__name__ in ("ConnectError", "ConnectTimeout", "ConnectionRefusedError",
+                            "gaierror"):
+        return True
+    cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+    if cause is not None and cause is not e and depth < 4:
+        return _is_connect_phase_error(cause, depth + 1)
+    return False
+
 
 def _import_qq():
     """延迟导入官方适配器。
@@ -560,39 +592,61 @@ class OfficialChannel(Channel):
                     ))
                     break
             t0 = time.time()
-            try:
-                # 官方要求 msg_id 与 event_id「二选一」，且 exclude_none 不排空串：
-                # 必须把空串归一为 None，否则按钮场景 (msg_id="", event_id=xxx)
-                # 会同时带两个字段被平台拒。用 `or None` 归一。
-                passive_msg_id = (ref_id or None) if use_passive else None
-                passive_event_id = (ref_event_id or None) if use_passive else None
-                if is_group:
-                    ret = await bot.send_to_group(
-                        group_openid=group_key[len(GROUP_PREFIX):],
-                        message=seg,
-                        msg_id=passive_msg_id,
-                        msg_seq=msg_seq,
-                        event_id=passive_event_id,
-                    )
-                else:
-                    openid = str(ctx.get("user_key", "")).replace(USER_PREFIX, "")
-                    ret = await bot.send_to_c2c(
-                        openid=openid,
-                        message=seg,
-                        msg_id=passive_msg_id,
-                        msg_seq=msg_seq,
-                        event_id=passive_event_id,
-                    )
-            except Exception as e:  # noqa: BLE001 — 记全后返回原因，不静默吞（CLOSE-02）
-                log.error(jlog(
-                    "channel_send_failed",
-                    channel=self.name,
-                    mode="passive" if use_passive else "active",
-                    error=type(e).__name__,
-                    detail=str(e)[:200],
-                    duration_ms=int((time.time() - t0) * 1000),
-                ))
-                return {"ok": False, "reason": "%s: %s" % (type(e).__name__, str(e)[:200])}
+            attempt = 0
+            while True:
+                try:
+                    # 官方要求 msg_id 与 event_id「二选一」，且 exclude_none 不排空串：
+                    # 必须把空串归一为 None，否则按钮场景 (msg_id="", event_id=xxx)
+                    # 会同时带两个字段被平台拒。用 `or None` 归一。
+                    passive_msg_id = (ref_id or None) if use_passive else None
+                    passive_event_id = (ref_event_id or None) if use_passive else None
+                    if is_group:
+                        ret = await bot.send_to_group(
+                            group_openid=group_key[len(GROUP_PREFIX):],
+                            message=seg,
+                            msg_id=passive_msg_id,
+                            msg_seq=msg_seq,
+                            event_id=passive_event_id,
+                        )
+                    else:
+                        openid = str(ctx.get("user_key", "")).replace(USER_PREFIX, "")
+                        ret = await bot.send_to_c2c(
+                            openid=openid,
+                            message=seg,
+                            msg_id=passive_msg_id,
+                            msg_seq=msg_seq,
+                            event_id=passive_event_id,
+                        )
+                    break
+                except Exception as e:  # noqa: BLE001 — 记全后返回原因，不静默吞（CLOSE-02）
+                    # 连接阶段失败才重发（请求没到服务端，绝不重复投递）；判据见
+                    # _is_connect_phase_error 的实测依据。被动窗口快用完时不再试。
+                    remain = max(1, int(Config.OFFICIAL_PASSIVE_MAX_AGE)) - (
+                        time.time() - ref_ts) if passive_ok else 1e9
+                    if attempt < _SEND_CONNECT_RETRY and remain > _SEND_RETRY_MIN_REMAIN \
+                            and _is_connect_phase_error(e):
+                        attempt += 1
+                        log.warning(jlog(
+                            "official_send_connect_retry",
+                            attempt=attempt,
+                            error=type(e).__name__,
+                            duration_ms=int((time.time() - t0) * 1000),
+                            trace_id=ctx.get("trace_id", ""),
+                        ))
+                        await asyncio.sleep(_SEND_RETRY_BASE_DELAY * attempt)
+                        if passive_ok:
+                            msg_seq = next_msg_seq(ref)   # 新连接必须换新 seq，防平台去重
+                        continue
+                    log.error(jlog(
+                        "channel_send_failed",
+                        channel=self.name,
+                        mode="passive" if use_passive else "active",
+                        error=type(e).__name__,
+                        detail=str(e)[:200],
+                        duration_ms=int((time.time() - t0) * 1000),
+                        attempts=attempt + 1,
+                    ))
+                    return {"ok": False, "reason": "%s: %s" % (type(e).__name__, str(e)[:200])}
 
             if not use_passive and is_group:
                 official_limiter.add(group_key)

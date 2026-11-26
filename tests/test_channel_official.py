@@ -663,3 +663,85 @@ def test_channel_of_bot_without_adapter(monkeypatch):
     # 适配器未安装 → 一律判为 NapCat，绝不把官方事件误判成官方通道
     monkeypatch.setattr(channel_pkg, "_official_bot_cls", lambda: None)
     assert channel_of_bot(FakeBot()) == NAP_CAT
+
+
+# ------------------------------------------------- 6) 连接阶段失败的有界重发
+# 2026-11-26 线上事故（用户「报错了」）：13:30 两张卡全丢，日志
+#   channel_send_failed ... duration_ms=5033 / 5031 / 5025
+# nonebot 驱动 httpx 默认 connect=5.0（read=30s）——耗时卡在 5s 说明**连接没建立**，
+# 请求根本没到服务端。故只对这一类失败重发，且每次换新 msg_seq（防平台去重）。
+class ConnectTimeout(Exception):
+    """名字即判据（_is_connect_phase_error 按类名识别，不 import httpx）。"""
+
+
+class ReadTimeout(Exception):
+    """回包阶段超时：服务端可能已处理，**绝不重发**（会重复发消息）。"""
+
+
+class NetworkError(Exception):
+    """模拟适配器包装：NetworkError("API request failed") from <底层异常>。"""
+
+
+def _group_event_and_outgoing():
+    from src.plugins.qq_bridge.channel.base import Outgoing
+
+    return _ctx_of(FakeGroupAtEvent()), Outgoing(text="你好")
+
+
+def test_connect_phase_classifier_walks_cause_chain():
+    assert official_mod._is_connect_phase_error(ConnectTimeout("x"))
+    assert not official_mod._is_connect_phase_error(ReadTimeout("x"))
+    try:
+        try:
+            raise ConnectTimeout("x")
+        except Exception as inner:      # noqa: BLE001 — 模拟适配器 from e 包装
+            raise NetworkError("API request failed") from inner
+    except NetworkError as err:
+        assert official_mod._is_connect_phase_error(err), \
+            "适配器把底层异常包成 NetworkError 后，仍必须判出是连接失败"
+
+
+def test_send_retries_connect_timeout_then_succeeds(patched, monkeypatch):
+    monkeypatch.setattr(official_mod, "_SEND_RETRY_BASE_DELAY", 0)
+
+    class FlakyBot(FakeBot):
+        def __init__(self):
+            super().__init__()
+            self.attempts = []
+
+        async def send_to_group(self, group_openid, message, msg_id=None, msg_seq=None,
+                                event_id=None, msg_ref_id=None):
+            self.attempts.append(msg_seq)
+            if len(self.attempts) <= 2:
+                raise ConnectTimeout("connect timed out")
+            return await super().send_to_group(
+                group_openid, message, msg_id=msg_id, msg_seq=msg_seq, event_id=event_id)
+
+    bot = FlakyBot()
+    patched["bot"] = bot
+    ctx, out = _group_event_and_outgoing()
+    ret = asyncio.run(get_channel(OFFICIAL).send(ctx, out))
+    assert ret["ok"] is True, ret
+    assert len(bot.attempts) == 3, bot.attempts
+    # 每次重发必须换新 msg_seq：同一 msg_id 下重复 seq 会被平台按去重拒收
+    assert bot.attempts == [1, 2, 3], bot.attempts
+
+
+def test_send_does_not_retry_read_timeout(patched, monkeypatch):
+    monkeypatch.setattr(official_mod, "_SEND_RETRY_BASE_DELAY", 0)
+
+    class SlowBot(FakeBot):
+        def __init__(self):
+            super().__init__()
+            self.attempts = []
+
+        async def send_to_group(self, *a, **k):
+            self.attempts.append(1)
+            raise ReadTimeout("read timed out")
+
+    bot = SlowBot()
+    patched["bot"] = bot
+    ctx, out = _group_event_and_outgoing()
+    ret = asyncio.run(get_channel(OFFICIAL).send(ctx, out))
+    assert ret["ok"] is False, "读超时必须如实失败，不能假装成功"
+    assert len(bot.attempts) == 1, "读超时绝不许重发（会重复投递）"
