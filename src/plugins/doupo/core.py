@@ -518,6 +518,22 @@ def tower_add_energy(st: dict, n: int) -> int:
     return n
 
 
+def _exit_tower_clean(st: dict, res: dict, now: float) -> dict:
+    """出塔零头清理：没有整块可结算时，也必须真的离塔。
+
+    2026-11-26 第二玩家黑盒 N1：玩家第 2 天发「出塔」，回包写「本次 0 分钟」，
+    走的正是 ``alchemy_settle`` 里 ``minutes<=0`` 的提前 return；那个分支没清
+    ``in_tower``，于是第 10 天「修炼」仍被挡「你正在塔中」。这里把「离塔」收敛
+    成单一出口：清标记 + 从出塔这一刻重新起算冷却（零头不挂钟，同主动出塔尾段）。
+    """
+    st["in_tower"] = 0
+    st["last_ts"] = now
+    res.update({"mode": "settle", "in_tower": False, "minutes": 0, "gain": 0,
+                "energy": int(st.get("fire_energy", 0)),
+                "poison": int(st.get("fire_poison", 0))})
+    return res
+
+
 def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
     """进塔 / 续修 / 出塔的一次结算（原地改 ``st``，返回给玩家的账）。
 
@@ -574,6 +590,8 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
     per = int(cfg.TOWER_MINUTES_PER_ENERGY)
     can_min = energy * per
     if minutes <= 0:
+        if not entering:
+            return _exit_tower_clean(st, res, now)
         res["mode"] = "wait"
         res["in_tower"] = True
         return res
@@ -591,6 +609,8 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
     per = max(1, per)
     blocks = minutes // per
     if blocks <= 0:
+        if not entering:
+            return _exit_tower_clean(st, res, now)
         res["mode"] = "wait"
         res["in_tower"] = True
         res["energy"] = energy
@@ -2858,8 +2878,16 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
             exp += int(cfg.CRAFT_EXP // 2 * exp_factor)
 
     if n_done == 0:
-        return {"ok": False, "reason": limited or "mat", "rate": rate,
-                "diff": diff, "n_done": 0}
+        # 2026-11-26 第二玩家黑盒 N2：连炼一炉没开成时必须带**缺料明细**，
+        # 口径与单发 craft 逐字一致（{药}×{需}(有{有})），否则命令层只能回
+        # 泛化的「炉中火候难成」，玩家不知道去宝库买什么。
+        out = {"ok": False, "reason": limited or "mat", "rate": rate,
+               "diff": diff, "n_done": 0}
+        if limited == "mat":
+            out["missing"] = [f"{mat}×{qty}(有{count_item(p, mat)})"
+                              for mat, qty in rec["need"].items()
+                              if count_item(p, mat) < qty]
+        return out
 
     p["alch_exp"] = int(p.get("alch_exp", 0)) + exp
     alch_up = _alch_level_up(p)

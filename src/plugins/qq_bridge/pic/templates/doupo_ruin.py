@@ -102,6 +102,13 @@ def _rich(data: dict) -> bool:
     return bool(data.get("stage_cards"))
 
 
+# 2026-11-26 黑盒 N4：未解锁段的底是**固定深紫** #241E3C（见 _status_bg），
+# 但文字色原先跟随主题：浅色主题下 text/dim 是深墨色 → 深底深字几乎看不见。
+# 未解锁段文字改用与底色绑定的固定浅色，跟主题解耦（与游戏风 G 表同源）。
+_LOCKED_FG = "#EDE7FA"    # 段名（深底上的亮字）
+_LOCKED_SUB = "#C3B9E0"   # 描述 / 掉落（次亮，仍清晰可读）
+
+
 def _status_color(p: dict, status: str) -> str:
     """语义色：已通关=金 / 可挑战=玫红 / 未解锁=灰紫（与 :func:`doupo_ui.panel` 同源）。
 
@@ -112,7 +119,7 @@ def _status_color(p: dict, status: str) -> str:
         return p["gold"]
     if status == "current":
         return p["fret_hi"]
-    return p["weak"]
+    return _LOCKED_SUB        # 未解锁 chip 文字也要在深底上读得清
 
 
 def _status_bg(p: dict, status: str) -> str:
@@ -148,8 +155,16 @@ def _ruin_plan(data: dict, content_w: int) -> dict:
     if runs:
         wins = [r for r in runs if r.get("win")]
         loss = next((r for r in runs if not r.get("win")), None)
-        run_rows.append(("今日累计 %d/%d 段 · 本次再连胜 %d 段" % (done, total, len(wins)),
-                         "accent"))
+        # 2026-11-26 黑盒 N4：旧口径「今日累计 0/7 · 本次再连胜 0 段」与下面
+        # 「1·魔炎谷库房 力竭」并列，玩家看不懂是没打还是打了没过。有力竭时
+        # 明说「本趟止步第 N 段」，与累计进度区分开。
+        if loss is not None:
+            _lost_no = int(loss.get("stage_idx") or 0) + 1
+            run_rows.append(("今日累计 %d/%d 段 · 本趟止步第 %d 段" % (done, total, _lost_no),
+                             "accent"))
+        else:
+            run_rows.append(("今日累计 %d/%d 段 · 本次再连胜 %d 段" % (done, total, len(wins)),
+                             "accent"))
         for r in runs:
             idx = int(r.get("stage_idx") or 0) + 1
             name = str(r.get("stage_name") or "傀儡遗迹")
@@ -270,7 +285,7 @@ def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec
     name_max = content_w - (name_x - x0) - SEG_PAD - SEG_STATUS_W - SEG_INNER_GAP
     name = _fit(str(s.get("name") or ""), name_max, FS_SEG, "kai")
     UI.kai_text(c, (name_x, ocy), name, FS_SEG,
-                p["gold_hi"] if status != "locked" else p["dim"], anchor="lm")
+                p["gold_hi"] if status != "locked" else _LOCKED_FG, anchor="lm")
     rec("seg%d_name" % idx, name, name_x, ocy - FS_SEG // 2, FS_SEG)
 
     st_txt = str(s.get("status_text") or "")
@@ -293,13 +308,15 @@ def _draw_seg(c: Canvas, sp: dict, x0: int, y: int, content_w: int, p: dict, rec
     dy = y + SEG_PAD + SEG_HEAD_H
     for li, line in enumerate(sp["desc_lines"]):
         c.text((x0 + SEG_PAD, dy + LINE_H // 2), line, size=FS_BODY,
-               color=p["text"] if status != "locked" else p["dim"],
+               color=p["text"] if status != "locked" else _LOCKED_SUB,
                role="regular", anchor="lm")
         rec("seg%d_desc%d" % (idx, li), line, x0 + SEG_PAD, dy + LINE_H // 2, FS_BODY)
         dy += LINE_H
     # 怪物 / 掉落行。
+    # 2026-11-26 黑盒 N4：未解锁行旧色 weak（#8E86AC）压在深紫底 #241E3C 上
+    # 几乎读不清，提到 dim（#BAB0DA）——新手能看清要攒什么材料才解锁。
     c.text((x0 + SEG_PAD, dy + SEG_META_H // 2), sp["meta"], size=FS_BODY,
-           color=p["cyan"] if status != "locked" else p["weak"],
+           color=p["cyan"] if status != "locked" else _LOCKED_SUB,
            role="regular", anchor="lm")
     rec("seg%d_meta" % idx, sp["meta"], x0 + SEG_PAD, dy + SEG_META_H // 2, FS_BODY)
 

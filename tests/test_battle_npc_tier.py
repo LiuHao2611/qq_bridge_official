@@ -55,8 +55,10 @@ def test_tier_lines_match_situation():
     lose = txt.npc_line(1, 0, "lose")
     narrow = txt.npc_line(1, 0, "narrow")
     crush = txt.npc_line(1, 0, "crush")
-    # 败局：药老先夸「不错」，给败局玩家一点正反馈
-    assert "不错" in lose, lose
+    # 败局：药老以「你成长了不是」宽慰（2026-11-26 换掉旧的「强化吸掌」句——
+    # 新手学的不是吸掌，那句听着串戏；新句仍是逐字原文、不绑定任何斗技名）
+    assert "成长" in lose, lose
+    assert "吸掌" not in lose, lose
     # 惨胜：讲「斗技有什么了不起」的淡然宽慰
     assert "斗技" in narrow, narrow
     # 越级：护短式「功法独特」的得意

@@ -21,8 +21,10 @@ prove-it 反证（把任一处改回去，本文件必红）：
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,7 +55,8 @@ for _p in (ROOT, os.path.join(ROOT, "src", "plugins")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from doupo import config as cfg, core, puppet_core as pc  # noqa: E402
+from doupo import commands, config as cfg, core, puppet_core as pc  # noqa: E402
+from doupo.store import Store  # noqa: E402
 
 os.environ["DOUPO_CHANCE_RATE"] = "0"
 
@@ -208,6 +211,91 @@ def test_newbie_still_blocked():
 
 
 # ---------------------------------------------------------------------------
+# 4. 主线渲染：进度封顶 + 门槛可执行提示（2026-11-26 黑盒 P1/P7）
+# ---------------------------------------------------------------------------
+def test_main_progress_display_capped_at_target():
+    """超额完成（main_progress=5、target=3）不许显示「5/3 进度条满格」。"""
+    t = cfg.MAIN_TASKS[0]
+    with tempfile.TemporaryDirectory(prefix="main_cap_") as d:
+        s = Store(path=os.path.join(d, "doupo.json"))
+        asyncio.run(s.load())
+        p = core.create_player("QCAP", "测试", "群")
+        p["main_idx"] = cfg.MAIN_TASKS.index(t)
+        p["main_progress"] = int(t["target"]) + 2   # 超额 2
+        p["weapon"] = 0
+        asyncio.run(s.put_player(p))
+        txt = asyncio.run(commands.cmd_tasks(s, "QCAP"))
+        assert "5/3" not in txt and f"/{t['target']}" in txt, txt
+        assert "进度 %s/%s" % (t["target"], t["target"]) in txt, txt
+
+
+def test_exp_display_capped_when_overflow():
+    """2026-11-26 黑盒 P3：修为远超升级所需时，文本/人物卡都不许显示超大分子。"""
+    with tempfile.TemporaryDirectory(prefix="exp_cap_") as d:
+        s = Store(path=os.path.join(d, "doupo.json"))
+        asyncio.run(s.load())
+        p = core.create_player("QEXP", "测试", "群")
+        p["lv"] = 2
+        p["exp"] = cfg.exp_need(2) * 20 + 86     # 故意造一个 8000+/400 的溢出值
+        p["last_settle"] = 10 ** 9               # 别让 settle 把 exp 结算掉
+        asyncio.run(s.put_player(p))
+        cult = asyncio.run(commands.cmd_cultivate(s, "QEXP"))
+        panel = asyncio.run(commands.cmd_panel(s, "QEXP"))
+        huge = str(cfg.exp_need(2) * 20 + 86)
+        assert huge not in cult, cult
+        assert huge not in panel, panel
+        assert "%s/%s" % (cfg.exp_need(2), cfg.exp_need(2)) in cult, cult
+
+
+def test_exp_template_caps_shown_exp():
+    """人物卡模板：可突破时分子封顶（源码级守门，防改回直接打印 exp）。"""
+    import pathlib
+    tpl = (pathlib.Path(ROOT) / "src" / "plugins" / "qq_bridge" / "pic"
+           / "templates" / "doupo.py").read_text(encoding="utf-8")
+    assert "shown_exp = min(exp, need)" in tpl, "模板必须把修为分子封顶到 need"
+
+
+def test_newbie_flame_hint_matches_direct_claim():
+    """2026-11-26 黑盒 N3：入道文案不许再说「异火不会凭空而来」，
+    因为 B 线兽火（如火云水炎）发「收服 <火名>」就能直接拿到。"""
+    import pathlib
+    src = (pathlib.Path(ROOT) / "src" / "plugins" / "doupo"
+           / "commands.py").read_text(encoding="utf-8")
+    assert "不会凭空而来" not in src, "入道引导仍与「收服即得」冲突"
+    assert "寻常兽火发「收服 <火名>」" in src, "入道引导要说明可直接收服寻常火"
+    # 行为：B 线火真能直接收服（不是只改文案骗人）
+    b_flame = "火云水炎"
+    assert (getattr(cfg, "FLAME_TIER", {}) or {}).get(b_flame) != "S", \
+        "测试前提：火云水炎须为非 S 线（可直接收服）"
+
+
+def test_common_unimplemented_cmds_never_silent():
+    """2026-11-26 黑盒 P8：8 条高频非菜单口令必须有回包，不许再静默。"""
+    import pathlib
+    init = (pathlib.Path(ROOT) / "src" / "plugins" / "doupo"
+            / "__init__.py").read_text(encoding="utf-8")
+    assert "_unimplemented = on_regex(" in init, "缺少兜底 matcher"
+    for kw in ("主线任务", "战力", "闭关", "成就", "签到", "炼器", "驯兽", "擂台"):
+        assert '"%s":' % kw in init, "%s 未登记引导文案" % kw
+
+
+def test_main_lv_hint_tells_remaining_breakthroughs():
+    """任务达标但境界不足：提示必须给出「还差 N 次突破」，不是只说「先战斗」。"""
+    t = next(x for x in cfg.MAIN_TASKS if int(x.get("require_lv") or 0) > 1)
+    need = int(t["require_lv"])
+    with tempfile.TemporaryDirectory(prefix="main_hint_") as d:
+        s = Store(path=os.path.join(d, "doupo.json"))
+        asyncio.run(s.load())
+        p = core.create_player("QHINT", "测试", "群")
+        p["main_idx"] = cfg.MAIN_TASKS.index(t)
+        p["main_progress"] = int(t["target"])       # 条件达标
+        p["lv"] = 2                                  # 境界不足
+        asyncio.run(s.put_player(p))
+        txt = asyncio.run(commands.cmd_main_submit(s, "QHINT"))
+        assert "还差 %d 次突破" % (need - 2) in txt, txt
+        assert "先发「战斗」历练" not in txt, txt
+
+
 def _main() -> int:
     fns = [(n, f) for n, f in globals().items()
            if n.startswith("test_") and callable(f)]

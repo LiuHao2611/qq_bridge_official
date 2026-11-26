@@ -223,6 +223,42 @@ def test_build_and_render_recipes_card():
     assert png and png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000
 
 
+def test_recipes_card_first_fire_hint():
+    """2026-11-26 黑盒 P5：新手无火无料时首屏要给「火从哪来/药去哪买」引导；
+    有可炼丹方时不打扰（用户明确要求卡面别写废话）。"""
+    fresh = card.build_recipes_data(_player(1), 1)   # 无火无料
+    assert "火" in fresh["tip"] and "宝库" in fresh["tip"], fresh["tip"]
+    # 造一个真的可炼的玩家（有火 + 备齐回灵丹材料）
+    p = _player(4)
+    p["flames"]["紫火"] = 1
+    for k in cfg.RECIPE_BY_NAME["回灵丹"]["need"]:
+        core.add_item(p, k, 99)
+    d = card.build_recipes_data(p, 1)
+    assert any(r["ready"] for g in d["groups"] for r in g["rows"]), "前提：有可炼丹方"
+    assert "宝库买" not in d["tip"], d["tip"]
+
+
+def test_ruin_card_locked_rows_readable_and_loss_label():
+    """2026-11-26 黑盒 N4：未解锁段文字固定浅色（与主题解耦，深底可读）；
+    本次挑战有力竭时首行写「本趟止步第 N 段」而非「再连胜 0 段」。"""
+    import pathlib
+    tpl = (pathlib.Path(REPO_ROOT) / "src" / "plugins" / "qq_bridge" / "pic"
+           / "templates" / "doupo_ruin.py").read_text(encoding="utf-8")
+    assert "_LOCKED_FG = " in tpl and "_LOCKED_SUB = " in tpl, "未解锁段需固定浅色"
+    assert 'color=p["cyan"] if status != "locked" else _LOCKED_SUB' in tpl, \
+        "掉落行未解锁色必须用固定浅色"
+    assert "本趟止步第 %d 段" in tpl, "力竭时要有可理解的止步提示"
+    # 渲染不炸（report 含一段力竭）
+    st = {"stage": 0}
+    rep = {"runs": [{"stage_idx": 0, "stage_name": "魔炎谷库房", "win": False,
+                     "rounds": 1, "taken": 0, "mon_hp_left": 14296, "drops": {}}],
+           "cleared": False}
+    d = card.build_ruin_data(st, "2026-11-26", rep)
+    assert d["stage_cards"][1]["status"] == "locked"
+    png = asyncio.run(card.render_ruin(st, "2026-11-26", rep))
+    assert png and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_recipes_card_level_filter():
     """等级不够的丹药完全不展示：lv1 不得出现高阶丹，lv103 才见帝品。"""
     low = card.build_recipes_data(_player(1), 1)

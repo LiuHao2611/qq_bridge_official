@@ -561,7 +561,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "阶位分三档 —— 普通（黄阶/玄阶）· 高阶（地阶/天阶）· 特殊（秘法/血脉/体质/异火）",
         "上阵最多 4 门，三阶任意搭配（后期可四门全特殊）",
         "战斗与掠夺每回合在「已上阵且斗气够」的技里随机放一门",
-        "斗气按阶扣：普通 20% ｜ 高阶 34% ｜ 特殊 50%（占 mp_max）",
+        "斗气按阶扣：普通 20% ｜ 高阶 34% ｜ 特殊 50%（占气海上限）",
         "斗气不够放任何一门 → 强制武器普攻，伤害大减且持续掉血",
         "升一级伤害 +20%（耗焚血散，最高 5 级）；同名技跨宗共享等级",
         "入道只领悟 1 门低阶技，其余靠「学斗技」逐个领悟：达解锁等级+战力门槛、花金币，随机得一门未学技",
@@ -627,7 +627,8 @@ async def cmd_enter(store, qq, name, gid) -> str:
         f"【{cfg.full_realm(1)}】\n"
         "手中握着那柄黑黝黝的巨尺「玄重尺」。\n"
         f"初入门径，只领悟了一门【{first}】——斗技要一门门学，不可贪多。\n"
-        "异火举世罕见，不会凭空而来——九星突破战胜强敌，或炼制兽火单方，方得一火。\n"
+        "火有寻常与绝世之别：寻常兽火发「收服 <火名>」便能纳入掌中，"
+        "绝世异火须九星突破胜过强敌、炼制兽火单方，或修为机缘到了方可得。\n"
         "\n"
         "发送「人物」看面板，「战斗」试刀，「学斗技」领悟新斗技，「帮助」看全部规则。"
     )
@@ -643,7 +644,10 @@ async def cmd_panel(store, qq) -> str:
     st = core.stats(p)
     lv = int(p["lv"])
     need = cfg.exp_need(lv)
-    exp_line = f"{_fmt(p['exp'])}/{_fmt(need)}" if need else f"{_fmt(p['exp'])}（已至巅峰）"
+    # 2026-11-26 黑盒 P3：修为溢出时分子封顶，别再显示 84486/400 这种怪数字。
+    _shown_exp = min(int(p["exp"]), need) if need else int(p["exp"])
+    exp_line = (f"{_fmt(_shown_exp)}/{_fmt(need)}" if need
+                else f"{_fmt(_shown_exp)}（已至巅峰）")
     _alch_idx = int(p.get("alch", 0))
     alch_label = cfg.alch_label(_alch_idx)
     alch_need = cfg.alch_tier(_alch_idx)[1]
@@ -652,7 +656,7 @@ async def cmd_panel(store, qq) -> str:
     rows = [
         f"👤 【{p['name']}】",
         f"境界　{cfg.full_realm(lv)}",
-        f"　　　{exp_line}　{_bar(int(p['exp']), need)}",
+        f"　　　{exp_line}　{_bar(_shown_exp, need)}",
         f"炼药　{alch_label}",
         f"　　　{_fmt(p.get('alch_exp', 0))}/{_fmt(alch_need) if alch_need else '—'}"
         f"　{_bar(int(p.get('alch_exp', 0)), alch_need)}",
@@ -721,7 +725,9 @@ async def cmd_cultivate(store, qq) -> str:
     tip = "，可发送「突破」晋升" if core.can_level(p) else ""
     head = (txt.cultivate(res["minutes"], _fmt(res["gain"]))
             if res["gain"] else "🧘 你刚调息过，气机未动。")
-    return (f"{head}\n修为 {_fmt(p['exp'])}/{_fmt(need) if need else '—'}{tip}\n"
+    # 2026-11-26 黑盒 P3：可突破时 exp 远超 need，分子封顶到 need。
+    _shown_exp = min(int(p["exp"]), need) if need else int(p["exp"])
+    return (f"{head}\n修为 {_fmt(_shown_exp)}/{_fmt(need) if need else '—'}{tip}\n"
             f"当前：{cfg.full_realm(lv)}\n"
             f"（想快些可发「入塔」借心火成倍修炼，需火能与火晶卡）")
 
@@ -1023,18 +1029,23 @@ async def cmd_fight(store, qq) -> str:
     # 代表敌人取等级最高那位（与 foes 同源），招式/品阶取最强一击（与 💥 行同源）。
     _foe_kind = str(max(detail, key=lambda x: int(x.get("lv") or 0)).get("kind") or "") \
         if detail else ""
-    for _flavor_line in _flavor.flavor_lines({
-            "win": bool(res.get("win")),
-            "tier": _wt,
-            "realm_idx": cfg.realm_index(lv),
-            "foe_kind": _foe_kind,
-            "move": str(high.get("move") or ""),
-            "move_tier": str(high.get("tier") or ""),
-            "has_puppet": bool(pup_hits),
-            "rounds": int(res.get("rounds") or 0),
-            "seed": _seed,
-    }):
-        lines.append("　" + _flavor_line)
+    # 2026-11-26 黑盒 P6：斗之气阶段（realm_idx=0）是纯新手期，出「别急我在卡点/
+    # 神清气爽」这类老油条梗很违和。整段跳过梗句；升到斗者及以上才启用。
+    # 只在这里挡，battle_flavor 的纯门控与其测试保持逐字不变。
+    _realm_idx = cfg.realm_index(lv)
+    if _realm_idx > 0:
+        for _flavor_line in _flavor.flavor_lines({
+                "win": bool(res.get("win")),
+                "tier": _wt,
+                "realm_idx": _realm_idx,
+                "foe_kind": _foe_kind,
+                "move": str(high.get("move") or ""),
+                "move_tier": str(high.get("tier") or ""),
+                "has_puppet": bool(pup_hits),
+                "rounds": int(res.get("rounds") or 0),
+                "seed": _seed,
+        }):
+            lines.append("　" + _flavor_line)
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append(txt.battle_hero_aid())
@@ -1152,7 +1163,7 @@ async def cmd_skills(store, qq) -> str:
                 and e["name"] not in lo_names and e.get("origin") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·mp_max")
+        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}")
@@ -1162,7 +1173,7 @@ async def cmd_skills(store, qq) -> str:
               if (e.get("faction") == "异火" or e.get("origin") == "异火")
               and e["name"] not in lo_names]
     if flames:
-        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
+        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·气海　收服即解锁")
         for e in flames:
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·已领悟，可上阵）")
 
@@ -1194,7 +1205,7 @@ async def cmd_faction_skills(store, qq) -> str:
         rows = [e for e in pool if e["tier"] == tier and e.get("faction") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·mp_max")
+        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             mark = ("★上阵" if e["equipped"] else
@@ -1203,7 +1214,7 @@ async def cmd_faction_skills(store, qq) -> str:
             out.append(f"　{tag}{e['name']} Lv{lv}（lv{e['unlock']} 解锁·{mark}）")
     flames = [e for e in pool if e.get("faction") == "异火"]
     if flames:
-        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·mp_max　收服即解锁")
+        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·气海　收服即解锁")
         for e in flames:
             mark = "★上阵" if e["equipped"] else "已领悟（收服即会）"
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
@@ -1271,7 +1282,7 @@ async def cmd_skill_info(store, qq, name) -> str:
         state = "可学（未领悟）" if hit.get("unlocked") else "未解锁"
 
     # 只有真打得出去的技才显示伤害系数；功法/增益/技艺的 130% 是倍率不是伤害，写出来会误导
-    nfmt = f"斗气 {int(hit['mp'] * 100)}%·mp_max ｜ 冷却 {hit.get('cd', '-')} 回合"
+    nfmt = f"斗气 {int(hit['mp'] * 100)}%·气海 ｜ 冷却 {hit.get('cd', '-')} 回合"
     if hit.get("kind") in ("攻击", "控制", "召唤", "秘法"):
         nfmt += f" ｜ 基础 {int(hit['dmg'] * 100)}% ｜ 当前约 {dmg} 伤害"
     else:
@@ -2013,9 +2024,13 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
         await store.put_player(p)
         return txt.craft_cd(res["left"])
     if not res.get("ok"):
-        # craft_batch 的 not-ok 只有 nodrug / buyonly / cd / nofire；mat/mp 是 limited。
+        # craft_batch 的 not-ok：nodrug / buyonly / cd / nofire / mat / mp。
+        # 2026-11-26 黑盒 N2：缺料走与单发逐字一致的 craft_mat（带「缺什么」），
+        # 斗气不足走 craft_mp；都不再落到泛化的「炉中火候难成」。
         if res.get("reason") == "mat" and res.get("missing"):
             return txt.craft_mat("、".join(res["missing"]))
+        if res.get("reason") == "mp":
+            return txt.craft_mp()
         return txt.craft_generic_fail()
 
     # 任务推进按实际成功炉数（一炉一丹，成功才算练手）
@@ -2472,12 +2487,17 @@ async def cmd_furnace_exit(store, qq) -> str:
     res = core.alchemy_settle(p, st, entering=False)
     await store.set_tower_state(str(qq), st)
     await store.put_player(p)
+    poison = int(res["poison"])
+    # 2026-11-26 第二玩家黑盒 N1：出塔时火毒已归零就不能再说「火毒未散，须歇一夜」
+    # ——玩家刚出门却被劝"歇一夜"，与火毒 0/100 自相矛盾。
+    cool_tail = ("火毒未散，须歇一夜。" if poison > 0
+                 else "火毒已清，随时可再入塔。")
     lines = [_tower_head(st),
              f"🚪 你退出天焚炼气塔（本次 {res['minutes']} 分钟，修为 +{res['gain']}）",
-             f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
+             f"　火能 {res['energy']}　火毒 {poison}/{int(cfg.TOWER_POISON_CAP)}"
              f"（本次修炼 +{res['poison_add']}）",
              f"　离开后每分钟火毒 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}，"
-             f"冷却完再来（火毒未散，须歇一夜）。"]
+             f"{cool_tail}"]
     return "\n".join(lines)
 
 
@@ -2621,14 +2641,22 @@ async def cmd_tasks(store, qq) -> str:
         # 2026-11-20：进度必须走 core.main_value —— 武器类是「状态要求」，
         # 玩家在任务轮到之前就练满时事件计数恒 0（用户反馈的真 bug）。
         cur = core.main_value(p)
+        # 2026-11-26 黑盒 P1/P3：超额完成（如 5/3）会显示「5/3 进度条满格」，
+        # 看着像 bug。这里显示封顶到目标，玩家只关心「到没到」；core 内部仍保留
+        # 真实计数（main_submit 照常判定达标），不丢数据。
+        _shown = min(int(cur), int(m["target"]))
         out.append(f"【主线·{m['name']}】{m['desc']}")
-        out.append(f"　进度 {cur}/{m['target']}　{_bar(cur, m['target'])}")
+        out.append(f"　进度 {_shown}/{m['target']}　{_bar(_shown, m['target'])}")
         # 2026-11-25 章节门槛：交任务必须达到本章境界上限，明写出来别让玩家干试。
         _need = int(m.get("require_lv") or 0)
         if _need:
             _lv_now = int(p["lv"])
             _mark = "✓已达" if _lv_now >= _need else "（当前 %s）" % cfg.full_realm(_lv_now)
             out.append(f"　境界要求 {cfg.full_realm(_need)}　{_mark}")
+            _gap = max(0, _need - _lv_now)
+            if _gap:
+                out.append(f"　还差 {_gap} 次突破——修为满时发「突破」，"
+                           f"九星关隘需先胜过一名强敌。")
         rw = m["reward"]
         out.append(f"　奖励：{rw['gold']} 金 / {rw['exp']} 修为 / 机缘 +{rw['luck']}")
     else:
@@ -2688,11 +2716,16 @@ async def cmd_main_submit(store, qq) -> str:
             return "主线已全部完成，你已是此界巅峰。"
         if res.get("reason") == "lv":
             # 2026-11-25 章节门槛：任务达成但境界不够，明确告诉玩家还差什么。
+            # 2026-11-26 黑盒 P7：旧口径只说「修为未到，先发战斗」，玩家不知道
+            # 到底要打几场、升几级。改为给出还差几次突破的可执行目标。
             _t = res["task"]
+            _need_lv = int(res["need_lv"])
+            _lv_now = int(res["lv"])
+            _gap = max(0, _need_lv - _lv_now)
             return (f"主线【{_t['name']}】已达成，但修为未到——\n"
-                    f"　需【{cfg.full_realm(int(res['need_lv']))}】"
-                    f"（当前【{cfg.full_realm(int(res['lv']))}】）\n"
-                    "　先发「战斗」历练，境界到了再交。")
+                    f"　需【{cfg.full_realm(_need_lv)}】"
+                    f"（当前【{cfg.full_realm(_lv_now)}】），还差 {_gap} 次突破。\n"
+                    "　发「修炼」攒修为、满了发「突破」；九星关隘须先胜过一名强敌。")
         t = res["task"]
         return f"主线未完成：{t['name']}（{res.get('progress', 0)}/{t['target']}）"
     rw = res["reward"]

@@ -380,11 +380,14 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         exp_txt = f"{exp} 修为（已至巅峰）"
         pct = 100
     else:
+        # 2026-11-26 黑盒 P3：可突破时 exp 可能是 need 的几十倍（84486/400），
+        # 分子封顶到 need —— 玩家只需知道「满了能突破」，超额数字没有意义还像 bug。
+        shown_exp = min(exp, need)
         if can_break:
-            exp_txt = f"{exp} / {need} 修为 · 可突破"
+            exp_txt = f"{shown_exp} / {need} 修为 · 可突破"
         else:
-            exp_txt = f"{exp} / {need} 修为"
-        pct = int(exp * 100 / need) if need else 0
+            exp_txt = f"{shown_exp} / {need} 修为"
+        pct = min(100, int(shown_exp * 100 / need)) if need else 0
     # 左右同一基线 y+11：字号一大一小但视觉不漂移（原 y+9 / y+11 会错开）
     S.small(c, (x0, y + 11), "境界修为", size=S.FS_BODY,
             color=p["dim_color"])

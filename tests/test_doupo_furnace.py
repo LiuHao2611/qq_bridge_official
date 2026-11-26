@@ -372,6 +372,40 @@ def test_lock_command_rejects_missing_item():
         assert "用法" in txt or "没有" in txt, txt
 
 
+def test_exit_clears_in_tower_when_under_one_minute():
+    """2026-11-26 黑盒 N1a：入塔后不足 1 分钟就出塔（minutes<=0 提前 return），
+    也必须真的清 in_tower，否则「修炼」会被永久挡在塔中。"""
+    p = _p(40)
+    st = _state(in_tower=1, fire_energy=20, last_ts=time.time() - 20)
+    r = core.alchemy_settle(p, st, entering=False)
+    assert st["in_tower"] == 0, st
+    assert r["in_tower"] is False, r
+
+
+def test_exit_clears_in_tower_when_under_one_energy_block():
+    """N1b：塔修 1~9 分钟（不足一个火能整块，blocks<=0 提前 return）出塔也要清。"""
+    p = _p(40)
+    st = _state(in_tower=1, fire_energy=3, last_ts=time.time() - (PER - 1) * 60)
+    r = core.alchemy_settle(p, st, entering=False)
+    assert st["in_tower"] == 0, st
+    assert r["in_tower"] is False, r
+
+
+def test_exit_command_does_not_say_rest_when_poison_zero():
+    """N1c：火毒已归零时出塔回包不许再说「火毒未散，须歇一夜」。"""
+    with tempfile.TemporaryDirectory(prefix="furnace_exit_") as d:
+        s = _mk_store(d)
+        asyncio.run(s.load())
+        asyncio.run(s.put_player(_p(40)))
+        asyncio.run(s.set_tower_state("QFURN", _state(in_tower=1, fire_energy=20,
+                                                      last_ts=time.time() - 20)))
+        txt = asyncio.run(commands.cmd_furnace_exit(s, "QFURN"))
+        assert "火毒未散" not in txt, txt
+        assert "随时可再入塔" in txt, txt
+        st = asyncio.run(s.tower_state("QFURN"))
+        assert st["in_tower"] == 0, st
+
+
 def _main() -> int:
     fns = [(n, f) for n, f in globals().items()
            if n.startswith("test_") and callable(f)]

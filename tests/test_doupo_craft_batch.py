@@ -128,6 +128,30 @@ def test_batch_limited_by_materials():
     check(r["limited"] == "mat", "标记 mat 限额")
 
 
+def test_batch_zero_furnace_reports_missing_detail():
+    """2026-11-26 黑盒 N2：连炼一炉都没开成（药材不足）时必须带缺料明细，
+    口径与单发 craft 逐字一致，否则命令层只能回泛化的「炉中火候难成」。"""
+    p = _p(alch=8)   # 一味药材都没有
+    r = core.craft_batch(p, "回灵丹", 5, rng=lambda: 0.0, now_ts=1000)
+    check(not r.get("ok") and r.get("reason") == "mat", "一炉没开成→reason=mat")
+    check(bool(r.get("missing")), "必须带 missing 明细")
+    need = cfg.RECIPE_BY_NAME["回灵丹"]["need"]
+    for mat in need:
+        check(any(mat in m for m in r.get("missing", [])),
+              "缺料明细列出 %s" % mat)
+    # 与单发逐字同源
+    single = core.craft(p, "回灵丹", rng=lambda: 0.0, now_ts=1000)
+    check(single.get("missing") == r.get("missing"), "连炼/单发缺料明细逐字一致")
+
+
+def test_batch_zero_furnace_mp_reason():
+    """斗气不足一炉没开成→reason=mp，命令层据此走 craft_mp 而非泛化失败。"""
+    p = _p(alch=8, mp=0)
+    _stock(p, "回灵丹", 10)
+    r = core.craft_batch(p, "回灵丹", 5, rng=lambda: 0.0, now_ts=1000)
+    check(not r.get("ok") and r.get("reason") == "mp", "斗气不足→reason=mp")
+
+
 # --- 4. CD：整批只占一次，批内不逐炉卡 CD -----------------------------------
 def test_batch_single_cd_and_blocks_immediate_second():
     p = _p(alch=8)

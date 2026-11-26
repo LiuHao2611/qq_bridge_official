@@ -1077,6 +1077,13 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
 
     # 每页丹药数 = 当前页实际条数；卡面与脚注都读它，杜绝「算的画得下」三处不一致
     shown = sum(len(g["rows"]) for g in groups)
+    base_tip = (("第 %d/%d 页 · 本页 %d 枚 · 可用丹方 %d 枚" %
+                 (page, total_pages, shown, total_avail)) if total_pages > 1 else
+                ("可用丹方 %d 枚 · 炼制 <丹名> / 买 <丹名>" % total_avail))
+    # 2026-11-26 黑盒 P5：新手第一眼全是「缺料」却不知火从哪来、药去哪买。
+    # 只在第一页且确实没有可炼丹方时补一句可执行引导（老玩家/可炼时不打扰）。
+    if page == 1 and not any(r["ready"] for g in groups for r in g["rows"]):
+        base_tip += " · 火：九星胜敌/兽火单方；药材：宝库买"
     return {
         "icon": "wand",
         "title": "炼药",
@@ -1087,9 +1094,7 @@ def build_recipes_data(p: dict, page: int = 1) -> dict:
         "total_avail": total_avail,
         "shown": shown,
         "groups": groups,
-        "tip": ("第 %d/%d 页 · 本页 %d 枚 · 可用丹方 %d 枚" %
-                (page, total_pages, shown, total_avail)) if total_pages > 1 else
-               ("可用丹方 %d 枚 · 炼制 <丹名> / 买 <丹名>" % total_avail),
+        "tip": base_tip,
     }
 
 
