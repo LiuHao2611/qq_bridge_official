@@ -259,9 +259,14 @@ def test_roster_uses_dedicated_template():
 
 
 def test_roster_groups_by_tier():
-    """按阶位分组：普通 / 高阶 / 特殊，顺序与 SKILL_TIERS 一致，门数不丢。"""
+    """按**原著阶级**分组：黄 / 玄 / 地 / 天 / 秘法，顺序与 skill_rank.FAMILIES 一致。
+
+    2026-11-26 用户：「不要搞普通 高阶 特殊的说法了，严格按照原著的阶级表达」。
+    原先分组键是内部数值档 SKILL_TIERS（普通/高阶/特殊），卡面标题也就跟着写成
+    三阶；现在键换成原著大阶，本测试同步改口径，并额外守住「卡面不许再出现三阶词」。
+    """
     from doupo import factions as fac
-    from doupo import config as cfg
+    from doupo import skill_rank as rank_mod
 
     p = _p(faction="tianmingzong")
     p["faction_name"] = fac.FACTIONS["tianmingzong"]["name"]
@@ -269,8 +274,11 @@ def test_roster_groups_by_tier():
     groups = d["groups"]
     assert groups, "没有分组，又退回一张平铺表格"
     tiers = [g["tier"] for g in groups]
-    order = [t for t in cfg.SKILL_TIERS if t in tiers]
-    assert tiers == order, "分组顺序与 SKILL_TIERS 不一致：%s vs %s" % (tiers, order)
+    order = [t for t in rank_mod.FAMILIES if t in tiers]
+    assert tiers == order, "分组顺序与 FAMILIES 不一致：%s vs %s" % (tiers, order)
+    for g in groups:
+        assert g["tier"] in rank_mod.FAMILIES, \
+            "分组名「%s」不是原著大阶（退回普通/高阶/特殊三阶说法）" % g["tier"]
     assert sum(g["count"] for g in groups) == len(d["rows"])
     assert len(d["rows"]) >= 10, "名录卡门数异常偏少：%d" % len(d["rows"])
     for g in groups:

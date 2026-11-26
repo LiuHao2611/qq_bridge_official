@@ -34,6 +34,7 @@ from . import commands
 from . import avatar
 from . import factions as fac
 from . import skill_effects as fx
+from . import skill_rank as rank_mod
 from . import danwen as dw
 
 log = logging.getLogger("qq_bridge.doupo.card")
@@ -498,6 +499,17 @@ def build_skills_data(p: dict) -> dict:
     }
 
 
+#: 原著大阶 → 分区图标（几何递进：圆 → 三角 → 菱形 → 星 → 法杖，
+#: 一眼能看出「越往后越稀有」，与模板 doupo_roster.RANK_STYLE 同一套顺序）。
+_FAM_ICON = {
+    "黄阶": "circle",
+    "玄阶": "triangle",
+    "地阶": "diamond",
+    "天阶": "star",
+    "秘法": "wand",
+}
+
+
 def _origin_mark(e: dict) -> str:
     """斗技来源标记：一眼分清本宗传承 / 通用基础 / 异火技。
 
@@ -565,7 +577,11 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
         # 序号不再挂在宗门卡上（2026-11-25 用户：宗门卡序号导致上阵错位）。
         "no": no,
         "name": name,
-        "badge": e["tier"][0],
+        # 2026-11-26 用户：「不要搞普通 高阶 特殊的说法了，严格按照原著的阶级表达」。
+        # badge/family 一律走原著阶级（黄/玄/地/天/秘法）；`tier` 仍保留，
+        # 但它只是**数值档**（伤害倍率 / 斗气消耗 / 解锁等级），卡面不再显示它。
+        "badge": (rank_mod.fam_of(rank) or "未")[:1],
+        "family": rank_mod.fam_of(rank),
         "tier": e["tier"],
         "role": role,
         "state": state,
@@ -625,7 +641,7 @@ def build_roster_data(p: dict) -> dict:
     pool_sorted = core.skill_pool_sorted(p)
 
     rows: list[dict] = []
-    by_tier: dict[str, list[dict]] = {}
+    by_fam: dict[str, list[dict]] = {}
     for e in pool_sorted:
         unlocked = bool(e.get("unlocked"))
         equipped = bool(e.get("equipped"))
@@ -642,17 +658,18 @@ def build_roster_data(p: dict) -> dict:
         row = _roster_row(e, None, sk, state, state_kind, show_lv=False,
                           plv=int(p.get("lv", 1)))
         rows.append(row)
-        by_tier.setdefault(e["tier"], []).append(row)
+        by_fam.setdefault(row["family"], []).append(row)
 
     groups = []
-    for tier in cfg.SKILL_TIERS:
-        rs = by_tier.get(tier) or []
+    for fam in rank_mod.FAMILIES:
+        rs = by_fam.get(fam) or []
         if not rs:
             continue
         groups.append({
-            "tier": tier,
+            "tier": fam,
+            "label": fam,
             "count": len(rs),
-            "icon": {"普通": "sword", "高阶": "bolt", "特殊": "star"}.get(tier, "sword"),
+            "icon": _FAM_ICON.get(fam, "sword"),
             "rows": rs,
         })
 
@@ -718,22 +735,22 @@ def build_learned_data(p: dict) -> dict:
                        "count": len(on_rows), "icon": "bolt", "rows": on_rows})
         rows.extend(on_rows)
 
-    # ② 其余已领悟，按三阶稳定排序（与「宗门斗技」同序，便于对照）
-    by_tier: dict[str, list[dict]] = {}
+    # ② 其余已领悟，按原著阶级稳定排序（与「宗门斗技」同序，便于对照）
+    by_fam: dict[str, list[dict]] = {}
     for e in core.equippable_entries(p):
         if e["name"] in lo_names:
             continue
         row = _roster_row(e, no_by_name.get(e["name"]), sk,
                           "已领悟", "learn", show_lv=True, plv=int(p.get("lv", 1)))
-        by_tier.setdefault(e["tier"], []).append(row)
+        by_fam.setdefault(row["family"], []).append(row)
         rows.append(row)
-    for tier in cfg.SKILL_TIERS:
-        rs = by_tier.get(tier) or []
+    for fam in rank_mod.FAMILIES:
+        rs = by_fam.get(fam) or []
         if not rs:
             continue
         groups.append({
-            "tier": tier, "count": len(rs),
-            "icon": {"普通": "sword", "高阶": "bolt", "特殊": "star"}.get(tier, "sword"),
+            "tier": fam, "label": fam, "count": len(rs),
+            "icon": _FAM_ICON.get(fam, "sword"),
             "rows": rs,
         })
 
@@ -773,10 +790,13 @@ def build_faction_data(p: dict) -> dict:
     flames = list(fac_def.get("flames", []) or [])
     lv = int(p.get("lv", 1))
 
-    # 本门斗技统计（普通/高阶/特殊 门数）
+    # 本门斗技统计（按原著大阶：黄/玄/地/天/秘法 门数）
+    # 2026-11-26 用户：「不要搞普通 高阶 特殊的说法了」——这三格数字原先写的是
+    # 内部数值档，玩家看不懂也不对应原著，改成五个大阶。
     pool_sorted = core.skill_pool_sorted(p)
-    tier_counts = {t: sum(1 for e in pool_sorted if e["tier"] == t)
-                   for t in cfg.SKILL_TIERS}
+    fam_counts = {f: sum(1 for e in pool_sorted if rank_mod.fam_of(e.get("rank")) == f)
+                  for f in rank_mod.FAMILIES}
+    fam_order = list(rank_mod.FAMILIES)
 
     # 可转宗门（按卡池分组，只列当前境界已开放的）
     cands = core.faction_candidates(p)
@@ -796,7 +816,8 @@ def build_faction_data(p: dict) -> dict:
         "base": base,
         "npcs": npcs,
         "flames": flames,
-        "tier_counts": tier_counts,
+        "tier_counts": fam_counts,      # 键换成原著大阶，模板同步按 5 格画
+        "fam_order": fam_order,
         "total_skills": len(pool_sorted),
         "open_pools": open_pools,
         "lv": lv,

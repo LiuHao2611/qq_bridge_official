@@ -14,7 +14,7 @@
   * 顶部：大标题「宗门」+ globe 细描边图标 + 贯通分割线；
   * 宗门概览：宗门名(30px 粗体朱红) + 右端境界 + 两枚 pill（据点 / 卡池）
     + 一行「境界 lvX · 已开放卡池」小字；
-  * 本门斗技统计：3 格大数字（普通 / 高阶 / 特殊），数字按阶位上色；
+  * 本门斗技统计：5 格大数字（黄 / 玄 / 地 / 天 / 秘法），数字按原著阶级上色；
   * 代表人物：星标分区 + 自动折行段落；
   * 传承异火：bolt 分区 + 自动折行段落；
   * 可转宗门：list 分区 + 每卡池一个规整卡片块（块头：卡池名 / 宗门数 / 转宗金币；
@@ -88,11 +88,19 @@ BADGE_PAD = 10          # 徽章左右内边距
 BADGE_FS = FS_LABEL     # 徽章字号（<22 不加粗，清晰优先）
 ENTRIES_GAP = 8         # 宗名与徽章之间最小间距（> min_gap token）
 
-#: 三阶统计的数字色（普通/高阶/特殊 逐级升温，一眼看出阶位）
-TIER_COLORS = ("text_color", "accent_color", "title_color")
+#: 本门斗技统计 —— 按**原著阶级**（2026-11-26）。
+#:
+#: 用户原话：「不要搞普通 高阶 特殊的说法了，严格按照原著的阶级表达，注意字体和颜色」。
+#: 原先三格写的是内部数值档（普通/高阶/特殊），玩家完全对不上原著；改成五个大阶，
+#: 与 ``doupo_roster`` 的 RANK_COLORS 同一套色（两卡同屏时阶级颜色必须一致）。
+#: 顺序即由低到高：黄 → 玄 → 地 → 天 → 秘法。
+FAM_ORDER = ("黄阶", "玄阶", "地阶", "天阶", "秘法")
 
 #: 宗门条目格式："萧家 4门" / "魂殿 / 魂族 19门" —— 末尾「数字门」拆成徽章
 _COUNT_RE = re.compile(r"^(.*\S)\s+(\d{1,3}门)$")
+
+
+from .doupo_roster import rank_palette  # noqa: E402  阶级色唯一定义
 
 
 def _entry(raw) -> tuple[str, str]:
@@ -323,18 +331,21 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     total = int(data.get("total_skills") or 0)
     y = _section(c, x0, y, content_w, p, "sword",
                  "本门斗技统计 · 共 %d 门" % total, boxes)
-    tiers = ("普通", "高阶", "特殊")
-    cell_gap = 12
-    cell_w = (content_w - cell_gap * 2) // 3
+    # 阶级色与大阶顺序全部取自 doupo_roster 的唯一定义（同一阶级在两张卡上必须同色）
+    fams = FAM_ORDER
+    fam_colors, _fam_ink = rank_palette(p["page_color"])
+    n_cell = len(fams)
+    cell_gap = 10
+    cell_w = (content_w - cell_gap * (n_cell - 1)) // n_cell
     counts = data.get("tier_counts") or {}
-    for i, tier in enumerate(tiers):
+    for i, fam in enumerate(fams):
         cx = x0 + i * (cell_w + cell_gap)
         UI.panel(c, p, (cx, y, cx + cell_w, y + STAT_CELL_H), state="done",
                  radius=12, watermark=False)
-        ktext("stat_%s" % tier, cx + cell_w // 2, y + 34,
-              str(int(counts.get(tier, 0))), FS_STAT, p[TIER_COLORS[i]], anchor="mm")
-        stext("stat_label_%s" % tier, cx + cell_w // 2, y + STAT_CELL_H - 20,
-              tier + "斗技", FS_LABEL, p["dim_color"], anchor="mm")
+        ktext("stat_%s" % fam, cx + cell_w // 2, y + 34,
+              str(int(counts.get(fam, 0))), FS_STAT, fam_colors[fam], anchor="mm")
+        stext("stat_label_%s" % fam, cx + cell_w // 2, y + STAT_CELL_H - 20,
+              fam + "斗技", FS_LABEL, p["dim_color"], anchor="mm")
     y += STAT_CELL_H + BLOCK_GAP
 
     # ---- 代表人物：每人一枚胶囊（姓名正文 + 身份小字），按宽度自动换行 ----

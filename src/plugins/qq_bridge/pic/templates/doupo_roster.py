@@ -10,7 +10,7 @@
   * 「上阵 / 可学」原本和技能名一样 24px 粗体，状态抢走第一眼注意力；
   * 23 行无分组无分隔，从上到下糊成一张表格；
   * 效果与代价挤成一行 30+ 字（``·`` / ``｜`` 硬连），分不清主次；
-  * 普通/高阶/特殊只靠一个字的小方块区分。
+  * 原著阶级只靠一个字的小方块区分。
 
 用上专用模板后用户第三次要求：「技能描述加上，别偷懒，做成两列」——
 名录卡不能只放 ``brief`` 一句，要展示**完整技能描述**；但单列加完整描述会撑到
@@ -19,7 +19,7 @@
 版式（两列网格）
 ----------------
   * 顶部：bolt 图标 + 「本宗斗技」(38px) + 贯通分割线 + 一行统计；
-  * 按阶位分三区（普通 / 高阶 / 特殊），分区标题带图标 + 右侧贯通细线；
+  * 按原著阶级分区（黄 / 玄 / 地 / 天 / 秘法），分区标题带图标 + 右侧贯通细线；
   * 分区内**两列成对**排布，同一行两块等高（``max(h_left, h_right)``），
     左右列起点固定 → 不会因一侧描述长而错位；
   * 每门一个圆角卡片块（宽 = 列宽），左缘 4px 阶位色条；
@@ -58,7 +58,7 @@ QQ 聊天窗显示宽度固定，卡片越宽被压得越狠（1080 宽缩到 72
 --------------------------------
   icon/title/subtitle/tip
   groups: [{
-    "tier": "普通", "count": 12, "icon": "sword",
+    "tier": "玄阶", "count": 12, "icon": "triangle",   # 原著大阶：黄/玄/地/天/秘法
     "rows": [{
       "no",                                   # 全局序号：即「上阵 <号>」的编号
       "name", "role", "state", "state_kind",   # state_kind: on/learn/lock
@@ -136,12 +136,54 @@ STATE_DOT_R = 4           # 状态圆点半径（非 emoji，Pillow 实心圆）
 STATE_DOT_GAP = 6         # 圆点与文字的显式 gap，禁止空格凑间距
 H_TIP = 12 + FS_TIP + 8
 
-#: 阶位 → 左缘色条 / 分区图标（普通沉稳、高阶暗金、特殊朱红）
-TIER_STYLE = {
-    "普通": ("chip_line", "sword"),
-    "高阶": ("accent_color", "bolt"),
-    "特殊": ("title_color", "star"),
+#: 原著大阶 → 左缘色条实色（2026-11-26）。
+#:
+#: 用户原话：「不要搞普通 高阶 特殊的说法了，严格按照原著的阶级表达，注意字体和颜色」。
+#: 旧表按内部数值档（普通/高阶/特殊）配三色，玩家看到的却是原著的「黄玄地天」——
+#: 分组标题与色条对不上。这里改成四阶 + 秘法，一阶一色。
+#:
+#: **两套色，按主题底色明暗自动选**（不是按玩家喜好，是可见性硬需求）：
+#: 深色主题（默认斗破紫底）用亮版，浅色主题（羊皮纸）用暗版；
+#: 一套深色打到浅底上会糊成一片，反过来同样看不见。
+#: 语义色刻意不跟 accent 漂移 —— 阶级是数据属性，玩家把主题改成什么都该是同一个黄/蓝/紫/红。
+RANK_COLORS_DARK_BG = {
+    "黄阶": "#E9B84C",
+    "玄阶": "#59A6E8",
+    "地阶": "#B57BEA",
+    "天阶": "#FF6A5A",
+    "秘法": "#3FD0AC",
 }
+RANK_COLORS_LIGHT_BG = {
+    "黄阶": "#B8862B",
+    "玄阶": "#3F6FA8",
+    "地阶": "#7B4FA8",
+    "天阶": "#A83232",
+    "秘法": "#1F6B5E",
+}
+#: 分区图标：几何递进（圆→三角→菱形→星→法杖），一眼看出越往后越稀有。
+RANK_ICON = {
+    "黄阶": "circle",
+    "玄阶": "triangle",
+    "地阶": "diamond",
+    "天阶": "star",
+    "秘法": "wand",
+}
+#: 序号圆里压的字：暗圆配米白、亮圆配深墨（否则亮底白字直接消失）。
+RANK_INK_DARK_BG = "#1B1026"
+RANK_INK_LIGHT_BG = "#FFF6E8"
+#: 兜底（「已上阵」这类非阶级分组）沿用主题色。
+FALLBACK_BAR = "chip_line"
+
+
+def rank_palette(page_color: str) -> tuple[dict, str]:
+    """按页面底色明暗返回（大阶色表, 序号圆字色）。
+
+    浅底（亮度 > 140）走暗版 + 米白字；深底走亮版 + 深墨字。
+    两套色语义相同、明度相反，保证「地阶永远是紫、天阶永远是红」。
+    """
+    if _luminance(page_color) > 140:
+        return RANK_COLORS_LIGHT_BG, RANK_INK_LIGHT_BG
+    return RANK_COLORS_DARK_BG, RANK_INK_DARK_BG
 #: 主定位 → (底色, 描边, 文字)
 ROLE_COLORS = {
     "续航": ("pill_bg", "pill_line", "pill_text"),
@@ -214,7 +256,7 @@ _DEMO = {
     "icon": "bolt", "title": "本宗斗技",
     "subtitle": "天冥宗 · 共 3 门 · 上阵 1/4",
     "groups": [
-        {"tier": "普通", "count": 2, "icon": "sword", "rows": [
+        {"tier": "玄阶", "count": 2, "icon": "triangle", "rows": [
             {"no": 1, "name": "血煞掌", "role": "异常", "state": "上阵", "state_kind": "on",
              "meta": "〔本宗〕玄阶高级 · 攻击 · 斗气 20%",
              "desc": "斗气凝血成掌，掌色暗红近黑；一掌拍出，血毒随掌力渗入，伤口不流血反而发黑。造成 140% 伤害，并附加血毒（每回合 5%，持续 2 回合，且治疗 -30%）。",
@@ -229,7 +271,7 @@ _DEMO = {
                        {"label": "破防", "value": "100%·1回合"}],
              "gate": "威力天花板低"},
         ]},
-        {"tier": "高阶", "count": 1, "icon": "bolt", "rows": [
+        {"tier": "天阶", "count": 1, "icon": "star", "rows": [
             {"no": 3, "name": "九幽冥手", "role": "爆发", "state": "未解锁", "state_kind": "lock",
              "meta": "〔本宗〕天阶低级 · 攻击 · 斗气 34% · lv50 解锁",
              "desc": "斗气凝成一只漆黑大手，手指出处空间直接塌陷；大手不需飞行，而是穿过空间出现在目标面前，一把抓下。造成 200% 伤害，并无视目标 30% 防御。",
@@ -470,6 +512,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     data = data or {}
     width = int(width or getattr(t, "width", 720) or 720)
     p = _pal(t)
+    # 阶级色按页面底色明暗二选一（深底亮版 / 浅底暗版），见 rank_palette
+    rcols, rink = rank_palette(p["page_color"])
     L = _plan(data, width)
     content_w, inner_w, h = L["content_w"], L["inner_w"], L["h"]
     boxes = kw.pop("boxes", None)
@@ -527,12 +571,12 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         if ent["kind"] == "section":
             g = ent["group"]
             tier = ent["tier"]
-            sicon = str(g.get("icon") or TIER_STYLE.get(tier, ("", "sword"))[1])
+            sicon = str(g.get("icon") or RANK_ICON.get(tier, "sword"))
             if not icons.exists(sicon):
                 sicon = "sword"
             sy = ent["y"]
             icons.draw(c, sicon, x0 + ICON // 2, sy + FS_SECTION // 2, ICON,
-                       p["accent_color"], style=ICON_STYLE)
+                       rcols.get(tier, p["accent_color"]), style=ICON_STYLE)
             label = str(g.get("label") or (("%s斗技" % tier) if tier else "斗技"))
             cnt = int(g.get("count") if g.get("count") is not None
                       else len(g.get("rows") or []))
@@ -554,9 +598,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             # 块背景 + 左缘阶位色条
             c.rounded_rect((bx, by, bx + bw, by + rh), radius=BLOCK_RADIUS,
                            fill=p["cell_bg"], outline=p["cell_line"], width=1)
-            bar_key = TIER_STYLE.get(tier, ("chip_line", "sword"))[0]
             c.rounded_rect((bx + 1, by + 6, bx + 1 + BAR_W, by + rh - 6), radius=2,
-                           fill=p[bar_key])
+                           fill=rcols.get(tier, p[FALLBACK_BAR]))
 
             ix = bx + BLOCK_PAD_X + BAR_W + 4       # 序号圆左缘
             iy = by + BLOCK_PAD_Y
@@ -573,13 +616,12 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             # 画在技能名左侧、左缘色条右侧；与名字同 y 居中对齐。
             no = row.get("no")
             if no is not None:
-                fill_key = TIER_STYLE.get(tier, ("chip_line", "sword"))[0]
-                no_fill = p[fill_key]
+                no_fill = rcols.get(tier, p[FALLBACK_BAR])
                 c.ellipse((ix, name_y - NO_D // 2, ix + NO_D, name_y + NO_D // 2),
                           fill=no_fill, outline=p["border_color"], width=1)
                 no_txt = str(no)
                 c.text((no_cx, name_y), no_txt, size=FS_NO,
-                       color=p["card_color"], role="regular", bold=False, anchor="mm")
+                       color=rink, role="regular", bold=False, anchor="mm")
                 rec("%s.no" % name, no_txt, no_cx, name_y,
                     FS_NO, "regular", "mm")
 

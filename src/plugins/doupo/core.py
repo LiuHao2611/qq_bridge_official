@@ -24,6 +24,7 @@ from .flame_drop import s_flame_gate  # noqa: E402  纯函数外迁，保持 cor
 from . import factions as fac
 from . import skills as sk_mod
 from . import skill_effects as fx
+from . import skill_rank as rank_mod
 from . import sect_mechanics as sm
 from . import weapon_data as wd
 
@@ -1358,21 +1359,26 @@ def learned_skill_pool(p) -> list[dict]:
     与 ``skill_pool``（本宗池 + 异火）不同：转宗保留全部已学技后，玩家会持有
     老宗门专属技，这些不在本宗池里，必须按 ``p["learned"]`` 逐名还原。
     条目与 skill_pool 同形（含 tier/unlocked/equipped/origin），排序也一致。
+
+    2026-11-26：排序改按**原著阶级**（黄→玄→地→天→秘法，同阶低级→高级）。
+    卡面已不再出现「普通/高阶/特殊」，排序若还按内部三阶就会和图上的分组对不上。
     """
     entries = sk_mod.learned_entries(p)
-    tier_order = {t: i for i, t in enumerate(cfg.SKILL_TIERS)}
-    return sorted(entries, key=lambda e: tier_order.get(e.get("tier"), 9))
+    return sorted(entries, key=lambda e: rank_mod.sort_key(e.get("rank")))
 
 
 def skill_pool_sorted(p) -> list[dict]:
-    """本宗斗技（含未解锁）按三阶稳定排序：普通 → 高阶 → 特殊。
+    """本宗斗技（含未解锁）按**原著阶级**稳定排序：黄→玄→地→天→秘法。
 
     宗门卡统计（build_faction_data）与斗技名录共用同一顺序，
     保证「卡片上的门数统计」与 skill_pool 完全同源、不会错位。
+
+    2026-11-26 用户：「不要搞普通 高阶 特殊的说法了，严格按照原著的阶级表达」。
+    排序键换成 ``skill_rank.sort_key``（大阶序 + 小阶序）；同键时 sorted 稳定，
+    保持 skill_book 的录入顺序，录制台账与卡面顺序一致。
     """
     pool = skill_pool(p)
-    tier_order = {t: i for i, t in enumerate(cfg.SKILL_TIERS)}
-    return sorted(pool, key=lambda e: (tier_order.get(e["tier"], 9),))
+    return sorted(pool, key=lambda e: rank_mod.sort_key(e.get("rank")))
 
 
 def equippable_names(p) -> set[str]:
