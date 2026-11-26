@@ -315,8 +315,22 @@ def loadout_entries(p) -> list[dict]:
 # 斗气单价 / 伤害倍率
 # ---------------------------------------------------------------------------
 def tier_cost(tier: str, mp_max_val: int) -> int:
-    """某一阶斗技的斗气消耗（占 mp_max 比例的绝对值，至少 1）。"""
+    """某一阶斗技的斗气消耗（占 mp_max 比例的绝对值，至少 1）。
+
+    兼容旧签名：按恒定基础占比算（= 斗之气档）。战斗/卡面请用
+    :func:`tier_cost_by_lv`，它会按玩家境界递减消耗。
+    """
     frac = cfg.SKILL_TIER_MP_FRAC.get(tier, 0.20)
+    return max(1, int(round(int(mp_max_val) * frac)))
+
+
+def tier_cost_by_lv(tier: str, mp_max_val: int, lv: int) -> int:
+    """按玩家境界计算的斗技消耗（2026-11-26 唯一战斗/卡面真源）。
+
+    境界越高，同阶斗技消耗占比越低——练级涨的斗气上限才有实感
+    （每战可放次数随修为增长）。占比来自 ``cfg.skill_mp_frac``。
+    """
+    frac = cfg.skill_mp_frac(tier, lv)
     return max(1, int(round(int(mp_max_val) * frac)))
 
 

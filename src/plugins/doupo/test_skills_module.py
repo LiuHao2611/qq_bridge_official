@@ -88,12 +88,73 @@ def test_tier_mp_cost_is_increasing():
     assert c0 == round(mx * cfg.SKILL_TIER_MP_FRAC["普通"])
 
 
+def test_mp_frac_decreases_with_realm():
+    """2026-11-26 用户：斗宗施展普通斗技不该还扣 20%——占比须随境界递减。"""
+    # 采样点取各档起点：idx0(lv1) / idx3(lv28) / idx6(lv55) / idx8(lv73)
+    fracs = [(lv, cfg.skill_mp_frac("普通", lv)) for lv in (1, 28, 55, 73)]
+    vals = [f for _lv, f in fracs]
+    assert all(a > b for a, b in zip(vals, vals[1:])), \
+        "普通斗技占比须随境界严格递减：%s" % fracs
+    assert vals[0] == 0.20 and vals[-1] == 0.12, fracs
+    # 高阶/特殊也递减，但任意境界下仍保持 普通<高阶<特殊
+    for lv in (1, 28, 55, 73):
+        f0, f1, f2 = (cfg.skill_mp_frac(t, lv) for t in ("普通", "高阶", "特殊"))
+        assert f0 < f1 < f2, "lv%d 阶梯破坏：%s" % (lv, (f0, f1, f2))
+
+
+def test_skill_count_per_battle_grows_with_realm():
+    """练级涨斗气上限要有实感：每战可放普通斗技次数随境界增长（取整有平台期）。"""
+    counts = []
+    for lv in (1, 28, 55, 73):
+        p = core.create_player("cnt", "次数", "g")
+        p["lv"] = lv
+        mx = core.mp_max(p)
+        cost = sk.tier_cost_by_lv("普通", mx, lv)
+        counts.append(mx // cost)
+    assert counts[0] == 5, "新手仍应 5 次：%s" % counts
+    assert all(a <= b for a, b in zip(counts, counts[1:])), \
+        "每战次数不得随境界倒退：%s" % counts
+    assert counts[-1] >= 8 and counts[-1] > counts[0], \
+        "斗尊普通斗技应比新手明显多放：%s" % counts
+
+
+def test_tier_cost_by_lv_matches_frac():
+    """实算消耗 = round(mp_max × cfg.skill_mp_frac)，与卡面同源。"""
+    for lv in (1, 55, 82):
+        p = core.create_player("同源", "同源", "g")
+        p["lv"] = lv
+        mx = core.mp_max(p)
+        for t in ("普通", "高阶", "特殊"):
+            got = sk.tier_cost_by_lv(t, mx, lv)
+            want = max(1, round(mx * cfg.skill_mp_frac(t, lv)))
+            assert got == want, "lv%d %s 实算 %d ≠ 占比 %d" % (lv, t, got, want)
+
+
 def test_pick_skill_falls_back_when_no_mp():
     p = core.create_player("9002", "丁", "g1")
     e, c = core._pick_skill(p, 0, lambda: 0.0)
     assert e is None and c == 0, "斗气不足必须转武器普攻"
     e2, c2 = core._pick_skill(p, core.mp_max(p), lambda: 0.0)
     assert e2 is not None and c2 > 0, "斗气充足应能放斗技"
+
+
+def test_card_shows_realm_scaled_mp_frac():
+    """宗门斗技卡显示的斗气% = 该境界实算占比（防卡面 20%、实扣 12% 两张皮）。"""
+    from doupo import card
+
+    for lv in (1, 55, 73):
+        p = core.create_player("卡面", "卡面", "g")
+        p["lv"] = lv
+        d = card.build_roster_data(p)  # 宗门名录含三阶全技，稳定可测
+        for g in d.get("groups", []):
+            tier = g.get("tier")
+            if tier not in cfg.SKILL_TIERS:
+                continue
+            want = int(round(cfg.skill_mp_frac(tier, lv) * 100))
+            for row in g.get("rows", []):
+                meta = str(row.get("meta", ""))
+                assert ("斗气 %d%%" % want) in meta, \
+                    "lv%d %s 卡面应显示 斗气%d%%，实际：%s" % (lv, tier, want, meta)
 
 
 def test_fight_log_uses_skills_and_reports_basic_attack():

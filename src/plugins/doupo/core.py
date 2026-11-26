@@ -941,7 +941,7 @@ def damage_schedule(p, rounds: int = 15, puppet_bonus: float = 0.0) -> list:
     for e in entries:
         lv = int(lv_map.get(e["name"], 1))
         raw = (st["力量"] * 0.5 + st["斗气"] * 1.5) * sk_mod.skill_mult(e, lv)
-        slots.append((raw, sk_mod.tier_cost(e["tier"], mpmax)))
+        slots.append((raw, sk_mod.tier_cost_by_lv(e["tier"], mpmax, int(p.get("lv", 1)))))
     avg_dmg = sum(d for d, _ in slots) / len(slots)
     avg_cost = sum(c for _, c in slots) / len(slots)
 
@@ -1134,9 +1134,10 @@ def _pick_skill(p, mp: int, rng=random.random):
     if not entries:
         return None, 0
     mpmax = mp_max(p)
+    plv = int(p.get("lv", 1))
     options = []
     for e in entries:
-        c = sk_mod.tier_cost(e["tier"], mpmax)
+        c = sk_mod.tier_cost_by_lv(e["tier"], mpmax, plv)
         if c <= mp:
             options.append((e, c))
     if not options:

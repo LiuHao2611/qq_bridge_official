@@ -347,6 +347,14 @@ SKILL_TIER_MP_FRAC = {"普通": 0.20, "高阶": 0.34, "特殊": 0.50}
 SKILL_TIER_DMG = {"普通": 1.0, "高阶": 1.4, "特殊": 1.8}
 SKILL_TIER_UNLOCK = {"普通": 1, "高阶": 20, "特殊": 40}
 LOADOUT_SIZE = 4
+
+# 斗气占比随境界递减：表见 skill_mp_config.py（守 200KB 红线）
+from .skill_mp_config import frac_for as _skill_mp_frac_for  # noqa: E402
+
+
+def skill_mp_frac(tier: str, lv: int) -> float:
+    """某阶斗技斗气占比（卡面与实算唯一真源）。"""
+    return _skill_mp_frac_for(tier, realm_index(lv))
 #: 一次「服丹 <丹名> N」连服的数量硬顶（2026-11-25 用户「不限制数量」）。
 #: 只是防手抖把 100000 打成一笔刷屏的兜底，正常玩家背包远到不了这个数；
 #: 真正能吃几枚由背包实际持有数决定——这里不设玩法上限。

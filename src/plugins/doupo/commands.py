@@ -561,7 +561,8 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "阶位分三档 —— 普通（黄阶/玄阶）· 高阶（地阶/天阶）· 特殊（秘法/血脉/体质/异火）",
         "上阵最多 4 门，三阶任意搭配（后期可四门全特殊）",
         "战斗与掠夺每回合在「已上阵且斗气够」的技里随机放一门",
-        "斗气按阶扣：普通 20% ｜ 高阶 34% ｜ 特殊 50%（占气海上限）",
+        "斗气按阶扣（占气海上限，随境界递减——修为越高，同阶斗技越省）：",
+        "　起步 普通20%/高阶34%/特殊50%，斗灵起逐境下调，斗尊起 普通12%/高阶24%/特殊40%",
         "斗气不够放任何一门 → 强制武器普攻，伤害大减且持续掉血",
         "升一级伤害 +20%（耗焚血散，最高 5 级）；同名技跨宗共享等级",
         "入道只领悟 1 门低阶技，其余靠「学斗技」逐个领悟：达解锁等级+战力门槛、花金币，随机得一门未学技",
@@ -1163,7 +1164,7 @@ async def cmd_skills(store, qq) -> str:
                 and e["name"] not in lo_names and e.get("origin") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·气海")
+        out.append(f"〔{tier}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}")
@@ -1173,7 +1174,7 @@ async def cmd_skills(store, qq) -> str:
               if (e.get("faction") == "异火" or e.get("origin") == "异火")
               and e["name"] not in lo_names]
     if flames:
-        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·气海　收服即解锁")
+        out.append(f"〔异火技〕斗气 {int(round(cfg.skill_mp_frac('特殊', int(p.get('lv', 1))) * 100))}%·气海　收服即解锁")
         for e in flames:
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·已领悟，可上阵）")
 
@@ -1205,7 +1206,7 @@ async def cmd_faction_skills(store, qq) -> str:
         rows = [e for e in pool if e["tier"] == tier and e.get("faction") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(cfg.SKILL_TIER_MP_FRAC[tier] * 100)}%·气海")
+        out.append(f"〔{tier}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             mark = ("★上阵" if e["equipped"] else
@@ -1214,7 +1215,7 @@ async def cmd_faction_skills(store, qq) -> str:
             out.append(f"　{tag}{e['name']} Lv{lv}（lv{e['unlock']} 解锁·{mark}）")
     flames = [e for e in pool if e.get("faction") == "异火"]
     if flames:
-        out.append(f"〔异火技〕斗气 {int(cfg.SKILL_TIER_MP_FRAC['特殊'] * 100)}%·气海　收服即解锁")
+        out.append(f"〔异火技〕斗气 {int(round(cfg.skill_mp_frac('特殊', int(p.get('lv', 1))) * 100))}%·气海　收服即解锁")
         for e in flames:
             mark = "★上阵" if e["equipped"] else "已领悟（收服即会）"
             out.append(f"　{e['name']}（{e.get('flame', '异火')}·{mark}）")
@@ -1282,7 +1283,8 @@ async def cmd_skill_info(store, qq, name) -> str:
         state = "可学（未领悟）" if hit.get("unlocked") else "未解锁"
 
     # 只有真打得出去的技才显示伤害系数；功法/增益/技艺的 130% 是倍率不是伤害，写出来会误导
-    nfmt = f"斗气 {int(hit['mp'] * 100)}%·气海 ｜ 冷却 {hit.get('cd', '-')} 回合"
+    nfmt = (f"斗气 {int(round(cfg.skill_mp_frac(hit['tier'], int(p.get('lv', 1))) * 100))}%·气海"
+            f" ｜ 冷却 {hit.get('cd', '-')} 回合")
     if hit.get("kind") in ("攻击", "控制", "召唤", "秘法"):
         nfmt += f" ｜ 基础 {int(hit['dmg'] * 100)}% ｜ 当前约 {dmg} 伤害"
     else:

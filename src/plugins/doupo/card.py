@@ -510,7 +510,8 @@ def _origin_mark(e: dict) -> str:
 
 
 def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
-                show_lv: bool = False, dmg_now: int | None = None) -> dict:
+                show_lv: bool = False, dmg_now: int | None = None,
+                plv: int = 1) -> dict:
     """把一条斗技 entry 转成 doupo_roster 的行数据（唯一定义，两卡共用）。
 
     ``build_roster_data``（宗门斗技·本宗池）与 ``build_learned_data``（斗技·我的）
@@ -520,7 +521,8 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
     """
     name = e["name"]
     unlocked = bool(e.get("unlocked"))
-    frac = int(cfg.SKILL_TIER_MP_FRAC.get(e["tier"], 0.2) * 100)
+    # 斗气占比按玩家境界取（2026-11-26 与实算 skills.tier_cost_by_lv 同源）。
+    frac = int(round(cfg.skill_mp_frac(e["tier"], plv) * 100))
     role = fx.role_label(e.get("role", ""))
 
     # 副行：来源 + 阶位 + 类型 + 斗气消耗（不再把主定位塞进这行，它单独成胶囊）
@@ -637,7 +639,8 @@ def build_roster_data(p: dict) -> dict:
             state, state_kind = "未领悟", "learn"
         else:
             state, state_kind = "未解锁", "lock"
-        row = _roster_row(e, None, sk, state, state_kind, show_lv=False)
+        row = _roster_row(e, None, sk, state, state_kind, show_lv=False,
+                          plv=int(p.get("lv", 1)))
         rows.append(row)
         by_tier.setdefault(e["tier"], []).append(row)
 
@@ -708,7 +711,8 @@ def build_learned_data(p: dict) -> dict:
 
     # ① 已上阵（四槽顺序即出战顺序，不再排序）
     on_rows = [_roster_row(e, no_by_name.get(e["name"]), sk,
-                           "上阵", "on", show_lv=True, dmg_now=_dmg_now(e)) for e in lo]
+                           "上阵", "on", show_lv=True, dmg_now=_dmg_now(e),
+                           plv=int(p.get("lv", 1))) for e in lo]
     if on_rows:
         groups.append({"tier": "已上阵", "label": "已上阵",
                        "count": len(on_rows), "icon": "bolt", "rows": on_rows})
@@ -720,7 +724,7 @@ def build_learned_data(p: dict) -> dict:
         if e["name"] in lo_names:
             continue
         row = _roster_row(e, no_by_name.get(e["name"]), sk,
-                          "已领悟", "learn", show_lv=True)
+                          "已领悟", "learn", show_lv=True, plv=int(p.get("lv", 1)))
         by_tier.setdefault(e["tier"], []).append(row)
         rows.append(row)
     for tier in cfg.SKILL_TIERS:
