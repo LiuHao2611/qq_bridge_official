@@ -218,10 +218,11 @@ async def _mat_reply_and_buy_loop():
     check(any(("%s炼制 %s" % (db.DOUPO_CUSTOM_PREFIX, name)) == b.cmd for b in left),
           "材料齐了回执给「炼制此丹」：%s" % [b.label for b in left])
 
-    # 点「炼制」→ 真的炼出来了（用户「保证我下次操作可以直接进行炼制」）
+    # 点「炼制」→ 真的开炉了（用户「保证我下次操作可以直接进行炼制」）。
+    # 只断言「不再被材料卡住」：成丹/炸炉都是真开炉（率不是 100%，不能押成败）。
     out = await commands.cmd_craft(store, qq, name)
-    check(("炼成" in out) or ("炼制成功" in out) or ("💨" not in out and "材料不足" not in out),
-          "买齐后点炼制能开炉：%s" % out.splitlines()[0])
+    check("材料不足" not in out and "斗气" not in out.splitlines()[0],
+          "买齐后点炼制能开炉（不再缺料）：%s" % out.splitlines()[0])
 
     # 连炼中途药材见底（部分开成）：也要列「再炼这批还缺多少」+ 买齐按钮
     qq2 = "Q_PART"
