@@ -100,6 +100,21 @@ def plan() -> dict[str, tuple[str, str, str]]:
     return dict(_PLAN)
 
 
+#: ``card_key`` → 手工口令路径真正用的渲染入口（2026-11-26）。
+#:
+#: 🚨 为什么必须显式列表：dispatch 过去用 ``getattr(card, "render_" + card_key)``
+#: **猜**渲染函数。斗技卡的 key 恰好叫 ``skills``，于是猜中
+#: ``render_skills``——那是 2026-11-24 就退役的**旧四槽详情卡**；而手打「斗技」
+#: 早已改出合并名录卡 ``render_learned``。结果同一个动作：手打给新卡、点按钮给
+#: 旧卡（用户 2026-11-26 23:15:45 实测截图，日志
+#: ``official_doupo_button_dispatch cmd=斗技 handled=True``）。名字不同 ≠ 语义不同，
+#: 只能显式登记；新增出图卡时**必须**在这里或下面的特判里登记，守门测试
+#: tests/test_doupo_button_card_parity.py 会逐个核对「按钮渲染 == 手打渲染」。
+_CARD_RENDER: dict[str, str] = {
+    "skills": "render_learned",      # 斗技合并卡（render_skills 是退役的旧四槽卡）
+}
+
+
 #: 竞猜选项按钮 data 前缀（与 channel/doupo_buttons.py 同源）。
 QUIZ_PREFIX = "doupo:quiz:"
 
@@ -319,8 +334,16 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
     # 必须在调用之前初始化，否则会被下面的卡片分支重置成 None。
     ruin_report = None
     fn = getattr(cmd_mod, fn_name)
+    # 2026-11-26：「炼制傀儡」按钮要与手打口令出**同一张成傀卡**，而成傀卡需要
+    # 命令把战果写进 report（``cmd_craft_puppet(..., report=rep)``）。这里提前把
+    # report 传进去，渲染段据此出卡；失败/资格不足仍然是文本（与口令一致）。
+    craft_report: dict | None = None
     try:
-        if shape == "enter":
+        if cmd == "炼制傀儡":
+            craft_report = {}
+            msg = await fn(store, openid, None, (arg_override or "").strip(),
+                           report=craft_report)
+        elif shape == "enter":
             # 按钮点击无昵称上下文；与 __init__._name 的兜底一致（道友<openid 后4位>）
             name = str(full_ctx.get("sender_name", "") or "") or ("道友" + openid[-4:])
             msg = await fn(store, openid, name, gid)
@@ -341,6 +364,9 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
         msg = "（按钮处理出错，请重试或手打口令）"
 
     # 出卡口令：card.render_* + 带按钮再下发；渲染失败降级为纯文本
+    # 2026-11-26：`send_key` 允许把「视图」和「按钮族」分开（查看丹药卡就是这样：
+    # 卡片走 item:<丹名> 的逐丹按钮，回执本身不是 use_text）。
+    send_key = card_key
     if card_key:
         png = None
         try:
@@ -363,8 +389,23 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
                 # render_battle(last_battle, qq) 首参是战报不是玩家 dict；
                 # 统一 renderer(p) 会渲出假卡，故走按 qq 取数的唯一入口。
                 png = await card_mod.render_battle_for(openid, p)
+            elif cmd == "炼制傀儡" and craft_report is not None:
+                # 成傀卡：手打「炼制傀儡」炼成后出这张，按钮点了也必须一样。
+                # 失败/资格不足不出卡（craft_report.ok 为假），回退文本与口令同口径。
+                if craft_report.get("ok"):
+                    png = await card_mod.render_craft_for(craft_report, qq=openid)
+                    if png:
+                        send_key = "craft"
+            elif card_key == "use_text" and cmd == "查看":
+                # 手打「查看 X」出物品详情卡；点「查看」按钮不能只回一段文字
+                # （同一个动作两种结果，玩家会以为按钮坏了）。
+                _nm = cmd_mod.item_lookup((arg_override or "").strip())
+                if _nm and p:
+                    png = await card_mod.render_item_detail(p, _nm)
+                    if png:
+                        send_key = "item:%s" % _nm
             else:
-                renderer = getattr(card_mod, "render_" + card_key, None)
+                renderer = getattr(card_mod, _CARD_RENDER.get(card_key, "render_" + card_key), None)
                 if p and renderer is not None:
                     if card_key == "rank":
                         # render_rank(top: list) 与其它 render_*(p) 签名不同
@@ -376,7 +417,7 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
             png = None
         if png:
             try:
-                ret = await send_card_via_channel(full_ctx, png, card_key)
+                ret = await send_card_via_channel(full_ctx, png, send_key)
                 if isinstance(ret, dict) and ret.get("ok"):
                     return True
             except Exception:  # noqa: BLE001 — 降级文本
