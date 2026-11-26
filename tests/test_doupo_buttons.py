@@ -861,37 +861,13 @@ def test_btn_kind_defaults_to_callback():
 if __name__ == "__main__":
     import traceback
 
-    tests = [
-        test_baseline_sane,
-        test_no_fabricated_button_cmds,
-        test_no_self_and_no_menu_buttons,
-        test_no_cross_card_duplicate_combos,
-        test_each_card_buttons_are_relevant_family,
-        test_every_button_is_dispatchable,
-        test_every_finish_card_key_has_actions,
-        test_platform_structure_limits,
-        test_keyboard_doupo_fallback_and_gametools_isolation,
-        test_keyboard_prefix_does_not_collide_with_real_commands,
-        test_page_prefix_isolated_from_canonical_buttons,
-        test_page_buttons_derived_from_armed_state,
-        test_page_dispatch_source_contract,
-        test_reply_card_key_for_inbound_mapping,
-        test_every_command_never_falls_back_to_menu,
-        test_every_dispatch_entry_carries_keyboard,
-        test_label_overlay_continue_battle,
-        test_item_detail_dynamic_buttons,
-        test_auto_tower_prompt_buttons,
-        test_bridge_derives_card_key_from_inbound,
-        test_injection_guards,
-        test_every_finish_text_carries_card_key,
-        test_every_regex_keyword_maps_to_buttons,
-        test_reply_alias_points_to_real_key,
-        test_source_contract_finish_card_used,
-        test_source_contract_button_text_fallback_keeps_keyboard,
-        test_source_contract_interaction_routes_doupo,
-    ]
+    # 2026-11-26：原来是**手写清单**，新增用例忘了登记就静默不跑——实测已漏
+    # ``test_card_renderer_shapes_match_dispatch``（31 个只跑 27 个），与
+    # 「check() 只 print 不抛」是同一类自欺。改为自动收集，新增用例不可能漏跑。
+    tests = [(n, v) for n, v in sorted(globals().items())
+             if n.startswith("test_") and callable(v)]
     passed = failed = 0
-    for t in tests:
+    for _name, t in tests:
         try:
             t()
             print("PASS  %s" % t.__name__)
