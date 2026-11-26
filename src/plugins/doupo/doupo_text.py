@@ -456,15 +456,36 @@ QUOTE_FALLBACK: tuple[str, ...] = (
 #: 角色出处台账：说话人 → ((逐字台词, 出处), ...)。出处仅维护者核对用，不进回执。
 #: 与 CHAPTER_QUOTE 相同口径：用 tmp/novel/q.py 反查命中，落地原文形态。
 NPC_SPEAKERS: dict[str, tuple[tuple[str, str], ...]] = {
-    "药老": (("就是因为没有，才能显出我这功法的独特啊！", "第9章 药老！"),),
+    # 2026-11-26 按战况重排（用户「人物台词太生硬、不符合实时战斗情况」）：
+    # 每条仍是逐字原文 + 出处（tmp/novel/q.py 与 dlg.py 反查命中），但三档各有
+    # 贴合此刻的话——惨胜是淡然宽慰、越级是真心赞许、败局是护短调侃，不再
+    # 一句走天下。具体哪句配哪档见 NPC_TIER_FIT。
+    "药老": (
+        ("就是因为没有，才能显出我这功法的独特啊！", "第9章 药老！"),
+        ("斗技有什么了不起的？等你以后会了炼药术，高级斗技，直接有人抢着给你送上门来。",
+         "第18章 玄阶高级斗技：八极崩"),
+        ("小家伙，不错…竟然能想到用这招来强化吸掌。", "第28章 强化吸掌"),
+    ),
     "美杜莎女王": (("若是进化成功，今日此处的所有人类，都得永留沙漠！",
                 "第215章 进化开始"),),
     "萧厉": (("脱离了那把古怪黑尺的小炎子，才是最强的状态！",
              "第243章 击杀大斗师！"),),
-    "云棱": (("我是云岚宗的大长老，云棱。", "第334章 三年之约！"),),
+    # 旧句「我是云岚宗的大长老，云棱」是自我介绍，塞进苦战/败局极度违和 →
+    # 换成云岚宗强者当场放话的逐字原文（第351章，dlg.py 反查命中）。
+    "云棱": (("朋友，虽然不知道你究竟是何人，不过，这般得罪我云岚宗，可并不是什么明智之举啊。",
+             "第351章 斗皇，凌影"),),
     "摘星老鬼": (("呵呵，终于打算拼命了么？", "第1200章 戏耍"),),
     "魂殿殿主": (("你的灵魂力量很强，但可惜，本体太弱", "第1471章 魂殿殿主！"),),
     "蝎龙族": (("既然你们找死，那本王就成全你们，一群蝼蚁！", "第1056章 蝎龙族"),),
+}
+
+#: 2026-11-26：说话人 → 战况档 → 用第几条台词（NPC_SPEAKERS 里的下标）。
+#: 只对需要分档的角色登记；未登记的角色/档位回落到该角色第 0 条，保持老行为。
+#: 这样「惨胜/越级/败局」各说各话，而不是同一句重复到玩家烦。
+NPC_TIER_FIT: dict[str, dict[str, int]] = {
+    # 败局：药老先肯定你那一招（先夸再教，是原著里他一贯的调子），给败局留鼓励；
+    # 惨胜：淡然宽慰「斗技有什么了不起」；越级：护短式得意「功法独特」。
+    "药老": {"lose": 2, "narrow": 1, "crush": 0},
 }
 
 #: 章 → 本章可开口的说话人白名单。空元组表示该章没有核到可独立成句的 NPC 话，
@@ -499,7 +520,13 @@ def npc_line(ch: int, seed: int = 0, tier: str = "") -> str:
     pool = NPC_SPEAKERS.get(who, ())
     if not pool:
         return ""
-    text = str(pool[int(seed // len(who_list)) % len(pool)][0])
+    # 2026-11-26：按战况档选贴合的逐字台词（惨胜/越级/败局各说各话）。
+    # 登记过 NPC_TIER_FIT 的角色按档取句；未登记的回落到第 0 条（老行为）。
+    idx = NPC_TIER_FIT.get(who, {}).get(str(tier or ""))
+    if idx is None:
+        idx = int(seed // len(who_list)) % len(pool)
+    idx = max(0, min(idx, len(pool) - 1))
+    text = str(pool[idx][0])
     return "🗣 %s：%s" % (who, text)
 
 
@@ -646,6 +673,46 @@ CRAFT_FAIL_LINES: tuple[str, ...] = (
     "药香骤散，炉中只余焦黑残渣——药渣 ×{dross}，尚可养火。",
     "炉火忽地一沉，药力尽数散尽——只余药渣 ×{dross}。",
 )
+
+
+#: 火焰护炉旁白（2026-11-26）：只讲「哪朵火在护持」，不报数字、不说「加成/成功
+#: 率+X%」。玩家看得见的口径是火候被托住、丹成更稳，符合药老控火的原著调性。
+#: 三类由调用点按玩家实有火焰分组传入；无炼药火则整行不出现。
+CRAFT_FLAME_AID_XIAN = (
+    "　异火【{names}】自炉底托起，火候被一寸寸稳住——这一炉，本就占了几分天时。",
+    "　【{names}】在鼎中沉浮，将躁动的药力缓缓按下，丹纹未成先有三分定相。",
+)
+CRAFT_FLAME_AID_BEAST = (
+    "　兽火【{names}】温养着炉温，不猛不燥，药材的性子被一点点揉开。",
+    "　【{names}】伏在炉壁，火色温吞却绵长，火候便少了大起大落。",
+)
+CRAFT_FLAME_AID_MIX = (
+    "　【{names}】同炉而燃，异火主势、兽火托底，火候被烘得恰到好处。",
+)
+
+
+def craft_flame_aid(xian: tuple[str, ...] = (), beast: tuple[str, ...] = (),
+                    seed: int = 0) -> str:
+    """炼药播报的护炉行：有炼药火才回一句原著化旁白，无火回空串。
+
+    xian / beast 是调用点按 ``flame_bonus.alchemy_flame_names`` 分组的名字。
+    只描述火在护持，绝不出现百分比、成数、「加成」「成功率」等开发向术语。
+    """
+    xian = tuple(n for n in xian if n)
+    beast = tuple(n for n in beast if n)
+    if not xian and not beast:
+        return ""
+    k = max(0, int(seed))
+    if xian and beast:
+        body = CRAFT_FLAME_AID_MIX[k % len(CRAFT_FLAME_AID_MIX)]
+        names = "、".join(xian + beast)
+    elif xian:
+        body = CRAFT_FLAME_AID_XIAN[k % len(CRAFT_FLAME_AID_XIAN)]
+        names = "、".join(xian)
+    else:
+        body = CRAFT_FLAME_AID_BEAST[k % len(CRAFT_FLAME_AID_BEAST)]
+        names = "、".join(beast)
+    return body.format(names=names)
 
 
 def craft_success(name: str, grade: str, rate_cn: str) -> str:
@@ -921,6 +988,11 @@ CALL_SAMPLES: tuple[str, ...] = (
     craft_success("九幽散", "帝品", "八成"),
     craft_fail(3, "十成", "", 0),
     craft_fail(3, "十成", "　⚠ 越2档——几无可能，仅可勉强尝试\n", 1),
+    craft_flame_aid(("九幽风炎",), ()),
+    craft_flame_aid(("九幽风炎",), (), seed=1),
+    craft_flame_aid((), ("桃花火",)),
+    craft_flame_aid((), ("桃花火",), seed=1),
+    craft_flame_aid(("九幽风炎", "海心焰"), ("桃花火", "天寒火")),
     craft_fail_plain(),
     craft_generic_fail(),
     craft_cd(42),

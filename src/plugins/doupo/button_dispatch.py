@@ -87,6 +87,9 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     # shape="ruin"：先跑战斗并把战况收进 report，再把战况并进同一张卡（只发一条）。
     "傀儡遗迹": ("cmd_puppet_ruin", "ruin", "ruin"),
     "傀儡": ("cmd_puppet", "qq", "puppet"),
+    # 2026-11-26 傀儡图鉴（出图卡）+ 出战切换（文本回执带按钮）
+    "傀儡图鉴": ("cmd_puppet_codex", "qq", "codex"),
+    "傀儡出战": ("cmd_puppet_deploy", "qq", "puppet_text"),
 }
 
 
@@ -351,6 +354,9 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
             elif card_key == "ruin":
                 if p:
                     png = await card_mod.render_ruin_for(openid, "", None, ruin_report)
+            elif card_key == "codex":
+                if p:
+                    png = await card_mod.render_codex_for(openid, p)
             else:
                 renderer = getattr(card_mod, "render_" + card_key, None)
                 if p and renderer is not None:

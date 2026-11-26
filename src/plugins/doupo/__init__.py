@@ -1111,6 +1111,26 @@ async def _(event: Event):
         return
     m = re.search(r"傀儡\s*(.*)", raw)
     arg = (m.group(1) if m else "").strip()
+    # 2026-11-26 傀儡图鉴：配方的出图版（已有材料金色高亮+数量）。先取数再出图，
+    # 渲染失败回文本兜底（cmd_puppet("图鉴") 已能生成完整清单，不静默丢内容）。
+    if arg.startswith("图鉴"):
+        rep: dict = {}
+        txt = await commands.cmd_puppet_codex(store, qq, puppet_store_inst, report=rep)
+        p = await store.get_player(qq)
+        if not p:
+            await puppet_cmd.finish(txt)
+            return
+        png = None
+        try:
+            png = await card.render_codex(rep.get("mats") or {}, p, qq=qq)
+        except Exception as e:  # noqa: BLE001
+            logger.error("傀儡图鉴卡渲染失败（拒绝静默降级）：%s: %s",
+                         type(e).__name__, e)
+        if png:
+            await finish_card(puppet_cmd, event, png, "codex", "doupo_codex.png")
+            return
+        await puppet_cmd.finish("⚠️ 傀儡图鉴卡渲染失败，请稍后重试（未用纯文字代替图片）。\n" + txt)
+        return
     txt = await commands.cmd_puppet(store, qq, arg, puppet_store_inst)
     if commands.puppet_is_subcmd(arg):
         # 子命令是**动作回执**，必须原样发出：淬炼当场扣雷淬石与金币，收服/融魂

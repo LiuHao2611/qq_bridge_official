@@ -1231,6 +1231,90 @@ async def render_puppet(roster: list, elig: dict, p: dict | None = None,
                               qq=qq or (p or {}).get("qq"))
 
 
+CARD_CODEX_NAME = "斗破傀儡图鉴"
+
+
+def build_codex_data(mats: dict | None = None, p: dict | None = None) -> dict:
+    """傀儡图鉴 → doupo_list 模板参数（2026-11-26）。
+
+    全部 18 条配方按标称档分组（人/地/天/特殊）。每条配方：
+      * title = 配方名；right = 档位标称；
+      * sub = 五维用料全清单（灰字）；
+      * note = **已有且够数的材料**，金色高亮并标「持有/需」——满足用户
+        「已有对应材料，材料要高亮而且显示数量」；
+      * accent = 整条配方可开炉时主标题高亮。
+
+    材料数量口径与 ``commands_puppet.cmd_puppet_codex`` / ``puppet_core`` 同源：
+    mats 是 ``puppet_store.materials(qq)`` 的真值，不在渲染层另算。
+    """
+    from . import puppet_core as pc
+
+    mats = {str(k): int(v or 0) for k, v in (mats or {}).items()}
+    groups_rows = []
+    # 按配方在 cfg.PUPPET_RECIPES 中的顺序分组（标称档由五维最弱一环决定）
+    buckets: dict[str, list] = {}
+    for r in cfg.PUPPET_RECIPES:
+        slots = pc.recipe_slots(r)
+        tier = pc.recipe_tier(slots)
+        tier_label = (cfg.PUPPET_TIER_BY_IDX[max(0, tier)][0]
+                      if tier >= 0 else "五维不全")
+        need = pc.recipe_materials(r)
+        owned_parts = []
+        all_parts = []
+        for n, q in need.items():
+            have = int(mats.get(n, 0) or 0)
+            all_parts.append("%s×%d" % (n, q))
+            if have >= q:
+                owned_parts.append("%s %d/%d" % (n, have, q))
+        ready = bool(owned_parts) and len(owned_parts) == len(need)
+        buckets.setdefault(tier_label, []).append({
+            "title": r["name"],
+            "right": tier_label.split("傀儡")[0],
+            "sub": "　".join(all_parts),
+            "note": ("已备：" + "、".join(owned_parts)) if owned_parts else "",
+            "accent": ready,
+        })
+
+    rows = []
+    for tier_label in ("人级傀儡", "地级傀儡", "天级傀儡", "特殊傀儡"):
+        if tier_label not in buckets:
+            continue
+        rows.append({"title": tier_label, "head": True})
+        rows.extend(buckets[tier_label])
+    # 兜底：出现未归类的档位也要显示，绝不静默丢配方
+    for tier_label, items in buckets.items():
+        if tier_label in ("人级傀儡", "地级傀儡", "天级傀儡", "特殊傀儡"):
+            continue
+        rows.append({"title": tier_label, "head": True})
+        rows.extend(items)
+
+    ready_n = sum(1 for g in buckets.values() for x in g if x["accent"])
+    return {
+        "icon": "shield",
+        "title": "傀儡图鉴",
+        "subtitle": "共 %d 条配方 · 已备齐 %d 条（金色为已备材料）" % (
+            len(cfg.PUPPET_RECIPES), ready_n),
+        "rows": rows,
+        "tip": "金色材料＝你已备齐并显示持有/所需 · 发「炼制傀儡 <配方名>」开炉",
+    }
+
+
+async def render_codex(mats: dict | None = None, p: dict | None = None,
+                       qq: str | None = None) -> bytes | None:
+    """「傀儡图鉴」出图：双列分组配方卡；失败由调用方回文本兜底。"""
+    data = build_codex_data(mats, p)
+    return await _render_list("doupo_list", data, CARD_CODEX_NAME, qq=qq)
+
+
+async def render_codex_for(qq: str, p: dict | None = None,
+                           pstore=None) -> bytes | None:
+    """按 qq 取材料再出图（按钮点击走 button_dispatch 的 codex 特判）。"""
+    from .puppet_store import PUPPET_STORE
+    store = pstore or PUPPET_STORE
+    mats = await store.materials(str(qq)) or {}
+    return await render_codex(mats, p, qq=qq)
+
+
 CARD_RUIN_NAME = "斗破傀儡遗迹"
 
 

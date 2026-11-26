@@ -394,7 +394,9 @@ MENU_GROUPS = (
         ("养火 <火名>", "用药渣喂养已收服的异火/兽火（炼药失败会出药渣）；先得火才行"),
         ("装备", "装备 <武器名>：切换持有的神兵（爬塔宝箱掉落）"),
         ("炼制傀儡", "按配方开炉（材料越好档位越高）；「炼制傀儡 地妖傀」指定配方"),
-        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯/养魂"),
+        ("傀儡", "查看傀儡卡（出图）；子命令 配方/淬炼/结阵/收服/融魂/换躯/养魂/出战"),
+        ("傀儡图鉴", "看图鉴卡：全 18 条配方，已备材料金色高亮并显示持有数量"),
+        ("傀儡出战", "列出傀儡并切换当前出战者（发「傀儡 出战 序号」精确指定）"),
         ("傀儡遗迹", "每日副本七段自动连打至力竭：库房→能量之层→雷池→宗骸祭坛→尊骨陵寝→圣地残殿→斗圣主殿"),
     )),
     ("炼药 · 宝库", (
@@ -1878,6 +1880,18 @@ def _parse_craft_count(arg: str) -> tuple[str, int]:
     return s, 1
 
 
+def _craft_flame_aid_line(p) -> str:
+    """炼药播报的护炉行（2026-11-26）：按玩家**实有且真进成功率**的火分组。
+
+    与 ``alchemy_rate_bonus`` 同源判定，无炼药火返回空串（空火开局不会被硬塞一句）。
+    """
+    from . import flame_bonus as _fb
+    detail = _fb.alchemy_flame_names(p)
+    xian = tuple(d["name"] for d in detail if d["identity"] == "异火")
+    beast = tuple(d["name"] for d in detail if d["identity"] == "兽火")
+    return txt.craft_flame_aid(xian, beast)
+
+
 async def cmd_craft(store, qq, name) -> str:
     p = await _player(store, qq)
     if not p:
@@ -1915,12 +1929,18 @@ async def cmd_craft(store, qq, name) -> str:
         if res.get("reason") in ("fail",):
             msg = txt.craft_fail(res["dross"], cfg.rate_cn(res["rate"]), over_hint,
                                  seed=int(res["dross"]))
+            aid = _craft_flame_aid_line(p)
+            if aid:
+                msg += "\n" + aid
             if res.get("alch_up"):
                 msg += "\n" + txt.alch_up(res["alch_up"])
             return msg
         return txt.craft_fail_plain()
     _grade = str(cfg.RECIPE_BY_NAME.get(hit, {}).get("grade") or "")
     msg = txt.craft_success(hit, _grade, cfg.rate_cn(res["rate"]))
+    aid = _craft_flame_aid_line(p)
+    if aid:
+        msg += "\n" + aid
     if res.get("danwen"):
         msg += "\n" + txt.craft_danwen(hit, 1)
     # 成功回执不再附「越档几无可能」——丹都成了还泼冷水，只会让人以为出错了。
@@ -1959,6 +1979,9 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
 
     lines = [txt.craft_batch_head(hit, res["n_done"], res["n_ok"], res["n_fail"],
                                   cfg.rate_cn(res["rate"]))]
+    aid = _craft_flame_aid_line(p)
+    if aid:
+        lines.append(aid)
     detail = txt.craft_batch_detail(res["n_ok"], res["dross"], res["exp"])
     if res.get("exp_factor", 1.0) < 1.0:
         detail += f"（低阶丹，经验{cfg.rate_cn(res['exp_factor'])}计）"
@@ -3614,7 +3637,7 @@ async def cmd_pick(store, qq, n) -> str:
 # 都读它。此前 handler 无条件出傀儡卡，把淬炼/结阵/收服/融魂/配方的回执整条丢掉
 # ——玩家花了雷淬石和金币、只收到一张没变化的名录卡（2026-11-20 第十一轮，用户报
 # 「傀儡淬炼口令没触发」，真相是命令触发了、也真扣了料，只是回执被卡吞了）。
-PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂", "换躯", "养魂")
+PUPPET_SUBCMDS = ("配方", "谱", "淬炼", "结阵", "收服", "融魂", "换躯", "养魂", "出战", "图鉴")
 
 
 
@@ -3625,7 +3648,10 @@ from .commands_puppet import (  # noqa: E402
     cmd_puppet,
     cmd_craft_puppet,
     cmd_puppet_ruin,
+    cmd_puppet_codex,
+    cmd_puppet_deploy,
     _puppet_recipe_text,
+    _cmd_puppet_deploy,
     _cmd_puppet_temper,
     _cmd_puppet_reforge,
     _cmd_puppet_soul_feed,

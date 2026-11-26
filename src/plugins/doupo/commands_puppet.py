@@ -46,6 +46,9 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
     # 「傀儡 配方」随时可看（不必先有傀儡）——多配方后玩家第一句总是「要什么料」
     if arg.startswith("配方") or arg.startswith("谱"):
         return _puppet_recipe_text(p, await pstore.materials(qq) or {})
+    # 「傀儡 图鉴」= 配方的出图版；文本兜底由 cmd_puppet_codex 给，卡片由 handler 出。
+    if arg.startswith("图鉴"):
+        return await cmd_puppet_codex(store, qq, pstore)
     if not roster:
         lines = ["【傀儡】你尚未拥有傀儡。", "炼一具须先过五道资格（挂已有养成）："]
         checks = [
@@ -82,6 +85,8 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         return await _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg)
     if arg.startswith("养魂"):
         return await _cmd_puppet_soul_feed(store, qq, p, roster, elig, pstore, arg)
+    if arg.startswith("出战"):
+        return await _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg)
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
@@ -163,6 +168,93 @@ def _puppet_recipe_text(p, mats: dict) -> str:
         if item.get("lack"):
             lines.append("　　缺 %s" % "、".join(item["lack"]))
     lines.append("发「炼制傀儡 <配方名>」开炉；留空自动选能凑齐的最高档。")
+    return "\n".join(lines)
+
+
+async def cmd_puppet_deploy(store, qq, pstore=None, arg="") -> str:
+    """「傀儡出战」按钮入口：无参列出可切换清单，带序号则切换。"""
+    pstore = pstore or _cmds.DEFAULT_PUPPET_STORE
+    p = await _cmds._player(store, qq)
+    if not p:
+        return _cmds.NOT_ENTERED
+    qq = str(qq)
+    roster = await pstore.list_puppets(qq)
+    elig = await pstore.eligibility(qq)
+    return await _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg)
+
+
+async def _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg) -> str:
+    """傀儡出战（2026-11-26）：主动切换当前出战傀儡，带明确回执。
+
+    出战此前是隐式的（入库即 active_id），玩家无从切换。本命令读独立库的
+    ``list_puppets`` 序号，写 ``puppet_store.set_active`` 真实列——与战斗
+    ``active_puppet()`` 同一真值，切完立刻生效（下场战斗就换人）。
+
+    用法：``傀儡 出战`` 列清单；``傀儡 出战 2`` 或 ``傀儡 出战 <名中关键字>`` 切换。
+    """
+    from . import puppet_core as pc
+
+    qq = str(qq)
+    a = str(arg or "").strip()[len("出战"):].strip()
+    cur = next((x for x in roster if x["id"] == elig.get("active_id")), None)
+    if not roster:
+        return "【傀儡出战】你尚未拥有傀儡，先发「炼制傀儡」炼一具。"
+    if not a:
+        lines = ["【傀儡出战】当前出战：%s" % (cur["name"] if cur else "无"),
+                 "发「傀儡 出战 序号」切换（序号见下）："]
+        for i, x in enumerate(roster, 1):
+            tier_name, _skin = cfg.PUPPET_TIER_BY_IDX.get(
+                int(x.get("tier", 0)), ("人级傀儡", "铜"))
+            mark = " ★出战" if cur and x["id"] == cur["id"] else ""
+            lines.append("　%d. %s（%s）· 攻 %d%s" % (
+                i, x["name"], tier_name, int(pc.puppet_attack(x, p)), mark))
+        return "\n".join(lines)
+    # 解析目标：优先纯序号，其次名字包含
+    target = None
+    if a.isdigit():
+        idx = int(a)
+        if 1 <= idx <= len(roster):
+            target = roster[idx - 1]
+        else:
+            return "【傀儡出战】序号超出范围（你有 %d 具，填 1~%d）。" % (len(roster), len(roster))
+    else:
+        target = next((x for x in roster if a in str(x.get("name") or "")), None)
+        if target is None:
+            return "【傀儡出战】没有名字含「%s」的傀儡，发「傀儡 出战」看清单。" % a
+    if cur and target["id"] == cur["id"]:
+        return "【傀儡出战】%s 已在出战中。" % target["name"]
+    await pstore.set_active(qq, int(target["id"]))
+    tier_name, _skin = cfg.PUPPET_TIER_BY_IDX.get(
+        int(target.get("tier", 0)), ("人级傀儡", "铜"))
+    return "⚔️ 傀儡出战已切换：【%s】（%s）· 肉身攻击 %d。下一场战斗即刻改用这具。" % (
+        target["name"], tier_name, int(pc.puppet_attack(target, p)))
+
+
+async def cmd_puppet_codex(store, qq, pstore=None, report=None) -> str:
+    """傀儡图鉴（2026-11-26）：全部 18 条配方 + 玩家已有材料高亮/数量。
+
+    与 ``傀儡 配方`` 纯文本同源（都读 cfg.PUPPET_RECIPES + pstore.materials），
+    但走出图：把结构化数据写进 ``report`` 供 ``card.render_codex`` 消费。文本
+    兜底也完整可读——图渲染失败时调用方仍能拿到这份清单（不静默丢内容）。
+    """
+    from . import puppet_core as pc
+
+    p = await _cmds._player(store, qq)
+    if not p:
+        return _cmds.NOT_ENTERED
+    mats = await (pstore or _cmds.DEFAULT_PUPPET_STORE).materials(str(qq)) or {}
+    if report is not None:
+        report["mats"] = {str(k): int(v or 0) for k, v in mats.items()}
+    fg = pc.fire_grade(p)
+    fire_word = {1: "兽火", 2: "异火", 3: "高阶异火"}.get(int(fg["grade"]), "兽火")
+    lines = ["【傀儡图鉴】共 %d 条 · 你的炼制之火：%s（%s）"
+             % (len(cfg.PUPPET_RECIPES), fire_word, fg["name"])]
+    for r in cfg.PUPPET_RECIPES:
+        need = pc.recipe_materials(r)
+        have = [("%s %d/%d" % (n, int(mats.get(n, 0) or 0), q))
+                for n, q in need.items()]
+        lines.append("　%s：%s" % (r["name"], "、".join(have)))
+    lines.append("发「炼制傀儡 <配方名>」开炉；齐料项在图鉴卡上以金色高亮。")
     return "\n".join(lines)
 
 

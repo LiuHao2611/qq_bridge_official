@@ -101,3 +101,28 @@ def breakdown(p: dict) -> list[dict]:
             out.append({"name": f["name"], "kind": f["kind"],
                         "lv": lv, "value": float(f["value"])})
     return out
+
+
+def alchemy_flame_names(p: dict) -> list[dict]:
+    """播报用：玩家已收服、**真正参与炼药成功率**的火焰明细。
+
+    2026-11-26 用户「异火兽火加成要在炼药播报体现，别太生硬」。判定刻意与
+    ``alchemy_rate_bonus`` 同源（同一个 is_alchemy 判据、同一个 _numeric_flames
+    遍历），只列「卡面说在帮忙 → 成功率也真算了」的火，杜绝两张皮。
+    identity 只保留异火 / 兽火两种身份（新生异火归入异火），与玩家口径一致。
+
+    返回 ``[{"name": str, "identity": "异火"|"兽火", "lv": int}]``，只列已收服。
+    """
+    beast_names = {f["name"] for f in cfg.BEAST_FLAMES}
+    out: list[dict] = []
+    for f in _numeric_flames():
+        is_alchemy = (f.get("kind") == "alchemy") or (f.get("bonus") == "alchemy")
+        if not is_alchemy:
+            continue
+        lv = _owned_level(p, f["name"])
+        if lv <= 0:
+            continue
+        out.append({"name": f["name"],
+                    "identity": "兽火" if f["name"] in beast_names else "异火",
+                    "lv": lv})
+    return out
