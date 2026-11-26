@@ -17,10 +17,10 @@
 ## B. 手机端生产部署
 - 手机=唯一生产环境，Docker 全停。代码 `/home/pmos/qq_bridge`，venv `/home/pmos/venv`。开机自启：`networkmanager sshd nftables syslog crond logview qq-bridge qq-doupo-agent`。
 - **qq-bridge** `/etc/init.d/qq-bridge`：8081 官方通道（Bot 1906371548）。`command_background=yes`+`pidfile` 必填。**qq-doupo-agent**：8765 本机，`DOUPO_AGENT_URL=http://127.0.0.1:8765`。
-- **🚨 裸机必写 `.env` 的 `DOUPO_DATA_PATH`/`XIUXIAN_DATA_PATH`（曾致老玩家被要求重新入道）**：`DOUPO_DATA_PATH=/home/pmos/qq_bridge/data/doupo/doupo.json`、`XIUXIAN_DATA_PATH=.../xiuxian/xiuxian.json`、`QQ_BRIDGE_CACHE_DIR=.../data/wm_cache`。库路径由 `Path(DATA_PATH).with_suffix('.sqlite')` 推导，**不要新开 DB_PATH**。生产应 `select count(*) from players`=4 行。
-- **🚨 部署后必跑 `python tools/phone_deploy.py drift`**：`verify` 只看 `.deployed` 清单，漏推文件不进清单⇒PASS 线上却坏（11-23 周本 `snapshot_lv` TypeError 事故）。drift=本地 `src/**/*.py` md5 vs 手机全量，正常 291 个 .py 两侧相等。`tools/` 不上手机属正常差异。
+- **🚨 裸机必写 `.env` 的 `DOUPO_DATA_PATH`/`XIUXIAN_DATA_PATH`（曾致老玩家被要求重新入道）**：`DOUPO_DATA_PATH=/home/pmos/qq_bridge/data/doupo/doupo.json`、`XIUXIAN_DATA_PATH=.../xiuxian/xiuxian.json`、`QQ_BRIDGE_CACHE_DIR=.../data/wm_cache`。库路径由 `Path(DATA_PATH).with_suffix('.sqlite')` 推导，**不要新开 DB_PATH**。生产应 `select count(*) from players`≥4 行（11-26 实测 5 行）。
+- **🚨 部署后必跑 `python tools/phone_deploy.py drift`**：`verify` 只看 `.deployed` 清单，漏推文件不进清单⇒PASS 线上却坏（11-23 周本 `snapshot_lv` TypeError 事故）。drift=本地 `src/**/*.py` md5 vs 手机全量，正常 304 个 .py 两侧相等。`tools/` 不上手机属正常差异。
 
 ## 索引
-- 游戏侧红线（数据入库存真列/战斗回看/异火/傀儡三件套/沉浸文案/命中闪避面板/紫卡/沙盒/赠送/成卡回执/养魂）见同目录 `MEMORY_REDLINES.md`，动这些模块前必读。
+- 游戏侧红线（数据入库存真列/战斗回看/异火/傀儡三件套/沉浸文案/命中闪避面板/紫卡/沙盒/赠送/成卡回执/养魂）见同目录 `MEMORY_REDLINES.md`，动这些模块前必读。**§25 = 力竭必真扣血 / 塔两层两套层号 / 出卡三段计时 / 按钮三类型**。
 - 全部运维细节/六类故障剧本/危险操作黑名单/验收数据见 `docs/生产环境说明_手机服务器_2026-11-21.md`（13 章，唯一权威）。
 - 当日细节见同目录 `YYYY-MM-DD.md` 日志。

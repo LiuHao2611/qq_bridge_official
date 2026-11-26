@@ -217,3 +217,32 @@ echo 标记混进文件头）→ shebang 掉第二行 → `rc-service` 报 `Exec
   已改成 pytest 下即抛，其余 23 个仍是坑（已知隐藏失败 12 条，见 2026-11-25 日志待办）。
 - **写跨行正则做源码契约测试时禁止 `(?:[ ]+[^\n]*\n)*?`**：目标句一改就灾难性回溯，
   整个 pytest 进程被 timeout 插件 SIGTERM（表现为「测试卡死」）。用定长窗口 + `[ ]*`。
+
+## §25 2026-11-26：力竭必须真扣血 / 两层两套层号 / 出卡三段计时 / 按钮三类型
+
+- **「力竭」= 必须真写回 `p["hp"]`**。塔与周本战斗跑在 `copy.deepcopy(p)` 上，
+  只回写会话 `st['temp_hp']`；`tower_settle()` 从头到尾**不动 `p['hp']`**。
+  唯一合法写回口 = **`core.writeback_exhaustion(p, r)`**（口径 = `battle_core.fight`
+  的战败地板 `体力 × LOSE_HP_FLOOR(5%)`、`mp = r['mp']`）。新增「力竭/阵亡」分支
+  必须调它，否则就是「文案说倒下、人物卡满血」——用户 2026-11-26 当面拆穿过。
+  **只在输的时候调**：赢了/收手不扣永久气血（塔续航走会话 temp_hp）。
+- **塔有两套层号，别混**：`st['floor']` = **已通过层**（决定奖励/水位线/best）；
+  `tower_floor()['floor']` = **正在打的层**。玩家可见的「倒在第 N 层」必须用后者，
+  「已通 N 层」用前者。旧代码力竭时传 `res['floors']` → 「从 25 开始、止步 24」
+  自相矛盾。`txt.tower_down(fallen, cleared=None)` 已把这条编码进签名。
+- **出卡慢先分段计时，别猜缓存**。顺序：`pic_render render_ms` → 上传段
+  （`render → official_image_button_merged`）→ 发送段（`merged → official_sent`）。
+  2026-11-26 实测：渲染 1.0~1.2s、发送 1.8~2.0s **五天没变**，慢的全是上传段
+  （median 2.0s / max 13s），而 13s 里有 11s 是「连不上」在等系统 TCP 超时。
+  故 `media_asset` 有两条铁律：**connect 超时单独压 3s**（总超时仍 30s）、
+  **PUT 必须复用同一个 AsyncClient**（实测 188ms→41ms/请求）。
+- **`render_panel` 必须走 `_render_list`**。它曾是唯一自己重写 `_style_for`+`pic.render`
+  的入口（最高频的人物卡），等于绕过 `_RENDER_CACHE`/stats/字节稳定保证。
+  守门 `test_panel_source_has_no_private_render_path` 会扫源码，别抄回去。
+- **官方按钮只有三种 `action.type`**：`0=跳转`(data 是 https，必须给
+  `unsupport_tips`)、`1=回传`(INTERACTION_CREATE，data 可任意哨兵)、`2=指令`
+  (客户端替玩家发一条消息，data 必须是人能打的口令)。`Btn.kind` 默认 `callback`，
+  **改默认值 = 全线改行为**。样例口令「按钮样例」不进菜单。
+- **手写测试清单 = 自欺**。`test_doupo_buttons.py` 直跑入口原是手写 `tests=[...]`，
+  新增用例忘登记就静默不跑（实测 31 个只跑 27）。直跑入口一律用
+  `globals()` 自动收集。
