@@ -454,12 +454,13 @@ def make_keyboard(text: str):
                 reply=False, enter=False, unsupport_tips="请升级 QQ 后重试",
             )
         elif kind == "command":
-            # 指令按钮：客户端把 data 当作玩家发的消息，走普通消息链路。
-            # ``enter=True`` = 点一下直接发出（不必再按发送）；``reply=False`` =
-            # 不带上引用（带引用会让服务端收到 reply 型消息，没必要多一层语义）。
+            # 指令按钮：客户端把 data 当作玩家发的消息。
+            # 🔴 ``enter`` 官方文档写明「仅单聊可用」——群聊里传 True 会被拒/被忽略，
+            # 故这里恒 False：群聊点击后是「把 @bot data 填进输入框」，玩家自己按发送。
+            # （2026-11-26 查 bot.q.qq.com v2 群消息接口文档确认，勿凭印象写 True。）
             action = Action(
                 type=2, permission=Permission(type=2), data=b.cmd,
-                reply=False, enter=True,
+                reply=False, enter=False,
             )
         else:
             # 回调按钮（默认，本项目既有全部按钮）：回传 INTERACTION_CREATE，
