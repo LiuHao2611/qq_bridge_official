@@ -280,6 +280,19 @@ _PUT_TOTAL_TIMEOUT = 30.0
 #: 注意只压 connect —— 上传本身要传 150~350KB，总超时仍留 30s 给弱网上行。
 _PUT_CONNECT_TIMEOUT = 3.0
 
+#: prepare 对冲阈值（秒）：一次 ``POST /v2/media-images/prepare`` 超过这么久没回，
+#: 就**并发补发第二个**，谁先回用谁。
+#:
+#: 依据 2026-11-26 真机三样本：prepare_ms = 637 / 1606 / 3262，而同一时刻的
+#: put_ms = 348 / 339 / 339（纹丝不动）。带宽与算力都被排除，剩下的只能是那一次
+#: 往返的**尾延迟**（TLS 重连 / 服务端排队）。尾延迟用「重试」治不好——超时时间
+#: 一到就已经输了；用「对冲（hedged request）」治得好：把 P99 钉在阈值附近，
+#: 代价是偶尔多一个 upload_id。
+#:
+#: 多出来的 upload_id 不占配额：官方配额算的是 ``complete`` 之后产生的 image_id，
+#: 未 complete 的上传任务 4 小时后自然失效（官方「素材管理」文档）。
+_PREPARE_HEDGE_AFTER = 1.2
+
 #: 复用同一个 AsyncClient：每张卡都新建 client 等于每次都重做一遍 DNS+TCP+TLS
 #: （手机 ARM 上 0.2~0.6s/张）。按 **事件循环** 持有，避免测试里
 #: ``asyncio.run()`` 反复起停导致「拿到上一条已关闭的 loop 的 client」。
@@ -352,6 +365,38 @@ def _err_code(e: BaseException) -> int | None:
     return None
 
 
+async def _prepare_hedged(attempt):
+    """首发 + 超时对冲：先发一个；超过 ``_PREPARE_HEDGE_AFTER`` 未回就并发补发第二个，
+    取**先成功**的那个，另一个取消。两个都失败则抛最后一个错误（交给上层判配额）。
+
+    ``attempt`` 是无参协程工厂（内部已含 ``_retry_net``）。用 ``ensure_future`` 而不是
+    直接传协程给 ``asyncio.wait``：Python 3.12+ 已禁止后者（裸协程会 TypeError）。
+    """
+    first = asyncio.ensure_future(attempt())
+    second = None
+    try:
+        done, _ = await asyncio.wait({first}, timeout=_PREPARE_HEDGE_AFTER)
+        if done:
+            return first.result()      # 快路径：1.2s 内回来，行为与改造前完全一致
+        log.warning(jlog("material_prepare_hedged", after_ms=int(_PREPARE_HEDGE_AFTER * 1000)))
+        second = asyncio.ensure_future(attempt())
+        pending = {first, second}
+        last_err = None
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                try:
+                    return t.result()
+                except Exception as e:   # noqa: BLE001 — 一个输了看另一个
+                    last_err = e
+        raise last_err or RuntimeError("prepare_hedge_no_result")
+    finally:
+        for t in (first, second):
+            if t is not None and not t.done():
+                t.cancel()
+
+
 async def _prepare_once(bot, file_name: str, data: bytes, content_type: str) -> dict:
     """单次 POST /v2/media-images/prepare；不含配额自愈。"""
     base = bot.adapter.get_api_base()
@@ -370,8 +415,11 @@ async def _prepare_once(bot, file_name: str, data: bytes, content_type: str) -> 
             },
         )
 
+    async def _attempt():
+        return await _retry_net(lambda: bot._request(_make_req()), "prepare")
+
     try:
-        ret = await _retry_net(lambda: bot._request(_make_req()), "prepare")
+        ret = await _prepare_hedged(_attempt)
     except Exception as e:  # noqa: BLE001
         # 日志带上真实错误码/消息（旧实现只记类名，把 40035007 藏起来，排障全靠猜）
         log.warning(jlog("material_prepare_failed", error=type(e).__name__,
@@ -545,6 +593,49 @@ async def _quota_vacancy(bot) -> int:
         return deleted
 
 
+#: 待删除的旧素材 image_id（进程内队列）。
+#:
+#: 2026-11-26 真机实测（三张卡，同机同接口）::
+#:
+#:     prepare_ms  637 / 1606 / 3262     ← 唯一在抖的段
+#:     put_ms      348 /  339 /  339     ← 恒定，170KB 上行 ≈ 0.34s
+#:     complete_ms 1040 / 1040 / 1120    ← 恒定，且偏大
+#:
+#: ``put_ms`` 恒定说明带宽没问题（压图无收益）；``complete_ms`` 恒定 1 秒说明那
+#: 不是网络抖动而是**固定结构开销**——它等于一次 ``complete`` POST **加上一次 LRU
+#: 淘汰 DELETE**。``MAX_MATERIALS=92`` 且在库 92 张，意味着**每张新卡都必然淘汰
+#: 一张旧卡、必然多发一次 DELETE**，玩家每次都要为「删上一张」等约 1 秒。
+#:
+#: 删的是上一张旧卡，玩家等的是这一张新卡 —— 没有理由让它阻塞。改为后台补删：
+#: 本次不 await，下一次 ``ensure_material`` 或进程空闲时继续清。删失败只记日志
+#: （``_delete`` 内部已兜底），残留孤儿由 ``_quota_vacancy`` 在撞 40035007 时统一
+#: 清理，不会泄漏配额。
+_PENDING_DELETE: set[str] = set()
+_drain_task = None
+
+
+def _drain_evicted(bot) -> None:
+    """把待删 image_id 丢到后台清（**绝不阻塞**本次出图）。无运行中事件循环则留待下次。"""
+    global _drain_task
+    if not _PENDING_DELETE:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:      # 同步上下文（脚本/测试收尾）→ 留到下次 ensure_material
+        return
+    if _drain_task is not None and not _drain_task.done():
+        return                # 已有清理任务在跑，不重复起
+    _drain_task = loop.create_task(_drain_evicted_loop(bot))
+
+
+async def _drain_evicted_loop(bot) -> None:
+    """逐个补删。用「先 peek 再删再摘」而不是 pop：中途被取消时 id 仍留在队列里。"""
+    while _PENDING_DELETE:
+        iid = next(iter(_PENDING_DELETE))
+        await _delete(bot, iid)          # 内部已吞异常只记日志，不会中断循环
+        _PENDING_DELETE.discard(iid)
+
+
 async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict:
     """确保图片字节在素材库有引用，返回 ``{"url",width",height",md5"}``。
 
@@ -554,6 +645,10 @@ async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict
     2026-11-26 加分段计时日志 ``material_timing``：出图慢到底是慢在
     「接口往返」还是「上行带宽」只能靠数据说话，不许猜。``cached=True`` 表示
     整段没走网络。
+
+    2026-11-26 晚（第二版，依据上条实测数据）：LRU 淘汰的那一次 ``DELETE`` 移出
+    热路径（见 ``_PENDING_DELETE``），``complete_ms`` 从此只含 ``complete`` 本身；
+    prepare 加超时对冲（见 ``_PREPARE_HEDGE_AFTER``），削掉 3 秒级尾延迟。
     """
     if not data:
         raise MaterialUploadError("empty_image_bytes")
@@ -576,9 +671,13 @@ async def ensure_material(bot, data: bytes, file_name: str = "card.png") -> dict
         "height": height,
     }
     _store.put(md5, item)
-    for old in _store._evict_candidates():
-        if old.get("image_id"):
-            await _delete(bot, old["image_id"])
+    # LRU 淘汰：只摘记账、把旧素材 id 塞进待删队列，**不当场 await 删除**。
+    # 这一改把每张冷卡的固定开销砍掉约 1.0s（真机 complete_ms 1040~1120ms 全在这里）。
+    evicted = _store._evict_candidates()
+    if evicted:
+        _PENDING_DELETE.update(
+            str(o["image_id"]) for o in evicted if o.get("image_id"))
+        _drain_evicted(bot)
     t3 = time.time()
     log.info(jlog("material_uploaded", md5=md5[:12], width=width, height=height,
                   cached_store=len(_store)))
