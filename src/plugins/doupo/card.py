@@ -1618,9 +1618,10 @@ def build_item_detail_data(p: dict, name: str) -> dict | None:
             if diff > 0:
                 bit += "·越%d档" % diff
             src_rows.append(bit)
-        if int(rec.get("buy", 0) or 0) > 0:
-            src_rows.append("宝库｜%d 金一枚" % int(rec["buy"]))
+        # 2026-11-26：能炼制的丹药一律不卖，详情卡不再给「宝库 X 金一枚」这条
+        # 会被玩家当成「可直接买」的来源；只有无药方丹（buyonly）才显示购买价。
         if not need and int(rec.get("buy", 0) or 0) > 0:
+            src_rows.append("宝库｜%d 金一枚" % int(rec["buy"]))
             src_rows.append("此丹原著未载药方，本作只能金币购入")
         groups.append({"name": "从何而来", "rows": src_rows or ["来历不详"]})
         tip = ("服丹 %s 用掉一枚" % raw) if not tier else ("服丹 %s 本效+赐福一起生效" % raw)

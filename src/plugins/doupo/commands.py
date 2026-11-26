@@ -1859,6 +1859,10 @@ async def cmd_buy(store, qq, args) -> str:
             return (f"🚫 【{name}】是 {cfg.full_realm(int(res['need_lv']))} 的丹药，"
                     f"你如今 {cfg.full_realm(int(p.get('lv', 1)))} —— 药力太猛，"
                     f"强服只会爆体（到 {res['need_lv']} 级再来）。")
+        # 2026-11-26 用户红线：能炼制的丹药一律不卖（堵住「低价扫丹跳玩法」漏洞）。
+        if res.get("reason") == "craftonly":
+            return (f"【{name}】乃炼制之物，宝库不售。\n"
+                    f"　发「炼制 {name}」备齐药材与火自己开炉 —— 丹成全凭本事，非金币可买。")
         return f"没有【{name}】这样货。发「宝库」看全部。"
     out = [f"✅ 购入【{res['name']}】×{res['n']}，花费 {res['total']} 金，余 {p['gold']}。"]
     out.extend(_chance_lines(chance, qq))
@@ -1913,7 +1917,7 @@ async def cmd_recipes(store, qq, page=1) -> str:
     out.append("")
     if total_pages > 1:
         out.append(f"　发「炼药2」…「炼药{total_pages}」翻页，或点下方按钮")
-    out.append("　用法：炼制 回灵丹（有药方）／买 丹名（无药方）")
+    out.append("　用法：炼制 <丹名>（有药方，宝库不售）／买 <无药方丹·药材>")
     return "\n".join(out)
 
 

@@ -3358,11 +3358,16 @@ def shop_list() -> list:
 def shop_buy(p, name, n=1) -> dict:
     n = max(1, int(n))
     item = next((x for x in shop_list() if x["name"] == name), None)
-    # 2026-11-16：原著丹药「无药方者纯金币卖」——丹药也能用「买」直接购得。
-    # 只在未命中药材时兜底查丹药表，不改药材购买的任何既有行为。
+    # 2026-11-26 用户红线：「能炼制的丹药一律不许直接买」。漏洞根因是这里曾把
+    # 全部丹药当商品兜底，而多数丹售价低于材料成本（九阴黄泉丹 9 万金 vs 材料约 900），
+    # 玩家跳过整个炼药玩法直接扫货。现在只放行**无药方**丹（buyonly：原著未载丹方、
+    # 本就只能金币购入，如养魂涎/九品玄丹/帝品雏丹）；有 need 的丹一律 craftonly。
+    # 只在未命中药材时查丹药表，不改药材购买的任何既有行为。
     if item is None:
         rec = cfg.RECIPE_BY_NAME.get(name)
         if rec and int(rec.get("buy", 0)) > 0:
+            if rec.get("need"):
+                return {"ok": False, "reason": "craftonly", "name": name}
             item = {"name": name, "price": int(rec["buy"]), "desc": str(rec.get("desc", ""))}
     if not item:
         return {"ok": False, "reason": "noitem"}

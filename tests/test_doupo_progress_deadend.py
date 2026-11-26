@@ -145,8 +145,8 @@ def test_accept_skips_weapon_task_already_done():
 def _starter(grade_max: str) -> dict:
     """挑一份品阶低于 grade_max、有药方的配方，给足材料。
 
-    ⚠️ 不能要求 ``buy==0``：本作里「有药方 + 也能直接买」的丹很多
-    （回灵丹就是），买得起不代表不能炼。
+    ⚠️ 2026-11-26 起「有药方的丹一律不卖」，但 ``buy`` 字段仍留在丹方表里
+    做市场价/图鉴展示，所以这里仍不要求 ``buy==0``，只按 ``need`` 挑可炼制的丹。
     """
     lim = cfg.alch_grade_idx(grade_max)
     rec = next(r for r in cfg.RECIPES
