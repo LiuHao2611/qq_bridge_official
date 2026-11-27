@@ -194,6 +194,31 @@ def test_doupo_panel_png_and_layout():
     assert _color_count(data, doupo.C_ACCENT, tol=60) > 30
 
 
+def test_doupo_panel_realm_desc_wraps_without_truncation():
+    """2026-11-27：境界说明必须来自 realm_lore、折行不吞字，且撑高与实画一致。
+
+    老存档（无 realm_desc）的 810px 基线由上一个用例钉住；本用例只守新增字段：
+    窄屏折成两行时高度必须跟着涨，任何一行都不许出现省略号或丢字。
+    """
+    from src.plugins.qq_bridge.pic.templates import doupo
+
+    desc = "斗气已满，便将其尽数压缩，腾出空处再填满——如此往复，一转强过一转，八转已近圣。"
+    d = dict(DOUPO_DATA)
+    d["realm_desc"] = desc
+    for w in (560, 720):
+        lines = doupo._realm_desc_lines(d, w - doupo.PAD * 2)
+        assert "".join(lines) == desc, f"w={w} 折行吞字: {lines}"
+        assert all("…" not in ln for ln in lines), f"w={w} 描述被截断: {lines}"
+        boxes: list[tuple] = []
+        c = doupo.build(theme.get(LIGHT), data=d, width=w, boxes=boxes)
+        assert c.height == doupo._measure(d, w), f"w={w} 测高与实画不一致"
+        drawn = [b for b in boxes if b[0].startswith("realm_desc")]
+        assert len(drawn) == len(lines), f"w={w} 描述行没全部登记包围盒"
+        if w == 560:
+            assert len(lines) >= 2, "560 宽应折行（否则测高分支没被覆盖）"
+            assert c.height > doupo._measure(DOUPO_DATA, 560), "折行后卡片高度没上涨"
+
+
 def test_doupo_panel_avatar_is_drawn_inside_card():
     """用户 2026-11-07：头像必须**画进卡片里**，不是发一张独立动图。
 

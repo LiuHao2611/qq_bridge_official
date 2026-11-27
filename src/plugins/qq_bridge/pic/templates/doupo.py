@@ -26,6 +26,7 @@
   avatar_b64 96×96 透明头像 PNG 的纯 base64（可选，缺省画占位头像）
   avatar_caption 形象说明（可选，如「持剑少年」）
   realm      境界名（原著 13 阶，如「斗之气一段」「一转斗尊巅峰」）
+  realm_desc 当前境界的一句说明（2026-11-27，来自 doupo.realm_lore；空则不画）
   exp / need 当前修为 / 升级所需
   realm_max  是否已至巅峰（True 时修为显示 x(已至巅峰)，进度条置满）
   can_break  修为已满、可突破
@@ -179,6 +180,11 @@ BAR_H = 14
 CELL_H = 80
 GAP = 12
 PILL_H = 36
+# 境界描述行（2026-11-27）：chip 与修为条之间一行弱文字，长句折行、不截断。
+REALM_DESC_FS = FS_SMALL
+REALM_DESC_LH = FS_SMALL + 8     # 行高：字号 + 8px 行间呼吸
+REALM_DESC_GAP = 8               # 描述块与修为条之间留一个间距 token
+REALM_DESC_ROW_H = REALM_DESC_LH + REALM_DESC_GAP
 
 # 头像框（与 doupo/avatar.py::HEADSHOT_SIZE 必须一致）
 AVATAR_SIZE = 96
@@ -247,10 +253,25 @@ H_MP = (FS_SMALL + 10) + (BAR_H + 10)       # 斗气条
 H_FOOT = FS_SMALL + 14           # 底部信息行（底部呼吸由 PAD=36 提供）
 
 
-def _measure(_data: dict | None = None) -> int:
+def _realm_desc_lines(data: dict | None, content_w: int) -> list[str]:
+    """境界描述折行（唯一入口；_measure 与 build 都必须走它，禁止另一套宽度）。"""
+    desc = str((data or {}).get("realm_desc") or "")
+    if not desc:
+        return []
+    return S.wrap_cjk(desc, REALM_DESC_FS, "regular", content_w)
+
+
+def _realm_desc_extra_h(data: dict | None, content_w: int) -> int:
+    return len(_realm_desc_lines(data, content_w)) * REALM_DESC_ROW_H
+
+
+def _measure(data: dict | None = None, width: int | None = None) -> int:
     # 底部用 UI.PAD_B（54）而非 PAD（36）：底部两角只有短 L 线，36 收尾会贴框。
+    w = max(560, min(int(width or 720), 900))
+    content_w = w - PAD * 2
     return (PAD + UI.PAD_B + H_TITLE + H_HEADER + H_REALM + H_ALCH + H_WEAPON
-            + H_GRID + H_HP + H_MP + H_FOOT)
+            + H_GRID + H_HP + H_MP + H_FOOT
+            + _realm_desc_extra_h(data, content_w))
 
 
 @lru_cache(maxsize=8)
@@ -324,9 +345,29 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     width = max(560, min(width, 900))
     p = _pal(t)
     content_w = width - PAD * 2
-    h = _measure(data)
+    h = _measure(data, width)
 
+    #: 可选：card-design check_boxes 自检包围盒（默认 None，零开销）。
+    #: 只登记境界区块（标签 / 描述 / 修为条）——新增描述行的溢出与重叠靠它拦。
+    boxes = kw.pop("boxes", None)
     c = Canvas(width, h, p["page_color"], theme=t)
+
+    def rec(label: str, txt: str, x: int, y: int, size: int, role: str,
+            anchor: str) -> None:
+        """记录文本包围盒（绘制与度量同 role，锚点换算与 doupo_faction 一致）。"""
+        if boxes is None:
+            return
+        w = _w(txt, size, role)
+        hh = int(size)
+        if anchor == "lm":
+            bb = (x, y - hh // 2, x + w, y + hh // 2)
+        elif anchor == "rm":
+            bb = (x - w, y - hh // 2, x, y + hh // 2)
+        elif anchor == "mm":
+            bb = (x - w // 2, y - hh // 2, x + w // 2, y + hh // 2)
+        else:                                  # la
+            bb = (x, y, x + w, y + hh)
+        boxes.append((label,) + bb)
     # 游戏风外壳：深蓝紫渐变底 + 斜纹/祥云/龙鳞 + 暗角 + 回纹外框 + 青蓝云纹牌匾。
     # 2026-11-22 用户否掉浅色信息卡方向，要求「游戏的效果」，故整卡外壳换内核统一画。
     x0 = PAD
@@ -391,10 +432,26 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     # 左右同一基线 y+11：字号一大一小但视觉不漂移（原 y+9 / y+11 会错开）
     S.small(c, (x0, y + 11), "境界修为", size=S.FS_BODY,
             color=p["dim_color"])
+    rec("realm.label", "境界修为", x0, y + 11, S.FS_BODY, "regular", "lm")
     # 修为数值放大加粗（可突破时转朱红），一眼看得出「满没满」
     S.key(c, (x0 + content_w, y + 11), exp_txt, size=S.MIN_BOLD_FS,
           color=p["chip_text"] if can_break else p["text_color"], anchor="rm")
+    rec("realm.exp", exp_txt, x0 + content_w, y + 11,
+        S.MIN_BOLD_FS, "bold", "rm")
     y += FS_SMALL + 12
+
+    # ---- 境界说明（2026-11-27）：唯一源 realm_lore，折行不截断 ----
+    # 位置在「境界修为」与修为条之间；空串时块高为 0，老存档出图逐像素不变。
+    desc_lines = _realm_desc_lines(data, content_w)
+    for i, line in enumerate(desc_lines):
+        ly = y + REALM_DESC_FS // 2 + i * REALM_DESC_LH
+        S.small(c, (x0, ly), line, size=REALM_DESC_FS, color=p["dim_color"])
+        rec("realm_desc%d" % i, line, x0, ly, REALM_DESC_FS, "regular", "lm")
+    if boxes is not None:
+        bar_y = y + len(desc_lines) * REALM_DESC_ROW_H
+        boxes.append(("realm.bar", x0, bar_y, x0 + content_w, bar_y + BAR_H))
+    y += len(desc_lines) * REALM_DESC_ROW_H
+
     bar_c1, bar_c2 = ((p["bar_ready_from"], p["bar_ready_to"]) if can_break
                       else (p["bar_from"], p["bar_to"]))
     _bar(c, x0, y, content_w, pct, bar_c1, bar_c2, p["track_color"])

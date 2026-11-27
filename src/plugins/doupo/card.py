@@ -33,6 +33,7 @@ from . import core
 from . import commands
 from . import avatar
 from . import factions as fac
+from . import realm_lore
 from . import skill_effects as fx
 from . import skill_rank as rank_mod
 from . import danwen as dw
@@ -174,6 +175,9 @@ def build_data(p: dict) -> dict:
         "avatar_b64": avatar.headshot_for(p) or "",
         "avatar_caption": avatar.headshot_caption(lv),
         "realm": cfg.full_realm(lv),
+        # 2026-11-27：境界描述唯一源在 realm_lore，图/文两条兜底都从它取。
+        # 模板在境界 chip 与修为条之间画这一行；空串时不撑高，老存档零影响。
+        "realm_desc": realm_lore.desc_of(lv),
         "exp": exp, "need": need, "realm_max": realm_max,
         "can_break": bool(core.can_level(p)),
         "alch_name": alch_name, "alch_exp": alch_exp, "alch_need": alch_need,

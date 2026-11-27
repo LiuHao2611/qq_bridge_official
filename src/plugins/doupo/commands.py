@@ -26,6 +26,7 @@ from . import doupo_text as txt
 from . import econ
 from . import item_text
 from .item_text import norm_item_text as _norm_item_text
+from . import realm_lore
 from . import temp_buff as tb
 from . import danwen as dw
 from . import duel_challenge as dc
@@ -50,10 +51,7 @@ from .puppet_store import PUPPET_STORE as DEFAULT_PUPPET_STORE
 NOT_ENTERED = "你尚未踏入斗气大陆，发送「入道」开启征程。"
 
 
-#: 调息恢复量的旁路缓存（唯一源在 store，见其中 `REGEN_NOTICE` 的注释）。
-#: 2026-11-19 事故后从 commands 层**下沉到 Store.get_player()**：按钮点击、
-#: 人物卡/战报渲染等入口直接读 store，绕过 _player，导致点一上午都不恢复。
-#: 这里只保留一个别名，给人物卡面板的 `_regen_line()` 读。
+#: 2026-11-19 事故后下沉到 store：这里只留面板读的别名。
 from .store import REGEN_NOTICE as _LAST_REGEN  # noqa: E402
 
 
@@ -664,6 +662,12 @@ async def cmd_panel(store, qq) -> str:
     rows = [
         f"👤 【{p['name']}】",
         f"境界　{cfg.full_realm(lv)}",
+    ]
+    # 图/文同源：同一句描述。
+    _realm_desc = realm_lore.desc_of(lv)
+    if _realm_desc:
+        rows.append(f"　　　{_realm_desc}")
+    rows += [
         f"　　　{exp_line}　{_bar(_shown_exp, need)}",
         f"炼药　{alch_label}",
         f"　　　{_fmt(p.get('alch_exp', 0))}/{_fmt(alch_need) if alch_need else '—'}"
