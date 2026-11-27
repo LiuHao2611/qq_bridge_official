@@ -243,8 +243,10 @@ def test_panel_and_menu_expose_duel():
     # 2026-11-20：菜单扩到 52 条；2026-11-24 新增「宗门斗技」→ 53 条；
     # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令）→ 54 条；
     # 2026-11-25 新增「查看 <物品名>」物品详情 → 55 条。
+    # 2026-11-27 白天补 16 门斗技漏同步 → 实际 57 条（本处一直没跟上）；
+    # 2026-11-27 新增「卖 <物品>」背包商品出售 → 58 条。
     # 改口令务必同步 commands.MENU_GROUPS 与本处。
-    check("菜单条数 55", commands.menu_total() == 55, str(commands.menu_total()))
+    check("菜单条数 58", commands.menu_total() == 58, str(commands.menu_total()))
 
 
 def _run():
