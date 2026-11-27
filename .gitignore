@@ -105,3 +105,6 @@ docs/preview/
 # 斗破牌匾楷体子集：2.44MB，超 200KB 单文件上传红线（2026-11-22）
 # 生成：python tools/make_doupo_kai.py；说明见 assets/doupo_fonts/README.md
 src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/doupo_kai.ttf
+# 斗破像素仿制字体：3.3MB，同上超红线；生成 tools/make_doupo_pixel.py。
+# 本机/生产机各生成或 scp 一份，随源码目录部署但不入 git。
+src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/doupo_pixel.ttf

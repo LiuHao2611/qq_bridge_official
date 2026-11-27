@@ -65,6 +65,15 @@ BAD_ENV_MARKERS = ("/src/plugins/doupo/data/", "/src/plugins/xiuxian/data/")
 FORBIDDEN_PREFIXES = ("data/", "logs/", ".git", "tmp/", "outputs/", "downloads/")
 FORBIDDEN_NAMES = (".env", "bot.pyc")
 ALLOWED_SUFFIXES = (".py", ".json", ".md", ".txt", ".toml", ".cfg", ".ini", ".sh", ".nft")
+#: 2026-11-27 斗技卡像素化：字体与徽章是**随源码部署的二进制资产**，不是截图。
+#: 最小权限精准放行——只认这两个具体路径，绝不泛开 .ttf/.png（否则 tests 里的
+#: 预览截图、根目录散图都能被 scp 上生产机）。file/目录二者二选一。
+ALLOWED_BINARY_FILES = (
+    "src/plugins/qq_bridge/pic/templates/assets/doupo_fonts/doupo_pixel.ttf",
+)
+ALLOWED_BINARY_DIRS = (
+    "src/plugins/qq_bridge/pic/templates/assets/doupo_rank_icons/",
+)
 
 
 class GateFail(Exception):
@@ -103,8 +112,11 @@ def check_path_allowed(rel: str) -> None:
     for pre in FORBIDDEN_PREFIXES:
         if rel == pre.rstrip("/") or rel.startswith(pre):
             raise GateFail(f"禁止推送的目录（data/logs 是生产数据，覆盖=数据回退事故）: {rel}")
-    if not rel.endswith(ALLOWED_SUFFIXES):
-        raise GateFail(f"不允许的文件类型: {rel}（允许 {ALLOWED_SUFFIXES}）")
+    binary_ok = (rel in ALLOWED_BINARY_FILES or
+                 (rel.endswith(".png") and any(
+                     rel.startswith(d) for d in ALLOWED_BINARY_DIRS)))
+    if not rel.endswith(ALLOWED_SUFFIXES) and not binary_ok:
+        raise GateFail(f"不允许的文件类型: {rel}（允许 {ALLOWED_SUFFIXES} + 精准放行资产）")
     if not (ROOT / rel).is_file():
         raise GateFail(f"电脑端文件不存在: {rel}")
 

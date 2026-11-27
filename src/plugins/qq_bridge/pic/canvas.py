@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+from contextvars import ContextVar
 from functools import lru_cache
 from io import BytesIO
 from typing import Iterable, Sequence
@@ -25,6 +26,22 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from . import fonts
 from .theme import LAYOUT_FIELDS, rgb
+
+#: 度量层当前字体族（2026-11-27 像素字体接入）。
+#: ``_measure`` 是全局静态方法、原本只按 (role,size) 度量，而绘制 ``Canvas.text``
+#: 按 theme.font_family 选字体——自定义 family（等宽像素字）时两者宽度不一致 → 文字
+#: 溢出卡片（实测斗技卡副行冲出右缘）。设置本变量后度量与绘制共用同一 family。
+#: 默认空 = 全部旧卡行为逐字节不变。用 ``set_measure_family()`` 返回 token，用完 reset。
+_measure_family: ContextVar[str] = ContextVar("pic_measure_family", default="")
+
+
+def set_measure_family(family: str) -> object:
+    """设置度量字体族，返回 token（配合 reset_measure_family 使用）。"""
+    return _measure_family.set(str(family or ""))
+
+
+def reset_measure_family(token) -> None:
+    _measure_family.reset(token)
 
 Point = tuple[int, int]
 Box = tuple[int, int, int, int]  # x0, y0, x1, y1
@@ -109,13 +126,16 @@ def emoji_safe(text: str) -> str:
 
 
 @lru_cache(maxsize=8192)
-def _measure(text: str, size: int, role: str) -> tuple[int, int]:
-    """文本宽高（缓存：按 (文本, 字号, 字重) 复用 getbbox 结果）。
+def _measure(text: str, size: int, role: str, family: str = "") -> tuple[int, int]:
+    """文本宽高（缓存：按 (文本, 字号, 字重, 字体族) 复用 getbbox 结果）。
 
     卡片里大量重复 token（"倾向："/"["/"]"/武器名等）与逐字换行都受益。
     字体本身已由 fonts.load 按 (role,size) 缓存，这里再缓存测量结果避免重复 shaping。
+
+    ``family`` 非空时必须与绘制 ``Canvas.text`` 用同一字体（像素等宽字），否则
+    度量窄、绘制宽 → 文字冲出卡片。默认空保持全部旧卡行为不变。
     """
-    font = fonts.load(role, size)
+    font = fonts.load_family(family, size) if family else fonts.load(role, size)
     box = font.getbbox(emoji_safe(text))
     return int(box[2] - box[0]), int(box[3] - box[1])
 
@@ -441,12 +461,12 @@ class Canvas:
 
     @staticmethod
     def text_size(text: str, size: int = 20, role: str = "regular") -> tuple[int, int]:
-        """文本宽高（含少量行距余量）。"""
-        return _measure(str(text), int(size), role)
+        """文本宽高（含少量行距余量）。度量字体族跟随 _measure_family。"""
+        return _measure(str(text), int(size), role, _measure_family.get())
 
     @staticmethod
     def text_width(text: str, size: int = 20, role: str = "regular") -> int:
-        return _measure(str(text), int(size), role)[0]
+        return _measure(str(text), int(size), role, _measure_family.get())[0]
 
     @staticmethod
     def wrap(text: str, size: int, role: str, max_width: int) -> list[str]:

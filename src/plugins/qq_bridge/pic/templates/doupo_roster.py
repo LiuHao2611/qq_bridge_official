@@ -71,11 +71,16 @@ QQ 聊天窗显示宽度固定，卡片越宽被压得越狠（1080 宽缩到 72
 """
 from __future__ import annotations
 
+import os
 import re
+from functools import lru_cache
+
+from PIL import Image
 
 from .. import icons
 from ..canvas import Canvas
 from ..theme import Theme
+from ..theme import rgb
 
 from .doupo import _fit, _pal, _w
 from . import doupo_ui as UI
@@ -284,6 +289,56 @@ _DEMO = {
 }
 
 
+_RANK_ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "assets", "doupo_rank_icons")
+_RANK_ICON_FILE = {
+    "黄阶": "rank_huang.png", "玄阶": "rank_xuan.png",
+    "地阶": "rank_di.png", "天阶": "rank_tian.png",
+    "秘法": "rank_mifa.png",
+}
+
+
+@lru_cache(maxsize=16)
+def _rank_icon_layer(fam: str, size: int, color: str):
+    """按阶级色着色的像素徽章图层（仿解包游戏风，24×24 六边形宝石 + 阶数横杠）。
+
+    缺素材时返回 None，调用方回退几何图标（卡片不会崩）。
+    """
+    fn = _RANK_ICON_FILE.get(fam)
+    if not fn:
+        return None
+    path = os.path.join(_RANK_ICON_DIR, fn)
+    if not os.path.isfile(path):
+        return None
+    mask = Image.open(path).convert("L").resize((size, size), Image.NEAREST)
+    r, g, b = rgb(color)
+    layer = Image.new("RGBA", (size, size), (r, g, b, 0))
+    layer.putalpha(mask)
+    return layer
+
+
+def _draw_rank_icon(c: Canvas, fam: str, cx: int, cy: int, size: int,
+                    color: str) -> bool:
+    """画像素阶级图标；成功返回 True，缺素材返回 False（由调用方回退）。"""
+    layer = _rank_icon_layer(fam, size, color)
+    if layer is None:
+        return False
+    # Canvas 无 .image；用公开 paste_alpha（真 alpha 合成 + 越界安全）。
+    c.paste_alpha(layer, (cx - size // 2, cy - size // 2))
+    return True
+
+
+def _fam_of(rank: str) -> str:
+    """完整阶位 → 大阶（黄/玄/地/天/秘法）。pic 层不 import 插件层，本地实现。"""
+    s = str(rank or "")
+    if "秘法" in s:
+        return "秘法"
+    for fam in ("黄阶", "玄阶", "地阶", "天阶"):
+        if fam in s:
+            return fam
+    return ""
+
+
 def _groups_of(data: dict) -> list[dict]:
     """统一取分组：优先 groups，否则把扁平 rows 包成单组（兼容旧输入）。"""
     groups = [g for g in (data.get("groups") or []) if isinstance(g, dict)]
@@ -413,8 +468,36 @@ def _draw_lv_bar(c: Canvas, x: int, cy: int, lv: int) -> int:
     return seg * LV_SEG_N + LV_SEG_GAP * (LV_SEG_N - 1)
 
 
+def _name_max_w(row: dict, inner_w: int) -> int:
+    """名字可用宽（与徽章占位同源：right-ix_text == inner_w）。"""
+    tail = _state_w(row) + (CHIP_GAP + _role_w(row) if _role_w(row) else 0)
+    return max(50, inner_w - tail - 6)
+
+
+def _name_lines(row: dict, inner_w: int) -> list[str]:
+    """技能名折行（2026-11-27 用户「有的斗技名称被省略了，不要出现这种情况」）。
+
+    旧版用 ``_fit`` 把长名截成「天雁九行…」；这里改成最多两行完整显示。
+    与徽章共享第一行时宽度受 tail 限制；第二行起可用整块宽。
+    """
+    name = str(row.get("name") or "斗技")
+    first_w = _name_max_w(row, inner_w)
+    if _w(name, FS_NAME, "bold") <= first_w:
+        return [name]
+    # 第一行按扣徽章宽折，剩余按全宽折
+    lines = S.wrap_cjk(name, FS_NAME, "bold", max(50, first_w))
+    if len(lines) <= 1:
+        return lines
+    rest = "".join(lines[1:])
+    if _w(rest, FS_NAME, "bold") <= inner_w:
+        return [lines[0], rest]
+    return S.wrap_cjk(name, FS_NAME, "bold", max(50, inner_w))
+
+
 def _row_texts(row: dict, inner_w: int) -> dict:
     return {
+        # 2026-11-27 用户「名称不要省略」：名字也走折行，与徽章/副行同源。
+        "name_lines": _name_lines(row, inner_w),
         # 2026-11-15 肉眼核对：低等级玩家副行带「lvN 解锁」，旧版 _fit 会把它
         # 截成「lv…」，解锁等级凭空丢失。改为按语义段折行（信息不丢、不拆字）。
         "meta_lines": _meta_lines(row, inner_w),
@@ -425,9 +508,9 @@ def _row_texts(row: dict, inner_w: int) -> dict:
 
 
 def _row_h(row: dict, inner_w: int) -> int:
-    """单块高度 —— 内容驱动：副行 / 描述 / chip / 代价行数都参与累加。"""
+    """单块高度 —— 内容驱动：名字 / 副行 / 描述 / chip / 代价行数都参与累加。"""
     t = _row_texts(row, inner_w)
-    h = (BLOCK_PAD_Y * 2 + H_NAME + GAP_NAME_META
+    h = (BLOCK_PAD_Y * 2 + H_NAME * max(1, len(t["name_lines"])) + GAP_NAME_META
          + H_META * max(1, len(t["meta_lines"])))
     n_desc = len(t["desc_lines"])
     if n_desc:
@@ -481,8 +564,10 @@ def _plan(data: dict, width: int) -> dict:
     for gi, g in enumerate(_groups_of(data)):
         y += SECTION_GAP if gi else 0
         tier = str(g.get("tier") or "")
+        # family = 大阶（配色/图标用），tier = 完整阶位（标题用）；缺省时从 tier 推。
+        family = str(g.get("family") or _fam_of(tier))
         entries.append({"kind": "section", "y": y, "h": SECTION_H,
-                        "group": g, "tier": tier})
+                        "group": g, "tier": tier, "family": family})
         y += SECTION_H
         rows = [r for r in (g.get("rows") or []) if isinstance(r, dict)]
         for i in range(0, len(rows), 2):
@@ -490,7 +575,7 @@ def _plan(data: dict, width: int) -> dict:
             hs = [_row_h(r, inner_w) for r in pair]
             rh = max(hs) if hs else 0
             cells = [{"row": r, "x": (bx0 if k == 0 else bx1),
-                      "w": col_w, "h": hs[k], "tier": tier}
+                      "w": col_w, "h": hs[k], "tier": tier, "family": family}
                      for k, r in enumerate(pair)]
             entries.append({"kind": "pair", "y": y, "h": rh, "cells": cells})
             y += rh + BLOCK_GAP
@@ -507,6 +592,12 @@ def _measure(data: dict, width: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 字体口径（2026-11-27 用户看到实际效果后纠正：「技能的字体不要变，改回去」）：
+# 卡片文字一律走 theme 原本的字体（regular/bold/kai role），**不强制像素字体**。
+# 全卡像素化只保留在图标（像素阶级徽章）；技能名/副行/描述/chip/代价行恢复原字体。
+# 因此本卡不再 set_measure_family —— 度量与绘制都用 theme 默认字体，两者一致。
+
+
 def build(t: Theme, data: dict | None = None, width: int | None = None,
           source: str | None = None, **kw) -> Canvas:
     data = data or {}
@@ -571,12 +662,18 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         if ent["kind"] == "section":
             g = ent["group"]
             tier = ent["tier"]
-            sicon = str(g.get("icon") or RANK_ICON.get(tier, "sword"))
+            fam = ent.get("family") or _fam_of(tier)
+            sicon = str(g.get("icon") or RANK_ICON.get(fam, "sword"))
             if not icons.exists(sicon):
                 sicon = "sword"
             sy = ent["y"]
-            icons.draw(c, sicon, x0 + ICON // 2, sy + FS_SECTION // 2, ICON,
-                       rcols.get(tier, p["accent_color"]), style=ICON_STYLE)
+            # 2026-11-27 用户「图标别搞这种简单的，去解包游戏资源…像素风格」：
+            # 优先贴仿游戏像素阶级徽章；缺素材/无映射时回退几何图标（不崩）。
+            icon_color = rcols.get(fam, p["accent_color"])
+            if not _draw_rank_icon(c, fam, x0 + ICON // 2,
+                                   sy + FS_SECTION // 2, ICON, icon_color):
+                icons.draw(c, sicon, x0 + ICON // 2, sy + FS_SECTION // 2, ICON,
+                           icon_color, style=ICON_STYLE)
             label = str(g.get("label") or (("%s斗技" % tier) if tier else "斗技"))
             cnt = int(g.get("count") if g.get("count") is not None
                       else len(g.get("rows") or []))
@@ -591,15 +688,15 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
         for cell in ent["cells"]:
             row, bx, bw, rh = cell["row"], cell["x"], cell["w"], ent["h"]
-            tier = cell["tier"]
+            fam = cell.get("family") or _fam_of(cell["tier"])
             name = str(row.get("name") or "斗技")
             by = ent["y"]
 
-            # 块背景 + 左缘阶位色条
+            # 块背景 + 左缘阶位色条（按大阶上色，同一大阶各小阶同色）
             c.rounded_rect((bx, by, bx + bw, by + rh), radius=BLOCK_RADIUS,
                            fill=p["cell_bg"], outline=p["cell_line"], width=1)
             c.rounded_rect((bx + 1, by + 6, bx + 1 + BAR_W, by + rh - 6), radius=2,
-                           fill=rcols.get(tier, p[FALLBACK_BAR]))
+                           fill=rcols.get(fam, p[FALLBACK_BAR]))
 
             ix = bx + BLOCK_PAD_X + BAR_W + 4       # 序号圆左缘
             iy = by + BLOCK_PAD_Y
@@ -616,7 +713,7 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             # 画在技能名左侧、左缘色条右侧；与名字同 y 居中对齐。
             no = row.get("no")
             if no is not None:
-                no_fill = rcols.get(tier, p[FALLBACK_BAR])
+                no_fill = rcols.get(fam, p[FALLBACK_BAR])
                 c.ellipse((ix, name_y - NO_D // 2, ix + NO_D, name_y + NO_D // 2),
                           fill=no_fill, outline=p["border_color"], width=1)
                 no_txt = str(no)
@@ -625,12 +722,16 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                 rec("%s.no" % name, no_txt, no_cx, name_y,
                     FS_NO, "regular", "mm")
 
+            t_ = _row_texts(row, inner_w)
+            name_lines = t_["name_lines"]
+            # 名字逐行完整绘制（2026-11-27「名称不要省略」）：第一行右侧有徽章，
+            # 后续行可用整块宽；ktext 不再 _fit 截断（折行已保证不超宽）。
+            for ni, nl in enumerate(name_lines):
+                nly = name_y + ni * H_NAME
+                ktext("%s.name%d" % (name, ni), ix_text, nly, nl, FS_NAME,
+                      p["text_color"])
             st_w = _state_w(row)
             role_w = _role_w(row)
-            tail = st_w + (CHIP_GAP + role_w if role_w else 0)
-            name_max = (right - tail - 6) - ix_text
-            ktext("%s.name" % name, ix_text, name_y, name, FS_NAME, p["text_color"],
-                  max_w=max(50, name_max))
             if st_w:
                 state = str(row.get("state") or "")
                 kind = str(row.get("state_kind") or "learn")
@@ -661,10 +762,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                 rec("%s.role" % name, role, rx + role_w // 2, name_y,
                     FS_ROLE, "regular", "mm")
 
-            t_ = _row_texts(row, inner_w)
-
             # ---- 副行（来源 + 阶位 · 类型 · 斗气 · 解锁等级），按实测宽度折行 ----
-            cy = iy + H_NAME + GAP_NAME_META
+            cy = iy + H_NAME * len(name_lines) + GAP_NAME_META
             meta_lines = t_["meta_lines"] or [""]
             for mi, ml in enumerate(meta_lines):
                 ly = cy + mi * H_META + H_META // 2

@@ -105,6 +105,13 @@ _BUNDLED_BOLD = (_ROOT_DIR / "src" / "plugins" / "qq_bridge" / "pic" /
 _BUNDLED_KAI = (_ROOT_DIR / "src" / "plugins" / "qq_bridge" / "pic" /
                 "templates" / "assets" / "doupo_fonts" / "doupo_kai.ttf")
 
+#: 项目内置像素字体（2026-11-27）：仿「斗破老游戏点阵字」自制 TTF，7631 字零缺字。
+#: 和 bold/kai 一样随源码部署——**不能放 data/fonts**（phone_deploy 禁推 data/，
+#: 放那手机上永远缺字体、卡片回退系统字就丢了像素味）。生成见 tools/make_doupo_pixel.py。
+_BUNDLED_PIXEL = (_ROOT_DIR / "src" / "plugins" / "qq_bridge" / "pic" /
+                  "templates" / "assets" / "doupo_fonts" / "doupo_pixel.ttf")
+_PIXEL_FAMILY = "DoupoPixel"
+
 
 def font_path(role: str = "regular") -> str | None:
     """返回该字重第一个存在的字体文件路径；全部缺失返回 None。
@@ -240,6 +247,12 @@ def scan_families(force: bool = False) -> list[dict]:
                         ok = False
                     _MASK_CACHE[fam] = ok
                 rec["cjk"] = bool(ok)
+    # 定向注入内置像素字体：只加 DoupoPixel 一个族，不扫描整个 assets/doupo_fonts
+    # （避免 doupo_bold.ttf / doupo_kai.ttf 的 family 名污染编辑器字体下拉列表）。
+    # 手机端随源码部署后此文件必在；缺也不抛（load_family 再回退系统字）。
+    if _BUNDLED_PIXEL.is_file() and _PIXEL_FAMILY not in fams:
+        fams[_PIXEL_FAMILY] = {"family": _PIXEL_FAMILY, "regular": str(_BUNDLED_PIXEL),
+                               "bold": None, "italic": None, "cjk": True}
     out = sorted(fams.values(), key=lambda r: (not r["cjk"], r["family"].lower()))
     _FAMILY_CACHE = out
     return out

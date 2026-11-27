@@ -510,6 +510,35 @@ _FAM_ICON = {
 }
 
 
+def _rank_groups(by_fam: dict[str, list[dict]]) -> list[dict]:
+    """把「按大阶分组」重排成「按完整阶位分组」（2026-11-27）。
+
+    用户：「阶级要标注完整，地阶高级，别只写个地阶」。所以分区标题用完整 rank
+    （黄阶低级/黄阶中级/…/天阶高级/秘法），组内 rank 一致。
+
+    * ``tier`` = 完整 rank（模板拿它当分区标题）；
+    * ``family`` = 大阶（模板拿它取色/取图标，保证同一大阶各小阶同色同图标）；
+    * 排序走 ``rank_mod.sort_key``（黄→天→秘法，各阶内低→中→高），与卡内同源。
+    """
+    buckets: dict[str, list[dict]] = {}
+    for rs in by_fam.values():
+        for row in rs:
+            rank = str(row.get("rank") or row.get("family") or "未标阶")
+            buckets.setdefault(rank, []).append(row)
+    out: list[dict] = []
+    for rank in sorted(buckets, key=rank_mod.sort_key):
+        rs = buckets[rank]
+        fam = rank_mod.fam_of(rank)
+        out.append({
+            "tier": rank, "label": rank,
+            "family": fam,
+            "count": len(rs),
+            "icon": _FAM_ICON.get(fam, "sword"),
+            "rows": rs,
+        })
+    return out
+
+
 def _origin_mark(e: dict) -> str:
     """斗技来源标记：一眼分清本宗传承 / 通用基础 / 异火技。
 
@@ -582,6 +611,8 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
         # 但它只是**数值档**（伤害倍率 / 斗气消耗 / 解锁等级），卡面不再显示它。
         "badge": (rank_mod.fam_of(rank) or "未")[:1],
         "family": rank_mod.fam_of(rank),
+        # 完整原著阶位（"地阶高级"）：2026-11-27 分区标题要完整阶位，供分组用。
+        "rank": rank,
         "tier": e["tier"],
         "role": role,
         "state": state,
@@ -660,18 +691,9 @@ def build_roster_data(p: dict) -> dict:
         rows.append(row)
         by_fam.setdefault(row["family"], []).append(row)
 
-    groups = []
-    for fam in rank_mod.FAMILIES:
-        rs = by_fam.get(fam) or []
-        if not rs:
-            continue
-        groups.append({
-            "tier": fam,
-            "label": fam,
-            "count": len(rs),
-            "icon": _FAM_ICON.get(fam, "sword"),
-            "rows": rs,
-        })
+    # 2026-11-27 用户「阶级要标注完整，地阶高级，别只写个地阶」：
+    # 分区标题按完整 rank（黄阶低级/…/天阶高级/秘法）分组，不再并到大阶。
+    groups = _rank_groups(by_fam)
 
     fac_name = p.get("faction_name") or "无宗门"
     on = sum(1 for e in pool_sorted if e.get("equipped"))
@@ -744,15 +766,8 @@ def build_learned_data(p: dict) -> dict:
                           "已领悟", "learn", show_lv=True, plv=int(p.get("lv", 1)))
         by_fam.setdefault(row["family"], []).append(row)
         rows.append(row)
-    for fam in rank_mod.FAMILIES:
-        rs = by_fam.get(fam) or []
-        if not rs:
-            continue
-        groups.append({
-            "tier": fam, "label": fam, "count": len(rs),
-            "icon": _FAM_ICON.get(fam, "sword"),
-            "rows": rs,
-        })
+    # 2026-11-27 完整阶位分组（地阶高级而非只写地阶），与宗门卡同一口径
+    groups.extend(_rank_groups(by_fam))
 
     learned = core.learned_skill_pool(p)
     n_ben = sum(1 for e in learned if e.get("origin") == "本宗")
