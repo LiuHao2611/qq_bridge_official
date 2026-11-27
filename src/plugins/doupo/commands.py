@@ -23,6 +23,9 @@ from . import config as cfg
 from . import core
 from . import craft_ctx as cctx
 from . import doupo_text as txt
+from . import econ
+from . import item_text
+from .item_text import norm_item_text as _norm_item_text
 from . import temp_buff as tb
 from . import danwen as dw
 from . import duel_challenge as dc
@@ -404,6 +407,8 @@ MENU_GROUPS = (
     ("炼药 · 宝库", (
         ("宝库", "随身商店：药材 + 炎星石，看价"),
         ("买 血灵草 2", "买 2 份血灵草"),
+        # 2026-11-27「背包商品出售」：卖价按材料成本给利润，与买价拉开差价
+        ("卖 血灵草 5", "卖背包存货换金币；药材按买价 5 折、丹药按材料成本 2 倍回收"),
         ("炼药", "看丹方：帝品 / 五品 / 四品"),
         ("炼制 回灵丹", "开炉炼丹；「炼制 回灵丹 5次」连炼5炉，失败得药渣"),
         ("服丹 回灵丹", "服用丹药，可连服「服丹 回灵丹 10」或混着吃；带纹丹写成「服丹 二纹破厄丹」"),
@@ -1894,6 +1899,55 @@ def _detail_of(gaps) -> str:
                      for g in gaps)
 
 
+async def cmd_sell(store, qq, args) -> str:
+    """把背包物品卖给商店换金币（2026-11-27「增加背包商品出售」）。
+
+    定价全在 :mod:`econ`（药材/可买丹药 5 折、可炼丹药按材料成本 ×2 回收），
+    本函数只做名称解析、锁定拦截与记账。文案把单价与总价都摆出来——
+    玩家要能自己算「炼一炉卖出去赚多少」，否则「炼药赚钱」只是句口号。
+    """
+    p = await _player(store, qq)
+    if not p:
+        return NOT_ENTERED
+    raw = (args or "").strip()
+    if not raw:
+        return "用法：卖 血灵草 5　（发「背包」看货）"
+    name_part, n = parse_use_count(raw)
+    # parse_use_count 会把 0 夹成 1（服丹「吃 0 个」当成吃 1 个无害），但卖东西
+    # 不能这样——「卖 血灵草 0」必须报错，替他卖一枚就是偷。这里单独看一眼原串。
+    _m = _USE_COUNT_RE.match(raw.strip())
+    if _m and (_m.group(1) or "").strip() and int(_m.group(2)) <= 0:
+        return "数量至少 1 个 —— 发「卖 血灵草 5」这样卖（发「背包」看存货）。"
+    n = max(1, min(cfg.SHOP_BUY_MAX, n))
+    real, err = item_text.resolve_sell_target(p, name_part)
+    if err:
+        return err
+    shown = cfg.base_of_danwen(real) if cfg.is_danwen_name(real) else real
+    # 锁定语义是「别动我」。卖出去不可回滚，所以锁定物品照样拦下来。
+    locked = await store.item_locks(str(qq))
+    if real in locked or shown in locked:
+        return f"🔒【{shown}】已锁定，先「解锁 {shown}」再卖。"
+    unit = econ.sell_price(real)
+    res = core.sell_item(p, real, n)
+    await store.put_player(p)
+    if not res.get("ok"):
+        reason = res.get("reason")
+        if reason == "unsellable":
+            return f"🏦 商店不收【{shown}】。"
+        if reason == "none":
+            return f"🎒 背包里没有【{shown}】。发「背包」看货。"
+        if reason == "short":
+            return f"🎒【{shown}】只有 {res['have']} 个，卖不了 {res['need']} 个。"
+        if reason == "badcount":
+            return "数量至少 1 个 —— 发「卖 血灵草 5」这样卖。"
+        return f"🏦 卖出失败（{reason}）。"
+    tier = cfg.danwen_tier(real) if cfg.is_danwen_name(real) else 0
+    tail = f"（{cfg.DANWEN_TIERS[min(3, tier) - 1]}）" if tier else ""
+    return (f"💰 卖出【{shown}】×{res['n']}{tail}，单价 {unit} 金，"
+            f"共 {res['total']} 金，余 {res['gold']}。"
+            f"\n　（发「宝库」看买价，发「炼药」看炼制成本）")
+
+
 async def cmd_recipes(store, qq, page=1) -> str:
     """丹方清单。等级不够的丹药不展示；丹药多了分页（与卡片同源）。"""
     p = await _player(store, qq)
@@ -2133,8 +2187,10 @@ async def cmd_bag(store, qq) -> str:
         if name in known or shown in known:
             out.append(f"　　　{known.get(name) or known[shown]}")
     out.append("")
-    out.append("　用法：服丹 回灵丹　｜　连服 服丹 回灵丹 10　｜　查看 回灵丹 看详情　｜　"
-               "锁定 回灵丹（锁定后战斗不会自动服用）")
+    # 2026-11-27「背包商品出售」：只加口令提示，**不动上面的物品行**——
+    # 用户 2026-11-25 明确说过「别改我背包的丹药展示效果，那是我的独特设计」。
+    out.append("　用法：服丹 回灵丹　｜　连服 服丹 回灵丹 10　｜　查看 回灵丹 看详情")
+    out.append("　　　　锁定 回灵丹（战斗不自动服用）　｜　卖 回灵丹 3（卖存货换金币）")
     return "\n".join(out)
 
 
@@ -2191,19 +2247,6 @@ def parse_use_count(raw: str) -> tuple[str, int]:
     except (ValueError, TypeError):
         return s, 1
     return name_part, max(1, n)
-
-
-def _norm_item_text(s: str) -> str:
-    """物品名归一化：各种「点」→ ·，去空格/横线/括号，压掉重复的 ·。"""
-    t = str(s or "").strip()
-    for ch in ("．", ".", "・", "•", "‧", "｡", "*", "＊"):
-        t = t.replace(ch, "·")
-    for ch in (" ", "\t", "-", "—", "_", "(", ")", "（", "）",
-               "【", "】", "《", "》", "、", "，", ","):
-        t = t.replace(ch, "")
-    while "··" in t:
-        t = t.replace("··", "·")
-    return t.strip("·")
 
 
 #: 只作「纹数后缀」出现的词：混吃拆分时拼回上一个丹名，绝不当独立丹药。

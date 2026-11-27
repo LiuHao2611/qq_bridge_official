@@ -810,6 +810,27 @@ async def _(event: Event):
                       card_key="buy_text")
 
 
+# 2026-11-27 用户「增加背包商品出售」：卖 血灵草 5 / 卖 回灵丹 / 卖 聚气散·三纹
+# 关键词顺序必须是「出售→变卖→卖」：_arg 只 replace 第一次出现的那个词，
+# 先剥「卖」会把「出售 血灵草」剥成「出 血灵草」。
+sell = on_regex(_pat(r"(?:出售|变卖|卖)") + r"\s*(.*)", priority=PRI, block=True,
+                rule=_mode_is("doupo"))
+
+
+@sell.handle()
+async def _(event: Event):
+    event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
+    await _need_group(event, sell)
+    plain = _plain(event)
+    arg = ""
+    for _kw in ("出售", "变卖", "卖"):
+        if _kw in plain:
+            arg = _arg(event, _kw)
+            break
+    await finish_text(sell, event, await commands.cmd_sell(store, str(event.user_id), arg),
+                      card_key="sell_text")
+
+
 recipes = on_regex(_pat(r"(?:炼药|丹方)"), priority=PRI, block=True, rule=_mode_is("doupo"))
 
 

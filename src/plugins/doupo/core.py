@@ -20,6 +20,7 @@ from . import config as cfg
 from . import doupo_text as txt
 from . import flame_bonus as _flame_bonus, temp_buff as tb, danwen as dw
 from . import flame_drop as _fdrop
+from . import econ  # 出售定价单一真源（2026-11-27 背包商品出售）
 from .flame_drop import s_flame_gate  # noqa: E402  纯函数外迁，保持 core.s_flame_gate 入口
 from . import factions as fac
 from . import skills as sk_mod
@@ -3431,6 +3432,40 @@ def shop_buy(p, name, n=1) -> dict:
     p["gold"] = int(p["gold"]) - total
     add_item(p, name, n)
     return {"ok": True, "name": name, "n": n, "total": total}
+
+
+def sell_item(p, name, n=1) -> dict:
+    """把背包里的东西卖给商店（2026-11-27「背包商品出售」）。
+
+    返回 ``{ok, name, n, unit, total, gold}``；失败给 ``reason``：
+      * ``unsellable`` 商店不收这件东西（``econ.sell_price`` 为 0）
+      * ``none``       背包里根本没有
+      * ``short``      数量不够（带 need/have）
+
+    定价全在 :mod:`econ`，本函数只管「有没有、够不够、记账」。
+    **绝不在这里算价钱**——卖价与「炼药能不能赚钱」共用同一个真源，
+    两处各算一份必然打架（历史上卡面/命令两套口径踩过太多次）。
+    """
+    n = int(n)
+    # 0 / 负数必须拒绝，**不许 max(1, n) 悄悄改成一**：玩家发「卖 血灵草 0」
+    # 意思是一个都不卖，替他卖一枚等于偷东西（test_econ 抓过这个洞）。
+    if n <= 0:
+        return {"ok": False, "reason": "badcount", "n": n}
+    unit = econ.sell_price(name)
+    if unit <= 0:
+        return {"ok": False, "reason": "unsellable", "name": name}
+    have = count_item(p, name)
+    if have <= 0:
+        return {"ok": False, "reason": "none", "name": name}
+    if have < n:
+        return {"ok": False, "reason": "short", "name": name, "need": n, "have": have}
+    if not take_item(p, name, n):
+        # take_item 只在「数量不足」时返回 False，上面已挡；到这里说明存档被并发改过。
+        return {"ok": False, "reason": "short", "name": name, "need": n, "have": have}
+    total = unit * n
+    p["gold"] = int(p.get("gold", 0)) + total
+    return {"ok": True, "name": name, "n": n, "unit": unit,
+            "total": total, "gold": int(p["gold"])}
 
 
 def available_recipes(p: dict) -> list:

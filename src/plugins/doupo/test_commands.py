@@ -62,7 +62,7 @@ def _stub_nonebot():
 
 _stub_nonebot()
 
-from doupo import commands, core, config as cfg  # noqa: E402
+from doupo import commands, core, config as cfg, econ  # noqa: E402
 from doupo.store import Store  # noqa: E402
 
 G = "900000001"
@@ -114,7 +114,9 @@ async def main():
     # 2026-11-25 新增「外观 · 卡片主题」分组（主题口令此前图卡上根本没写）→ 53 + 1 = 54
     # 2026-11-25 新增「查看 <物品名>」物品详情 → 54 + 1 = 55
     # 2026-11-25 晚「电梯」整条换成「自动爬塔」（一换一）→ 仍 55
-    check("菜单条数 = menu_total()", commands.menu_total() == 55,
+    # 2026-11-27 新增「卖 <物品>」背包商品出售 → 57 + 1 = 58
+    # （55→57 是 11-27 白天补 16 门斗技时漏同步的旧账，这次一并按实际值对上）
+    check("菜单条数 = menu_total()", commands.menu_total() == 58,
           f"menu_total={commands.menu_total()}")
     # 新设计：菜单是唯一切换口（斗破菜单），其余口令全部纯中文、不再带前缀
     lines = [l.split(" —— ")[0].strip() for l in menu.splitlines() if " —— " in l]
@@ -368,6 +370,62 @@ async def main():
           f"实际+{core.count_item(p, '血灵草') - before150} | {r[:50]}")
     p["gold"] = cfg.START_GOLD
     await store.put_player(p)
+
+    # ------------------------------------------------------------------
+    # 8b. 卖（背包商品出售，2026-11-27 用户「增加背包商品出售」）
+    # ------------------------------------------------------------------
+    p = await store.get_player(A)
+    core.add_item(p, "血灵草", 10)
+    await store.put_player(p)
+    gold0 = p["gold"]
+    herb0 = core.count_item(p, "血灵草")      # 前面买过 150 份，别写死绝对值
+    r = await commands.cmd_sell(store, A, "血灵草 4")
+    p = await store.get_player(A)
+    check("卖 成功并写回金币",
+          "卖出" in r and core.count_item(p, "血灵草") == herb0 - 4
+          and p["gold"] == gold0 + econ.sell_price("血灵草") * 4, r[:70])
+    check("卖 回执含单价与总价",
+          str(econ.sell_price("血灵草")) in r and "单价" in r, r[:70])
+
+    r = await commands.cmd_sell(store, A, "血灵草 0")
+    check("卖 0 个被挡（不替玩家卖一枚）", "至少 1" in r, r[:50])
+    r = await commands.cmd_sell(store, A, "血灵草 999")
+    check("卖 超量如实报持有数", "只有" in r, r[:60])
+    r = await commands.cmd_sell(store, A, "不存在的东西")
+    check("卖 未知物品报背包没有", "没有" in r, r[:50])
+
+    # 锁定物品不许卖（卖出去不可回滚）
+    herb_now = core.count_item(p, "血灵草")
+    await store.set_item_lock(A, "血灵草", True)
+    r = await commands.cmd_sell(store, A, "血灵草 1")
+    p = await store.get_player(A)
+    check("卖 锁定物品被拦且不掉货",
+          "锁定" in r and core.count_item(p, "血灵草") == herb_now, r[:50])
+    await store.set_item_lock(A, "血灵草", False)
+
+    # 带纹丹：手上**只有带纹版**时，只写基础名必须拒绝，绝不替玩家挑一枚卖
+    p = await store.get_player(A)
+    core.take_item(p, "回灵丹", core.count_item(p, "回灵丹"))   # 清掉入道送的普丹
+    core.add_item(p, cfg.danwen_name("回灵丹", 3), 1)
+    await store.put_player(p)
+    r = await commands.cmd_sell(store, A, "回灵丹")
+    p = await store.get_player(A)
+    check("卖 只写基础名而手上是带纹丹 → 拒绝并报全名",
+          "只有带纹" in r and core.count_item(p, cfg.danwen_name("回灵丹", 3)) == 1,
+          r[:70])
+    r = await commands.cmd_sell(store, A, cfg.danwen_name("回灵丹", 3))
+    check("卖 写全名才卖得掉带纹丹（且回执标三纹）",
+          "卖出" in r and "三纹" in r, r[:70])
+
+    # 可炼丹药按材料成本 2 倍回收（炼药赚钱的兑现口）
+    p = await store.get_player(A)
+    core.add_item(p, "破障丹", 1)
+    await store.put_player(p)
+    rec = cfg.RECIPE_BY_NAME["破障丹"]
+    r = await commands.cmd_sell(store, A, "破障丹")
+    check("卖 丹药按材料成本 2 倍回收",
+          econ.sell_price("破障丹") == econ.recipe_cost(rec) * 2
+          and str(econ.sell_price("破障丹")) in r, r[:70])
 
     # ------------------------------------------------------------------
     # 9. 炼药 / 炼制 / 服丹 / 背包
