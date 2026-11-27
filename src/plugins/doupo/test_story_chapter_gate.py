@@ -193,10 +193,12 @@ def group_a_data():
             base_bad.append((ch, b, (lo, hi)))
     check("chapter_base_lv 落在本章境界区间内", not base_bad, str(base_bad[:3]))
 
-    req_bad = [(i, t.get("require_lv"), cfg.chapter_lv_range(i)[1])
+    # Q4（2026-11-27）：门槛从区间上限改为中点，与 chapter_base_lv（章怪等级）同源。
+    # 取下限会让 lv1 交完第 1 章就撞 lv14 怪必死；取上限后期要刷几十场同章怪。
+    req_bad = [(i, t.get("require_lv"), cfg.chapter_base_lv(i))
                for i, t in enumerate(cfg.MAIN_TASKS, 1)
-               if int(t.get("require_lv") or 0) != cfg.chapter_lv_range(i)[1]]
-    check("require_lv == 本章区间上限（逐条）", not req_bad, str(req_bad[:3]))
+               if int(t.get("require_lv") or 0) != cfg.chapter_base_lv(i)]
+    check("require_lv == 本章区间中点(=章怪等级)（逐条）", not req_bad, str(req_bad[:3]))
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +462,7 @@ def group_i_submit():
           snap2 == (int(p2["main_idx"]), int(p2["gold"]), int(p2["exp"]),
                     int(p2["story_chapter"])), str(snap2))
     check("等级不够：回报里明确给出 need_lv 与当前 lv",
-          int(r2.get("need_lv") or 0) == cfg.chapter_lv_range(1)[1]
+          int(r2.get("need_lv") or 0) == cfg.chapter_base_lv(1)
           and int(r2.get("lv") or 0) == 1, str(r2.get("need_lv")))
 
     walker = newp(lv=1)
@@ -521,7 +523,7 @@ async def group_j_text(store):
     check("交第 1 章回执：露「第 2 章开通」+「此地妖物 lv14」",
           "第 2 章开通" in t3 and "此地妖物 lv14" in t3, t3[:120])
     check("交第 1 章回执：给出下一章与境界要求",
-          "下一章" in t3 and cfg.full_realm(cfg.chapter_lv_range(2)[1]) in t3,
+          "下一章" in t3 and cfg.full_realm(cfg.chapter_base_lv(2)) in t3,
           t3[:200])
 
     d = newp(lv=9, qq="710004")

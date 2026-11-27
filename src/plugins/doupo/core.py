@@ -3611,7 +3611,7 @@ def main_submit(p) -> dict:
     if main_value(p) < int(t["target"]):
         return {"ok": False, "reason": "unfinished", "task": t,
                 "progress": main_value(p)}
-    # 2026-11-25 用户拍板 G1=A：章节推进要求等级到位（`require_lv` = 本章区间上限）。
+    # 章节推进要求等级到位（Q4 2026-11-27：`require_lv` = 本章区间中点 = 章怪等级）。
     # 为什么需要：主线任务本身很轻（杀 3 只 / 采 5 株），lv1 也能做完；若直接放行，
     # 玩家会带着 lv1 进第 2 章打 lv10 的怪（必死）。等级门槛把「练够」写成硬条件，
     # 与「低章怪经验被钳制」一起构成「必须推主线才能变强、必须练够才能推主线」闭环。

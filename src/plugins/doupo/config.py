@@ -2198,7 +2198,7 @@ def chapter_base_lv(ch: int) -> int:
 # 为什么必须扩：`story_chapter = main_idx + 1`，只有 5 条任务时章节最多到 6，
 # 13 章表里第 7–13 章永远开不出来（真跑核对 main_submit 只做 main_idx+=1）。
 #
-# `require_lv`：交任务前必须达到的等级 = 该章等级区间上限（末尾统一注入并断言）。
+# `require_lv`：交任务前必须达到的等级 = 该章等级区间中点（末尾统一注入并断言）。
 # 作用：玩家不能在 lv1 交完第 1 章就跳进第 2 章打 lv10 的怪（会必死），
 # 也不能靠刷低章怪无限升级——低章怪等级被钳在章末，经验按怪等级给。
 # ---------------------------------------------------------------------------
@@ -2233,11 +2233,11 @@ MAIN_TASKS = [
      "reward": {"gold": 60000, "exp": 300000, "luck": 400}},
 ]
 
-# `require_lv` 一律取该章区间上限：ch1→9、ch2→18 … ch13→103。
-# 末尾注入而不是手写，是为了「境界表一改，门槛自动跟着改」；下面 immediately
-# 断言注入结果与 chapter_lv_range 一致，写错会 import 期直接炸，不会静默错位。
+# `require_lv` 取该章区间中点(=章怪等级)：ch1→5、ch2→14 … ch13→103。
+# 取下限则 lv1 交完第 1 章就撞 lv14 怪必死；取上限后期要刷几十场。
+# 末尾注入：境界表一改门槛自动跟着改，写错 import 期直接炸。
 for _gi, _gt in enumerate(MAIN_TASKS, 1):
-    _gt["require_lv"] = chapter_lv_range(_gi)[1]
+    _gt["require_lv"] = chapter_base_lv(_gi)
 del _gi, _gt
 
 assert len(MAIN_TASKS) == CHAPTER_COUNT, (
