@@ -901,16 +901,10 @@ def craft_rate(alch_idx: int) -> float:
     return min(0.95, 0.55 + 0.05 * int(alch_idx))
 
 
-# ---------------------------------------------------------------------------
-# 丹药品阶 ↔ 炼药师品阶（2026-11-18 用户「四品炼药师怎么能炼四品以上，失败
-# 概率还一样，符合原著吗」）。原著证据：
-#   * 第702章：六品炼药师才「足以炼制」五品丹药 → 品阶决定可炼级别；
-#   * 第495章：四品炼药师「偶尔状态巅峰能勉强炼五品，成功率太小」 → 越 1 档
-#     可勉强、概率骤降，不是绝对禁止；
-#   * 第6章：材料/火种/灵魂感知力三要素，异火提升成功率 → 概率不该是定值。
-# 口径：够格用基础成功率；越 1 档 ×0.35（勉强）；越 ≥2 档 ×0.05（几无可能，
-# 但仍走同一失败路径给药渣——原著「勉强尝试」而非「系统直接拒绝开炉」）。
-# ---------------------------------------------------------------------------
+# 丹药品阶 ↔ 炼药师品阶（2026-11-18）。原著：第702章六品才「足以炼制」五品；
+# 第495章四品「勉强炼五品，成功率太小」→ 越 1 档可勉强、概率骤降而非禁止；
+# 第6章材料/火种/灵魂感知三要素，异火提成功率。口径：够格用基础率，越 1 档
+# ×0.35、越 ≥2 档 ×0.05，仍走同一失败路径给药渣（原著「勉强尝试」）。
 #: 丹药品阶 → 所需炼药师品阶索引（与 ALCHEMIST 下标对齐：一品=0 … 九品=8）
 GRADE_ALCH_IDX = {
     "一品": 0, "二品": 1, "三品": 2, "四品": 3, "五品": 4,
@@ -923,8 +917,10 @@ OVERREACH_PENALTY = {1: 0.35}
 #: 用户 2026-11-18「我四品炼药师炼一品丹药，概率还是 70？」——旧版 diff<=0
 #: 一律回基础率，导致四品炼一品与炼四品同为 70%，不合原著品阶压制。
 LOW_GRADE_BONUS = 0.08
-#: 低阶加成后的成功率上限（与 craft_rate 的 0.95 一致）
+#: 成功率上限。C4（2026-11-27）：0.95 只留给「九品炼药师 + 异火」，
+#: 其余封 ``CRAFT_RATE_CAP_PLAIN`` —— 旧版九品不带火也恒 0.95，炼药失去门槛。
 CRAFT_RATE_CAP = 0.95
+CRAFT_RATE_CAP_PLAIN = 0.90
 
 
 def alch_grade_idx(grade: str) -> int:
@@ -1124,26 +1120,24 @@ IMPL_PROMISE_WORDS = (
 
 
 def craft_rate_for(alch_idx: int, grade: str, flame_bonus: float = 0.0) -> tuple[float, int]:
-    """某炼药师炼某品阶丹药的真实成功率与品阶差。
+    """某炼药师炼某品阶丹药的真实成功率与品阶差（**唯一入口**，卡面与实炼同源）。
 
-    ``flame_bonus``（2026-11-19）：B 线炼药异火的合成加成（小数），**只在最后加一次**，
-    全部支线共用 CRAFT_RATE_CAP 封顶；默认 0 → 旧调用逐字节不变。
+    ``flame_bonus``：B 线异火加成，**只在最后加一次**。C4（2026-11-27）：0.95 只留给
+    「九品炼药师 + 异火」，其余封 ``CRAFT_RATE_CAP_PLAIN``（0.90）。
 
-    返回 ``(rate, diff)``：``diff`` = 丹药所需品阶 − 炼药师品阶。
-      diff <  0  高品阶炼低阶：每低 1 档 +LOW_GRADE_BONUS，封顶 CRAFT_RATE_CAP
-                 （四品炼一品 = 0.70 + 3×0.08 = 0.94，十拿九稳）
-      diff == 0  刚好够格：rate = craft_rate(alch_idx)
-      diff == 1  勉强越阶：rate = 基础 ×0.35
-      diff >= 2  几无可能：rate = 基础 ×0.05
+    返回 ``(rate, diff)``，``diff`` = 丹药所需品阶 − 炼药师品阶：
+      diff <0 每低 1 档 +LOW_GRADE_BONUS；=0 刚好够格；=1 ×0.35；>=2 ×0.05。
     """
     base = craft_rate(alch_idx) + max(0.0, float(flame_bonus))
+    cap = (CRAFT_RATE_CAP if int(alch_idx) >= ALCH_MAX and float(flame_bonus) > 0
+           else CRAFT_RATE_CAP_PLAIN)
     diff = alch_grade_idx(grade) - int(alch_idx)
     if diff < 0:
-        return min(CRAFT_RATE_CAP, base + (-diff) * LOW_GRADE_BONUS), diff
+        return min(cap, base + (-diff) * LOW_GRADE_BONUS), diff
     if diff == 0:
-        return min(CRAFT_RATE_CAP, base), diff
+        return min(cap, base), diff
     penalty = OVERREACH_PENALTY.get(1 if diff == 1 else 2, 0.05)
-    return min(CRAFT_RATE_CAP, base * penalty), diff
+    return min(cap, base * penalty), diff
 
 
 #: 兽火单方（引火丹）成功率。**引火不是炼药**：原著萧炎吸收紫火不需要炼药师资格，
@@ -2208,8 +2202,10 @@ MAIN_TASKS = [
     {"name": "云岚山初战", "desc": "斩杀 3 只妖兽", "kind": "kill", "target": 3,
      "reward": {"gold": 500, "exp": 800, "luck": 5}},
     {"name": "寻药天山", "desc": "采集 5 株血灵草", "kind": "herb", "target": 5,
+     "item": "血灵草",
      "reward": {"gold": 800, "exp": 1500, "luck": 10}},
     {"name": "焚血淬体", "desc": "炼成 2 份焚血散", "kind": "craft", "target": 2,
+     "item": "焚血散",
      "reward": {"gold": 1500, "exp": 4000, "luck": 20}},
     {"name": "斗尊之路", "desc": "强化玄重尺至 5 级", "kind": "weapon", "target": 5,
      "reward": {"gold": 3000, "exp": 12000, "luck": 40}},
@@ -2219,6 +2215,7 @@ MAIN_TASKS = [
     {"name": "蛇人禁地", "desc": "斩杀 8 只魔兽", "kind": "kill", "target": 8,
      "reward": {"gold": 9000, "exp": 45000, "luck": 100}},
     {"name": "帝都风云", "desc": "采集 8 株七叶花", "kind": "herb", "target": 8,
+     "item": "七叶花",
      "reward": {"gold": 12000, "exp": 60000, "luck": 120}},
     {"name": "三年之约", "desc": "斩杀 12 只妖兽", "kind": "kill", "target": 12,
      "reward": {"gold": 16000, "exp": 80000, "luck": 160}},
@@ -2248,6 +2245,7 @@ assert len(MAIN_TASKS) == CHAPTER_COUNT, (
 
 SIDE_TASK_POOL = [
     {"name": "药农之托", "desc": "采 3 株紫叶兰", "kind": "herb", "target": 3,
+     "item": "紫叶兰",
      "reward": {"gold": 300, "exp": 600, "luck": 8}},
     {"name": "守山兽患", "desc": "斩杀 2 只妖兽", "kind": "kill", "target": 2,
      "reward": {"gold": 400, "exp": 900, "luck": 10}},
@@ -2264,6 +2262,7 @@ SIDE_TASK_POOL = [
     {"name": "焚炎谷的试炼", "desc": "斩杀 5 只妖兽", "kind": "kill", "target": 5,
      "reward": {"gold": 1000, "exp": 2500, "luck": 25}},
     {"name": "古族来客", "desc": "采集 6 株七叶花", "kind": "herb", "target": 6,
+     "item": "七叶花",
      "reward": {"gold": 1000, "exp": 2500, "luck": 25}},
     {"name": "沙漠深处的蛇影", "desc": "斩杀 4 只妖兽", "kind": "kill", "target": 4,
      "reward": {"gold": 900, "exp": 2200, "luck": 22}},

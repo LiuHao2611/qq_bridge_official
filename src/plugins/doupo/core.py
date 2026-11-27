@@ -138,6 +138,10 @@ def create_player(qq, name, group) -> dict:
         # 切磋只动这两个字段，绝不扣 hp/gold/exp。
         "duel_wins": 0, "duel_losses": 0,
         "main_idx": 0, "task": None,
+        # D5（2026-11-27）：主线进度必须显式落 0。旧版新号这里是 None，读侧靠
+        # `p.get("main_progress", 0)` 兜着才没崩；一旦某处写成 `p["main_progress"] += n`
+        # 就是 TypeError。新号即写 0，避免「靠读侧兜底」的隐式契约。
+        "main_progress": 0,
         # 2026-11-25 剧情章节（用户拍板 G1=A / G2=怪等级按章节走）：
         # 第 1 章开通的是「乌坦城·萧家后山」。**唯一写入点**是 main_submit，
         # 与 main_idx 同笔推进（story_chapter = main_idx + 1）。
@@ -435,6 +439,54 @@ def crit_mul(p) -> float:
     return float(cfg.crit_mul(p)) + crit_overflow_dmg(p) / 100.0
 
 
+#: A7 境界标志能力（2026-11-27）：突破文案写「斗气化翼」「可造空间锁」，
+#: 但战斗里一直只是数字变大 —— 这里给两条**能测出来**的轻量机制。
+#:   * 斗王起「斗气化翼」：离地三尺，兽类/近身的**普通扑击**够不到实处 → 承伤 ×0.90；
+#:   * 斗宗起「空间锁」：不借外力停留虚空，能量类**怪技/大招**被空间扭曲 → 承伤 ×0.85。
+#: 🚨 只降承伤，不改命中/闪避：身法链路已被 B4（溢出）与 Q5（定身）动过，
+#: 再叠一层闪避会把三处补丁互相掩盖，谁也说不清哪条在起作用。
+#: 🚨 两条**叠加**（斗宗同时享斗王那条），不许写成二选一 —— 那等于升境界掉防御。
+#: 🚨 低于斗王恒 1.0：``max(1,int(x*1.0))`` 与不乘等价 ⇒ 老玩家逐字节不变。
+FLIGHT_REALM = 5          # cfg.realm_index：斗王（46-54）
+FLIGHT_TAKEN_MULT = 0.90
+SPACE_REALM = 7           # cfg.realm_index：斗宗（64-72）
+SPACE_TAKEN_MULT = 0.85
+
+
+def realm_flag_taken_mult(lv, skill: bool = False) -> float:
+    """境界标志能力的玩家承伤系数（**战斗唯一入口**）。
+
+    ``skill`` = 本次伤害来自怪物斗技/大招。传入非法等级一律按 1.0（不猜）。
+    """
+    try:
+        ri = cfg.realm_index(int(lv))
+    except (TypeError, ValueError):
+        return 1.0
+    if skill:
+        return float(SPACE_TAKEN_MULT) if ri >= SPACE_REALM else 1.0
+    return float(FLIGHT_TAKEN_MULT) if ri >= FLIGHT_REALM else 1.0
+
+
+#: B6 普攻回气（2026-11-27）：斗气跨战结转、耗尽只能靠突破/升级回满，长线连战
+#: 等于宣判死刑（真跑 lv90 连 12 场，场 3 后多败）。普攻（用武器、不放技）时回
+#: 上限的 3%，至少 1 点。数值刻意小：约 5~6 个普攻回合换一次中阶技，
+#: 不顶替青莲地心火（上限 +25%）与回气丹药的地位，只让「撑过去」有正反馈。
+MP_REGEN_PLAIN = 0.03
+
+
+def mp_regen_on_plain(p, cur_mp=None) -> int:
+    """普攻回气量（**战斗唯一入口**）：上限的 3%，四舍五入上升，至少 1。
+
+    ``cur_mp`` 给定时**顺带封顶**到斗气上限（满槽返回 0）—— 封顶逻辑放这里而不是
+    散在战斗里，才能被单测直接盯住；调用方忘了封顶就是「斗气越打越多」。
+    """
+    cap = max(1, int(mp_max(p)))
+    gain = max(1, int(math.ceil(cap * float(MP_REGEN_PLAIN))))
+    if cur_mp is None:
+        return gain
+    return max(0, min(gain, cap - max(0, int(cur_mp))))
+
+
 def power(p) -> int:
     """战力：用于排行榜/切磋。"""
     s = stats(p)
@@ -512,14 +564,31 @@ def encounter_exp_share(budget: int, enemy_count: int, wins: int) -> int:
     return int(base * w + (rem if w >= 1 else 0))
 
 
+#: C3 离线收益封顶（2026-11-27）：被动修炼按真实时间累计，但**最多结算 8 小时**。
+#: 旧版挂机三天回来一次性领三天修为 —— 手离键盘也有全额产出，与「在线按分钟修」
+#: 的节奏完全割裂，连续打卡也失去意义（清单 C3「离线收益全满」）。
+#: 🚨 超出部分**直接丢弃**，不攒着下次领：攒着只是把封顶改成延迟发放，
+#: 玩家挂一周回来仍能一次性领满，等于没封。
+CULTIVATE_OFFLINE_CAP_SEC = 8 * 3600
+
+
 def settle(p, now_ts=None) -> dict:
-    now_ts = time.time() if now_ts is None else now_ts
+    """结算被动修炼（含离线）。``minutes`` 是**实际计费**的分钟数。
+
+    C3 起超过 ``CULTIVATE_OFFLINE_CAP_SEC`` 的时间不计费，``offline_capped``
+    为 True 供文案层提示「只按八小时结算」。
+    """
+    now_ts = float(time.time() if now_ts is None else now_ts)
     elapsed = max(0.0, now_ts - float(p.get("last_settle", now_ts)))
-    gain = int(elapsed / 60.0 * cfg.CULTIVATE_PER_MIN * flame_exp_mult(p))
+    cap_sec = float(CULTIVATE_OFFLINE_CAP_SEC)
+    capped = elapsed > cap_sec
+    billable = min(elapsed, cap_sec)
+    gain = int(billable / 60.0 * cfg.CULTIVATE_PER_MIN * flame_exp_mult(p))
     if gain > 0:
         p["exp"] = int(p.get("exp", 0)) + gain
     p["last_settle"] = now_ts
-    return {"gain": gain, "minutes": int(elapsed // 60)}
+    return {"gain": gain, "minutes": int(billable // 60),
+            "offline_capped": bool(capped)}
 
 
 # ---------------------------------------------------------------------------
@@ -2222,12 +2291,22 @@ def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None,
     ``chest_bonus``（2026-11-25 自动爬塔）：宝箱率的额外倍率增量，如 0.5 表示
     宝箱率 ×1.5。用于「无加成自动爬塔」——不吃三选一加成=难度更高，用更高掉落
     补偿。默认 0 时行为与改造前逐字节一致。
+
+    D4（2026-11-27）：Boss 层宝箱率本就是 1.0，上面那份补偿会被 ``min(1.0, …)``
+    整段吃掉 —— 文案还在说「宝箱掉落已提高」。现在把被吃掉的溢出率折成额外
+    炎星石（``td.CHEST_BONUS_STONE_RATE``），补偿对得起放弃的三选一加成。
     """
     floor = int(floor if floor is not None else st.get("floor", 0))
     # 已结算水位线 <= floor 的层，其宝箱在首轮已经领过（重打旧层不重复给）。
     if floor <= max(0, int(p.get("tower_paid_floor", 0))):
         return []
-    rate = min(1.0, float(td.chest_rate(floor)) * (1.0 + max(0.0, float(chest_bonus))))
+    base_rate = float(td.chest_rate(floor))
+    want_rate = base_rate * (1.0 + max(0.0, float(chest_bonus)))
+    rate = min(1.0, want_rate)
+    # D4：被 min 吃掉的溢出率（普通/精英层通常是 0，只有封顶后才 >0）。
+    _spill = max(0.0, want_rate - rate)
+    _comp_stone = (int(math.ceil(_spill * float(td.CHEST_BONUS_STONE_RATE)))
+                   if _spill > 0 else 0)
     if rng() >= rate:
         return []
     out = []
@@ -2237,11 +2316,17 @@ def tower_open_chest(p, st: dict, rng=random.random, floor: int | None = None,
         w = rng_choice(pool, rng)
         if grant_weapon(p, w):
             out.append({"type": "weapon", "name": w})
-            return out
     # 否则给材料（炎星石 1~3）
-    n = 1 + int(rng() * 3)
-    add_item(p, "炎星石", n)
-    out.append({"type": "material", "name": "炎星石", "n": n})
+    # 🚨 rng 消耗顺序必须与旧版一致：出武器就不抽数量（老路径逐字节不变）。
+    if not out:
+        n = 1 + int(rng() * 3)
+        add_item(p, "炎星石", n)
+        out.append({"type": "material", "name": "炎星石", "n": n})
+    if _comp_stone:
+        # 补偿单独记一条（不并进上面那个 n），回执才能说清「这份是无加成补的」。
+        add_item(p, "炎星石", _comp_stone)
+        out.append({"type": "material", "name": "炎星石", "n": _comp_stone,
+                    "comp": True})
     return out
 
 
@@ -2467,8 +2552,17 @@ def weekly_stage_loot(st: dict, loot: list[dict]) -> None:
 
 
 def weekly_commit(p, st: dict) -> dict:
-    """通关第 7 层：把暂存区一次性结算进永久存档。失败路径**绝不调用**。"""
+    """通关第 7 层：把暂存区一次性结算进永久存档。失败路径**绝不调用**。
+
+    D3（2026-11-27）：加幂等守卫 —— 同一会话连调两次会重复发金币/修为/物品
+    （真跑 10000→11000→12000）。当前命令路径通关即 clear，正常玩家不可达，
+    但未来加重试/按钮连点就会翻车。二次调用返回 ``already``，**一分不动**。
+    """
     staged = st.get("staged") or {}
+    if st.get("cleared"):
+        # 已结算：绝不二次发放（staged 不删，玩家仍能看到结算明细）。
+        return {"ok": True, "already": True, "gold": 0, "exp": 0,
+                "items": {}, "weapons": []}
     gold = int(staged.get("gold", 0))
     exp = int(staged.get("exp", 0))
     p["gold"] = int(p.get("gold", 0)) + gold
@@ -3245,7 +3339,11 @@ def insight_cost(learned_count: int) -> int:
 
 
 def insight_power_need(learned_count: int) -> int:
-    """领悟门槛战力：随已领悟门数递增，防止低战力空手套高级技。"""
+    """【已废弃 · A5 2026-11-27】旧战力门槛，保留仅供老测试/外部引用。
+
+    旧值 120×已学门数 对 lv1 新号（战力约 2937）恒真，从没起过作用；
+    现在「能不能学」唯一走 Q1 的 ``unlock`` 境界闸，不要再接回调用点。
+    """
     return 120 * max(0, int(learned_count))
 
 
@@ -3297,10 +3395,8 @@ def insight(p, rng=random.random) -> dict:
                     "migrated": migrated}
         return {"ok": False, "reason": "all", "migrated": migrated}
 
-    need_power = insight_power_need(len(learned))
-    if power(p) < need_power:
-        return {"ok": False, "reason": "power", "need": need_power, "have": power(p),
-                "migrated": migrated}
+    # A5（2026-11-27）：战力门槛形同虚设（lv1 战力 2937 > 第二门 120×1），已删；
+    # 「能不能学」的唯一门槛是 Q1 的 unlock 境界闸，这里只留金币消耗。
     cost = insight_cost(len(learned))
     if int(p.get("gold", 0)) < cost:
         return {"ok": False, "reason": "gold", "need": cost, "have": int(p.get("gold", 0)),
@@ -3399,10 +3495,7 @@ def learn_named(p, name: str) -> dict:
     if name in owned:
         return {"ok": False, "reason": "learned", "name": name, "migrated": migrated}
 
-    need_power = insight_power_need(len(learned))
-    if power(p) < need_power:
-        return {"ok": False, "reason": "power", "name": name,
-                "need": need_power, "have": power(p), "migrated": migrated}
+    # A5：与 insight() 同口径 —— 战力门槛已删，只留金币与境界闸。
     cost = insight_cost(len(learned))
     if int(p.get("gold", 0)) < cost:
         return {"ok": False, "reason": "gold", "name": name,
@@ -3734,10 +3827,27 @@ def task_accept(p, rng=random.random) -> dict:
     return {"ok": True, "task": t}
 
 
-def task_progress(p, kind, n=1) -> None:
-    """打怪/采药/炼药/强化时推进支线。"""
+def _task_item_match(t, item) -> bool:
+    """D2（2026-11-27）：任务声明了具体物品时，事件必须带**同一个名字**才算数。
+
+    旧版只比 ``kind``：「采集 5 株血灵草」买 5 株紫叶兰也照样算完，
+    「炼成 2 份焚血散」随便炼两枚丹也算 —— 文案承诺与判定两套口径。
+
+    ``item=None``（调用方没带物品名）= **无法确认，不计数**。
+    🚨 这里不许「没带就放过」的兜底：那样 gate 等于没做，谁少传一个参数就静默失效。
+    """
+    want = str((t or {}).get("item") or "")
+    if not want:
+        return True
+    return item is not None and str(item) == want
+
+
+def task_progress(p, kind, n=1, item=None) -> None:
+    """打怪/采药/炼药/强化时推进支线。``item`` = 本次动作的具体物品名（D2）。"""
     t = p.get("task")
     if not t or t.get("kind") != kind:
+        return
+    if not _task_item_match(t, item):
         return
     t["progress"] = int(t.get("progress", 0)) + int(n)
 
@@ -3763,9 +3873,11 @@ def task_submit(p) -> dict:
     return {"ok": True, "task": t, "reward": rw, "surprise_flame": surprise}
 
 
-def main_progress(p, kind, n=1) -> None:
+def main_progress(p, kind, n=1, item=None) -> None:
     t = current_main(p)
     if not t or t.get("kind") != kind:
+        return
+    if not _task_item_match(t, item):
         return
     p["main_progress"] = int(p.get("main_progress", 0)) + int(n)
 
@@ -3904,10 +4016,11 @@ def roll_chance(p, rng=None) -> dict | None:
     return _apply_chance(p, _pick_chance(r), r)
 
 
-def advance_task(p, kind, n: int = 1, rng=None) -> dict | None:
+def advance_task(p, kind, n: int = 1, rng=None, item=None) -> dict | None:
     """推进任务进度，并在任务途中按概率触发一次机遇。
 
     :param kind: 单个 kind 字符串；或 {kind: n} 一次推进多种（一次动作只掷一次机遇）。
+    :param item: 本次动作的具体物品名（D2：任务声明了物品就只认它）。
     :return: 命中的机遇 dict；没接支线且主线已通关 / 未命中则 None。
 
     注意：core.task_progress() / main_progress() 保持纯进度语义不变（测试直接调它们），
@@ -3915,11 +4028,11 @@ def advance_task(p, kind, n: int = 1, rng=None) -> dict | None:
     """
     if isinstance(kind, dict):
         for k, v in kind.items():
-            task_progress(p, k, v)
-            main_progress(p, k, v)
+            task_progress(p, k, v, item=item)
+            main_progress(p, k, v, item=item)
     else:
-        task_progress(p, kind, n)
-        main_progress(p, kind, n)
+        task_progress(p, kind, n, item=item)
+        main_progress(p, kind, n, item=item)
     if not (p.get("task") or current_main(p)):
         return None
     return roll_chance(p, rng)

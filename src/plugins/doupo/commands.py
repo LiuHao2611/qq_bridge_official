@@ -34,6 +34,7 @@ from . import battle_flavor as _flavor
 from . import flame_drop as _fdrop
 from . import flame_skills as fs
 from . import skill_book as book
+from . import skill_rank as rank_mod
 from . import tower_data as td
 from . import tower_session as ts
 from . import weekly_data as wd
@@ -732,6 +733,9 @@ async def cmd_cultivate(store, qq) -> str:
     tip = "，可发送「突破」晋升" if core.can_level(p) else ""
     head = (txt.cultivate(res["minutes"], _fmt(res["gain"]))
             if res["gain"] else "🧘 你刚调息过，气机未动。")
+    if res.get("offline_capped"):
+        # C3：封顶必须说清楚，否则玩家会以为修为被吞了。
+        head += "\n⏳ 离开超过八小时，只按八小时结算（离线收益封顶）。"
     # 2026-11-26 黑盒 P3：可突破时 exp 远超 need，分子封顶到 need。
     _shown_exp = min(int(p["exp"]), need) if need else int(p["exp"])
     return (f"{head}\n修为 {_fmt(_shown_exp)}/{_fmt(need) if need else '—'}{tip}\n"
@@ -1131,13 +1135,9 @@ async def cmd_enhance(store, qq) -> str:
 # 斗技 / 异火
 # ---------------------------------------------------------------------------
 async def cmd_skills(store, qq) -> str:
-    """「斗技」= 已上阵 + 已领悟（一张卡看完），2026-11-24 用户口径。
-
-    原「斗技」（四槽上阵）与「斗技 全部」（已学习名录）合并成一条口令：
-      ① 已上阵：四槽真实出战技（含等级）；
-      ② 已领悟：其余已学技，按三阶分组，含转宗保留的他宗技；
-      ③ 异火技：已收服但未上阵的主动技（收服即会）。
-    「宗门斗技」仍单独看本宗池（无序号），上阵序号以本卡为准，两者职责不重叠。
+    """「斗技」= 已上阵 + 已领悟（一张卡看完）。原「斗技/斗技 全部」合并成一条口令：
+    ① 已上阵四槽；② 其余已领悟（含转宗保留的他宗技）；③ 已收服异火技。
+    「宗门斗技」另看本宗池（无序号），上阵序号以本卡为准，两者不重叠。
     """
     p = await _player(store, qq)
     if not p:
@@ -1163,15 +1163,16 @@ async def cmd_skills(store, qq) -> str:
         out.append("〔已上阵〕")
         for e in lo:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
-            out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}（{e['tier']}）")
+            out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}（{e.get('rank') or e['tier']}）")
 
     # ② 其余已领悟，按三阶分组（序号与「斗技」卡同源）
+    # E4（2026-11-27）：标题走原著阶级（{rank_mod.group_label}），不再印内部档名。
     for tier in cfg.SKILL_TIERS:
         rows = [e for e in learned if e["tier"] == tier
                 and e["name"] not in lo_names and e.get("origin") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
+        out.append(f"〔{rank_mod.group_label(rows)}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             out.append(f"　{no_of.get(e['name'], '?')}. {_tag(e)}{e['name']} Lv{lv}")
@@ -1213,7 +1214,7 @@ async def cmd_faction_skills(store, qq) -> str:
         rows = [e for e in pool if e["tier"] == tier and e.get("faction") != "异火"]
         if not rows:
             continue
-        out.append(f"〔{tier}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
+        out.append(f"〔{rank_mod.group_label(rows)}〕斗气 {int(round(cfg.skill_mp_frac(tier, int(p.get('lv', 1))) * 100))}%·气海")
         for e in rows:
             lv = int((p.get("skills") or {}).get(e["name"], 1))
             mark = ("★上阵" if e["equipped"] else
@@ -1862,7 +1863,9 @@ async def cmd_buy(store, qq, args) -> str:
     # 采办药材也算推进「药农之托」一类 herb 任务（买炎星石不算）。
     herb_n = (int(res.get("n") or 0)
               if (res.get("ok") and res.get("name") in cfg.HERB_NAMES) else 0)
-    chance = core.advance_task(p, "herb", herb_n) if herb_n else None
+    # D2：把**买到的具体药材名**带进去 —— 「采 5 株血灵草」买紫叶兰不算。
+    chance = core.advance_task(p, "herb", herb_n,
+                               item=res.get("name")) if herb_n else None
     await store.put_player(p)
     if not res.get("ok"):
         if res.get("reason") == "poor":
@@ -2055,7 +2058,8 @@ async def cmd_craft(store, qq, name) -> str:
     if res.get("reason") == "cd":
         await store.put_player(p)
         return txt.craft_cd(res["left"])
-    chance = core.advance_task(p, "craft", 1) if res.get("ok") else None
+    # D2：带丹名，别的丹不能凑数。
+    chance = core.advance_task(p, "craft", 1, item=hit) if res.get("ok") else None
     await store.put_player(p)
     # 2026-11-25 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
     # 越2档以上「几无可能」。只有**真越阶（diff>0）**才提示，且只在失败时提示：
@@ -2125,8 +2129,9 @@ async def _cmd_craft_batch(store, qq, p, name, n) -> str:
             return txt.craft_mp()
         return txt.craft_generic_fail()
 
-    # 任务推进按实际成功炉数（一炉一丹，成功才算练手）
-    chance = core.advance_task(p, "craft", int(res["n_ok"])) if res["n_ok"] else None
+    # 任务推进按实际成功炉数（一炉一丹）；D2 带丹名。
+    chance = core.advance_task(p, "craft", int(res["n_ok"]),
+                               item=hit) if res["n_ok"] else None
     await store.put_player(p)
 
     lines = [txt.craft_batch_head(hit, res["n_done"], res["n_ok"], res["n_fail"],
@@ -3290,13 +3295,15 @@ async def cmd_tower(store, qq, arg="") -> str:
             f"　气血 {r['hp']}/{core.stats(p)['体力']}" +
             (f"（歇息 +{r['rest_heal']}）" if r.get("rest_heal") else ""),
         ]
-        # 开宝箱（按**本层**层数判定，不能读 st['floor']：胜利后 st 已推进到本层）
+        # 开宝箱（按本层层数判定：胜利后 st 已推进到本层）
         chest = core.tower_open_chest(p, st, rng, floor=int(r["floor"]))
         if chest:
             st.setdefault("chests", []).extend([{"floor": r["floor"], **c} for c in chest])
             for c in chest:
                 if c["type"] == "weapon":
                     lines.append(f"🎁 宝箱开出神兵【{c['name']}】！已入背包，发「装备 {c['name']}」佩戴。")
+                elif c.get("comp"):
+                    lines.append(f"🎁 无加成补偿：{c['name']}×{c['n']}")
                 else:
                     lines.append(f"🎁 宝箱：{c['name']}×{c['n']}")
         else:
@@ -3493,8 +3500,7 @@ async def cmd_tower_settle(store, qq) -> str:
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
 
 
-#: 自动爬塔单次最多连打层数（2026-11-25）：防止强者永远打不输导致死循环刷屏。
-#: 到顶后自动收手结算，玩家可再发「自动爬塔」接着冲。
+#: 自动爬塔单次最多连打层数（到顶自动收手结算，可再发一次接着冲）。
 AUTO_TOWER_MAX_FLOORS = 100
 #: 「无加成自动爬塔」的宝箱率补偿倍率增量（难度更高→掉落更高）。
 AUTO_TOWER_NO_BUFF_CHEST_BONUS = 0.6
@@ -3513,16 +3519,13 @@ def auto_tower_prompt(p) -> str:
 
 
 async def cmd_auto_tower(store, qq, mode: str) -> str:
-    """自动爬塔（2026-11-25 用户）：一路爬到力竭，不用每层手打「爬塔」+选 1/2/3。
+    """自动爬塔（2026-11-25）：一路爬到力竭，不用每层手打「爬塔」+选 1/2/3。
 
-    ``mode``：
-      * ``random``/``是`` —— 每层自动**随机选一个**三选一战利品（有加成）；
-      * ``none``/``否``  —— 完全**不吃**战利品加成，但宝箱掉落率提高作补偿。
-
-    与手动爬塔共用同一套 ``core.tower_floor`` / ``tower_open_chest`` /
-    ``tower_settle`` / ``_apply_loot``，玩法零分叉；区别只在「谁按 1/2/3」和
-    无加成模式的掉落补偿。默认从 ``tower_checkpoint``（上次止步层）的下一层开，
-    不再从第 1 层重来（用户「去掉电梯，默认从最后一次爬塔层数开始」）。
+    ``mode``：``random``/``是`` = 每层自动随机选一个战利品；
+    ``none``/``否`` = 完全不吃战利品加成，宝箱掉落率提高作补偿（D4）。
+    与手动爬塔共用 ``core.tower_floor`` / ``tower_open_chest`` / ``tower_settle``
+    / ``_apply_loot``，玩法零分叉；默认从 ``tower_checkpoint`` 的下一层开
+    （用户「去掉电梯，从最后一次爬塔层数开始」）。
     """
     p = await _player(store, qq)
     if not p:
@@ -3551,6 +3554,7 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
 
     cleared = 0
     chests = 0
+    comp_stone = 0          # D4：Boss 层被封顶吃掉的补偿（炎星石）
     weapons: list[str] = []
     last_floor = cp
     hit_cap = False
@@ -3580,6 +3584,7 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
                 [{"floor": last_floor, **c} for c in chest])
             chests += len(chest)
             weapons += [c["name"] for c in chest if c["type"] == "weapon"]
+            comp_stone += sum(int(c.get("n") or 0) for c in chest if c.get("comp"))
         # 战利品：随机模式自动选一个；无加成模式整段跳过
         if use_buff:
             choices = td.roll_loot_choices(rng)
@@ -3615,6 +3620,9 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
     if chests:
         lines.append(f"　🎁 宝箱 {chests} 次"
                      + ("，开出神兵：" + "、".join(weapons) if weapons else ""))
+    if comp_stone:
+        # D4：Boss 层补偿以炎星石兑现。
+        lines.append(f"　🎁 无加成补偿：炎星石×{comp_stone}")
     if not use_buff:
         lines.append("　（无加成硬闯，宝箱掉落已提高）")
     lines.append("　发「自动爬塔」再冲一轮；「斗技/人物」看当前状态。")

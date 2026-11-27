@@ -563,7 +563,8 @@ def test_task_flow():
     r = core.task_accept(p, rng=lambda: 0.0)
     assert r["ok"] and p["task"]
     t = p["task"]
-    core.task_progress(p, t["kind"], t["target"])
+    # D2（2026-11-27）：任务可能声明了具体物品，事件必须带同一个名字才算数。
+    core.task_progress(p, t["kind"], t["target"], item=t.get("item"))
     res = core.task_submit(p)
     assert res["ok"] and p["task"] is None
 

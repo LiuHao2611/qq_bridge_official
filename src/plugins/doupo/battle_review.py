@@ -398,6 +398,10 @@ def action_items(battle: dict) -> list[dict]:
         cost = _i(it.get("mp_cost"))
         if cost:
             tags.append("斗气-%d" % cost)
+        # B6（2026-11-27）：普攻回气必须看得见，否则玩家只会觉得「斗气莫名涨了」。
+        regen = _i(it.get("mp_regen"))
+        if regen:
+            tags.append("回气+%d" % regen)
         # 2026-11-20 原著 BOSS：技能/台词/机制三条都必须进战报。
         # 旧版只取 2 条，第三条「九幽·锁魂（空间崩塌）！」被静默吞掉；
         # 卡片侧的标签行已改为按实测宽度折行（见 doupo_battle._bubble_plan），

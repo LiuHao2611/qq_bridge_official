@@ -189,7 +189,9 @@ def test_advance_task_rolls_once_and_no_task_no_roll():
 
         p = _player()
         core.task_accept(p, rng=ALWAYS)   # 接一条支线
-        got = core.advance_task(p, {"kill": 1, "herb": 2}, rng=rng)
+        # D2：任务可能声明具体物品，推进时必须带上同一个名字。
+        got = core.advance_task(p, {"kill": 1, "herb": 2}, rng=rng,
+                                item=p["task"].get("item"))
         assert got is not None
         assert len(calls) == 2, "一次动作只能掷一次（判定+抽事件），实测 %d 次" % len(calls)
         assert int(p["task"]["progress"]) == 2, "支线 herb 进度没推进 2"
@@ -209,7 +211,7 @@ def test_task_progress_pure_functions_are_unchanged():
     core.task_accept(p, rng=ALWAYS)
     t = p["task"]
     before = int(t.get("progress", 0))
-    assert core.task_progress(p, t["kind"], 2) is None
+    assert core.task_progress(p, t["kind"], 2, item=t.get("item")) is None
     assert int(t["progress"]) == before + 2
     assert core.main_progress(p, "kill", 1) is None
 

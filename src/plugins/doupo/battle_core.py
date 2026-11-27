@@ -28,6 +28,26 @@ from . import sect_mechanics as sm
 from . import core as _core
 
 
+#: B7 熔断判胜门槛（2026-11-27）：打满 ``cfg.HARD_ROUND_CAP`` 回合还没打死怪时，
+#: **对怪伤害进度必须超过这条线**才算胜。
+#: 旧口径是「玩家剩余血量比例 > 怪剩余血量比例」—— 怪血量堆到十几倍时，
+#: 玩家血满、怪还剩 83%，1.0 > 0.17 照样判胜并**发全额奖励**，可构造刷奖励。
+#: 现在只认「真打掉一半以上」；不到一半判负（力竭判负），不发经验/金币/掉落。
+#: 🚨 PVP（``core.duel``）的同名熔断不走这里：那是两个真人，血量比例才是合理口径。
+HARD_ROUND_WIN_PROGRESS = 0.5
+
+
+def hard_round_verdict(m_hp, mon_hp) -> bool:
+    """B7 熔断判胜（**唯一入口**）：对怪伤害进度 > 门槛才算胜。
+
+    进度 = 1 - 怪剩余血 / 怪血量上限。怪已死（上限 0）视为全进度。
+    """
+    foil = max(0, int(mon_hp or 0))
+    if foil <= 0:
+        return True
+    return (1.0 - max(0, int(m_hp)) / float(foil)) > HARD_ROUND_WIN_PROGRESS
+
+
 def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
           puppet=None, formation_n=0, locked=None, auto_pill=True,
           pill_budget=None, puppet_flame_mult=1.0, exp_override=None) -> dict:
@@ -64,7 +84,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
 
     2026-11-19 战斗过程丰富化（用户要求）：
       * **不控制回合**：删掉 15 回合硬上限（双方每回合至少 1 点伤害，必分胜负）；
-        只留 ``HARD_ROUND_CAP=300`` 作异常熔断，触发时按血量比例判胜。
+        只留 ``HARD_ROUND_CAP=300`` 作异常熔断，触发时按**对怪伤害进度**
+        （B7：>50%）判胜，见 ``hard_round_verdict``。
       * **自动服药**：气血 <35% / 斗气 <20% 时从背包取最小可用疗伤丹，
         各限 2 枚，锁定物品跳过。
       * **怪物技能**：每个怪按表概率施放 burst / poison / drain，战报可查。
@@ -297,12 +318,23 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         if fortune_left > 0:
             hit["dmg"] = max(1, int(hit["dmg"] * float(cfg.FORTUNE_DMG_MULT)))
             hit["fortune"] = True
+        _mp_regen = 0
         if entry is not None:
             mp -= cost
+        else:
+            # B6 普攻回气（2026-11-27）：不放技（斗气不够 / 无技 / 被禁技）的回合，
+            # 靠普攻把气机重新盘活 —— 回上限 3%，封顶不越上限。
+            # 🚨 只在这一条 else 里加，放技回合绝不回气（否则高消耗技白嫖）。
+            # 封顶在 ``mp_regen_on_plain`` 内（传当前值），别再在外面另算一道。
+            _reg = _core.mp_regen_on_plain(p, mp)
+            if _reg > 0:
+                mp += _reg
+                _mp_regen = int(_reg)
         m_hp -= hit["dmg"]
         hit.update({
             "hp_before": int(hp_before), "mp_before": int(mp_before),
             "mp_cost": int(cost if entry is not None else 0),
+            "mp_regen": int(_mp_regen),
             "foe_hp_before": max(0, int(foe_hp_before)),
         })
         dmg_log.append(_mark(hit, m_hp))
@@ -482,6 +514,17 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
                                 fx.on_hit([_mech_eff], m_fx, p_fx, dealt, rng,
                                           ctx={"target_flags": set(), "target_hp_ratio": 0.5})
                             sk_note.append("%s！" % _mn)
+                # ---- A7 境界标志能力（2026-11-27）----
+                # 斗王「斗气化翼」压**普通扑击**、斗宗「空间锁」压**怪技/大招**，两条叠加。
+                # 🚨 不吃 rng（既有逐招快照的随机序列不变）、不动 dealt0（回看卡的
+                # 「防御削减」必须仍只算防御那一段）；低于斗王倍率恰为 1.0 ⇒ 逐字节不变。
+                _flag_m = _core.realm_flag_taken_mult(p.get("lv", 1), bool(_sk_hit))
+                if _flag_m < 1.0:
+                    _flag_before = dealt
+                    dealt = max(1, int(dealt * _flag_m))
+                    if dealt < _flag_before:
+                        sk_note.append("化翼离地，扑击落空半寸" if not _sk_hit
+                                       else "空间锁成，劲力卸去三分")
                 # 怪击暴击（2026-11-20 隐藏面板）：与伤害浮动**共用同一次采样**。
                 # roll 是那次采样的单调变换，判「roll 落在区间顶端 2·var·c 内」
                 # 等价于独立掷一次暴击（概率精确等于 c），却不多消耗一次 rng ——
@@ -607,10 +650,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
 
     win = m_hp <= 0
     if rounds >= int(cfg.HARD_ROUND_CAP) and m_hp > 0 and hp > 0:
-        # 异常熔断（不是玩法回合上限）：按剩余血量比例判胜，绝不静默判负。
-        ratio_p = hp / max(1, int(st["体力"]))
-        ratio_m = m_hp / max(1, int(mon["hp"]))
-        win = ratio_p > ratio_m
+        # 异常熔断（不是玩法回合上限）：B7 起要**真把怪打掉一半**才算胜。
+        win = hard_round_verdict(m_hp, mon["hp"])
         exhausted = True
     # 回看卡「终局」：先留住**战斗结束时**的真实血/斗气，再改写存档。
     # 2026-11-19 用户：「回看显示 0 血量，人物卡片显示还有血量」—— 旧版回看读

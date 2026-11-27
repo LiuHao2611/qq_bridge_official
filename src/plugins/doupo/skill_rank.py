@@ -80,6 +80,22 @@ def sort_key(rank) -> tuple[int, int]:
     return (idx, level_of(rank))
 
 
+def group_label(entries) -> str:
+    """一组斗技的**阶位标题**（E4 2026-11-27）：实际出现的大阶，去重保序。
+
+    文本页过去按数值档写「普通 / 高阶 / 特殊」当分组标题 —— 那是内部档位名，
+    卡面早已改原著阶级，两处说法打架。这里从条目自己的 ``rank`` 反推标题，
+    所以「特殊档里混了一门天阶」（龙凰古甲）也不会出现标题与内容不符。
+    """
+    seen: list[str] = []
+    for e in entries or ():
+        fam = fam_of((e or {}).get("rank"))
+        if fam not in seen:
+            seen.append(fam)
+    seen.sort(key=lambda f: FAMILIES.index(f) if f in FAMILIES else len(FAMILIES))
+    return "·".join(seen) if seen else UNKNOWN
+
+
 def is_legal(rank) -> bool:
     """是不是一个合法的原著阶别写法（守门用）。"""
     return fam_of(rank) in FAMILIES
