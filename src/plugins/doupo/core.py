@@ -374,12 +374,65 @@ def hit_rate(p) -> float:
     若命中也从敏捷来，两边同速成长 → 命中永远把闪避抵平，等于加了个假词条。
     这里按大境界给基数，剩下的留给后天投入（凝识丹 ``bonus["命中"]``），
     玩家才有一条能自己决定的解法。
+
+    2026-11-27 B4：敏捷闪避自然值越过 80 的溢出按 ``dodge_overflow_hit`` 折成命中，
+    再接 ``HIT_CAP`` 收口 —— 后期堆敏捷不再全废（封顶仍是 90%）。
     """
     lv = int(p.get("lv", 1))
     base = cfg.HERO_HIT + cfg.HERO_HIT_PER_REALM * cfg.realm_index(lv)
     base += int((p.get("bonus") or {}).get("命中", 0))
     base += sm.taixu_overflow_hit(p)  # 太虚闪避溢出→命中
+    base += dodge_overflow_hit(p)     # B4：敏捷闪避自然溢出→命中
     return float(min(cfg.HIT_CAP, base))
+
+
+# ---------------------------------------------------------------------------
+# B4（2026-11-27）：敏捷自然溢出兑换
+# ---------------------------------------------------------------------------
+#: 敏捷自然值封顶：lv55 起暴击顶 80、lv82 起闪避顶 80，再堆敏捷只涨面板数字，
+#: 暴击/闪避一动不动，而人物卡仍写「敏捷 = 闪避·暴击」——后期敏捷成废属性。
+#: 溢出不再作废：暴击溢出 1:0.5 折暴伤（接 ``crit_mul``），闪避溢出 1:0.5 折命中
+#: （接 ``hit_rate``，90% 封顶兜住）。
+#: 🚨 只兑换**自然部分**（敏捷 + 净莲妖火 + 太虚加点），丹药 ``bonus`` 不参与：
+#: 风行丹走 ``dodge_final`` 的「封顶后另计 min(8,pill)」，暴击丹同理，混进来两边打架。
+AGI_CRIT_CAP = 80.0
+AGI_DODGE_CAP = 80.0
+AGI_CRIT_OVERFLOW_DMG = 0.5
+AGI_DODGE_OVERFLOW_HIT = 0.5
+
+
+def _agi_natural_crit(p) -> float:
+    """敏捷自然暴击值（**未封顶**）：与 ``crit_rate`` 的 base 同源，但不含丹药 bonus。"""
+    st = stats(p)
+    return float(cfg.HERO_CRIT + (st["敏捷"] + 30) // 100
+                 + 10 * int((p.get("flames") or {}).get("净莲妖火", 0)))
+
+
+def _agi_natural_dodge(p) -> float:
+    """敏捷自然闪避值（**未封顶**）：与 ``dodge_rate`` 的 base 同源，但不含丹药 bonus。"""
+    st = stats(p)
+    return float(cfg.HERO_DODGE + (st["敏捷"] + 20) // 200
+                 + 10 * int((p.get("flames") or {}).get("净莲妖火", 0))
+                 + sm.taixu_evade_pts(p))
+
+
+def crit_overflow_dmg(p) -> float:
+    """暴击自然值越过 80 的溢出折成的暴伤百分点（B4）。"""
+    return max(0.0, _agi_natural_crit(p) - AGI_CRIT_CAP) * AGI_CRIT_OVERFLOW_DMG
+
+
+def dodge_overflow_hit(p) -> float:
+    """闪避自然值越过 80 的溢出折成的命中百分点（B4）。"""
+    return max(0.0, _agi_natural_dodge(p) - AGI_DODGE_CAP) * AGI_DODGE_OVERFLOW_HIT
+
+
+def crit_mul(p) -> float:
+    """暴击伤害倍率（**战斗唯一入口**）。
+
+    2026-11-27 B4：``cfg.crit_mul`` 只负责词条真源（暴伤词条 + 帝炎放大），
+    敏捷自然暴击溢出在这里补进来 —— 否则 lv55 后堆敏捷只有面板涨、暴伤不动。
+    """
+    return float(cfg.crit_mul(p)) + crit_overflow_dmg(p) / 100.0
 
 
 def power(p) -> int:
@@ -972,7 +1025,7 @@ def damage_schedule(p, rounds: int = 15, puppet_bonus: float = 0.0) -> list:
             pool -= avg_cost
         else:
             out.append(normal_raw)
-    mult = 1.0 + crit_rate(p) / 100.0 * (cfg.crit_mul(p) - 1.0)
+    mult = 1.0 + crit_rate(p) / 100.0 * (crit_mul(p) - 1.0)
     # 傀儡肉身输出不吃暴击加成（原著「稳」的打手），故在 mult 之外单独加。
     return [d * mult + puppet_bonus for d in out]
 
@@ -1156,13 +1209,47 @@ def _loadout_entries(p) -> list[dict]:
     return ents if ents else _legacy_entries()
 
 
-def _pick_skill(p, mp: int, rng=random.random, round_no: int = 0, cd_state=None):
-    """在「已上阵、斗气足够且**冷却已好**」的技中随机挑一个。
+# ---------------------------------------------------------------------------
+# B5（2026-11-27）：选招条件优先
+# ---------------------------------------------------------------------------
+#: 自己残血线 / 目标残血线（血量比例）。只做两条最直观的条件，不引入手动操作：
+#: 自己残血优先「防御/续航」保命，目标残血优先最高倍率斩杀；两者同时满足时
+#: 保命优先（活着才有下一回合）。阈值取 0.35 / 0.30：低于 1/3 血玩家会本能想防，
+#: 目标低于三成会本能想收人头。
+LOW_HP_SELF = 0.35
+LOW_HP_FOE = 0.30
+_SURVIVE_ROLES = ("防御", "续航")
+
+
+def _priority_options(options, ctx):
+    """按战场态势收窄候选（B5）。返回 None = 不干预，走原均匀随机。
+
+    ``ctx`` 由 fight/duel 传入 ``{"hp_ratio": 自己血量比, "foe_hp_ratio": 目标血量比}``。
+    只在**有符合条件的技**时才收窄，绝不因为「没有防御技」就退回全部随机之外的空池。
+    """
+    if not ctx:
+        return None
+    if float(ctx.get("hp_ratio") or 1.0) < LOW_HP_SELF:
+        pool = [o for o in options if str(o[0].get("role") or "") in _SURVIVE_ROLES]
+        if pool:
+            return pool
+    if float(ctx.get("foe_hp_ratio") or 1.0) < LOW_HP_FOE:
+        return [max(options, key=lambda o: float(o[0].get("dmg") or 0))]
+    return None
+
+
+def _pick_skill(p, mp: int, rng=random.random, round_no: int = 0, cd_state=None,
+                ctx=None):
+    """在「已上阵、斗气足够且**冷却已好**」的技中挑一个。
 
     2026-11-27 Q6：斗技详情卡一直写着「冷却 N 回合」，但旧版选招只按斗气过滤，
     同一技可以每回合连放 —— 卡面数值是死字段。现在每场战斗自带一张 ``cd_state``
     （技名 → 上次释放回合），``round_no - used < cd`` 的技本回合不可用。
-    ``cd_state=None`` 时逐字节沿用旧口径（供纯计算/既有测试调用）。
+
+    2026-11-27 B5：旧版四槽均匀随机（真跑 208 次出手 ≈25% 均分），玩家不能
+    「这回合先控住」，配招没有决策感。现在按战场态势收窄候选（只做两条最直观的
+    条件，不做手动操作）：**自己残血优先防御/续航保命，目标残血优先最高倍率斩杀**；
+    两者同时满足时保命优先。``ctx=None``（纯计算/既有测试）逐字节沿用旧口径。
     """
     entries = _loadout_entries(p)
     if not entries:
@@ -1182,6 +1269,9 @@ def _pick_skill(p, mp: int, rng=random.random, round_no: int = 0, cd_state=None)
         options.append((e, c))
     if not options:
         return None, 0
+    narrowed = _priority_options(options, ctx)
+    if narrowed:
+        options = narrowed
     e, c = options[min(len(options) - 1, int(rng() * len(options)))]
     if cd_state is not None and int(e.get("cd") or 0) > 0:
         cd_state[e["name"]] = int(round_no)
@@ -1219,7 +1309,7 @@ def _hit(p, target_def, entry, rng, fx_self=None, fx_target=None, ctx=None,
     # def_mult 是本次实际生效的防御减伤系数（破防会改写它）；回看卡据它算
     # 「面板 → 防御削减 → 实收」，纯展示，不参与任何数值计算。
     def_mult = mitigation(target_def)
-    base = max(1, int(raw * def_mult * (cfg.crit_mul(p) if crit else 1.0)))
+    base = max(1, int(raw * def_mult * (crit_mul(p) if crit else 1.0)))
     notes: list[str] = []
     heal_ratio = 0.0
     dmg = base
@@ -2455,7 +2545,9 @@ def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
         # p 出手
         hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
         v_ctx["target_hp_ratio"] = hp_v / hp_v0
-        e, c = _pick_skill(p, mp_p, rng, round_no=rounds, cd_state=cd_p)
+        e, c = _pick_skill(p, mp_p, rng, round_no=rounds, cd_state=cd_p,
+                           ctx={"hp_ratio": hp_p / hp_p0,
+                                "foe_hp_ratio": hp_v / hp_v0})
         if int(p_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
             e, c = None, 0
         hit = _hit(p, int(sv["防御"] * root_v), e, rng, p_fx, v_fx, v_ctx)
@@ -2495,7 +2587,9 @@ def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
             # vic 出手
             hp_before_v, mp_before_v, foe_hp_before_v = hp_v, mp_v, hp_p
             p_ctx["target_hp_ratio"] = hp_p / hp_p0
-            e2, c2 = _pick_skill(vic, mp_v, rng, round_no=rounds, cd_state=cd_v)
+            e2, c2 = _pick_skill(vic, mp_v, rng, round_no=rounds, cd_state=cd_v,
+                                 ctx={"hp_ratio": hp_v / hp_v0,
+                                      "foe_hp_ratio": hp_p / hp_p0})
             if int(v_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
                 e2, c2 = None, 0
             hit2 = _hit(vic, int(sp["防御"] * root_p), e2, rng, v_fx, p_fx, p_ctx)
@@ -3329,15 +3423,46 @@ def skill_up(p, name) -> dict:
     if name not in allowed:
         return {"ok": False, "reason": "noskill"}
     cur = int((p.get("skills") or {}).get(name, 1))
-    mx = int(cfg.SKILL_BY_NAME.get(name, {}).get("max", 5))
+    entry = next((e for e in sk_mod.learned_entries(p) if e["name"] == name), None)
+    mx = (skill_max(entry) if entry
+          else int(cfg.SKILL_BY_NAME.get(name, {}).get("max", 5)))
     if cur >= mx:
         return {"ok": False, "reason": "max", "lv": cur}
-    cost = cfg.skill_up_cost(cur)
+    cost = skill_up_cost(cur, entry)
     if not take_item(p, cfg.SKILL_UP_ITEM, cost):
         return {"ok": False, "reason": "mat", "need": cost,
                 "item": cfg.SKILL_UP_ITEM, "have": count_item(p, cfg.SKILL_UP_ITEM)}
     p.setdefault("skills", {})[name] = cur + 1
     return {"ok": True, "lv": cur + 1, "max": mx}
+
+
+# ---------------------------------------------------------------------------
+# A6 + C2（2026-11-27）：斗技升级上限 / 消耗按品阶分档
+# ---------------------------------------------------------------------------
+#: 阶位 → 升级上限。旧版 150 门图鉴技全走 `.get("max", 5)` 兜底，黄阶与天阶
+#: 一样 5 级、一样 10 份焚血散 —— 品阶只决定初始倍率，养成深度与品阶无关。
+#: 最高只到 8 级：幅度刻意小，否则一次拉到 10 级会把炼药产出全吃掉。
+SKILL_MAX_BY_RANK = {"黄": 5, "玄": 6, "地": 7, "天": 8}
+#: 阶位 → 升级消耗系数（乘在 cur 上，向上取整）。天阶 1→8 级要 (1+…+7)×2=56 份，
+#: 黄阶 5 级只要 10 份 —— 高阶技养成成本真实高于低阶，同时把「金币→药材→焚血散」
+#: 的消耗拉高，缓解 C2「材料能被金币无限制绕过」的稀缺性失效。
+SKILL_COST_MUL_BY_RANK = {"黄": 1.0, "玄": 1.2, "地": 1.5, "天": 2.0}
+
+
+def skill_rank_of(entry) -> str:
+    """从 rank 串取阶位首字（「黄阶低级」→「黄」）；缺省/未知按黄阶。"""
+    return str((entry or {}).get("rank") or "")[:1] or "黄"
+
+
+def skill_max(entry) -> int:
+    """该技的升级上限（按阶位分档）。"""
+    return int(SKILL_MAX_BY_RANK.get(skill_rank_of(entry), 5))
+
+
+def skill_up_cost(cur_lv: int, entry=None) -> int:
+    """从 cur_lv 升到 cur_lv+1 要几份焚血散（按阶位缩放，向上取整）。"""
+    mul = float(SKILL_COST_MUL_BY_RANK.get(skill_rank_of(entry), 1.0))
+    return max(1, int(math.ceil(int(cur_lv) * mul)))
 
 
 # ---------------------------------------------------------------------------

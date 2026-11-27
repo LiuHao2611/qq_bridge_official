@@ -167,7 +167,9 @@ def test_build_skills_data_details():
     core.skill_pool(p)                      # 确保四槽就绪
     lo = core.loadout_entries(p)
     levels = [3, 1, 5, 2]
-    p["skills"] = {e["name"]: levels[i % 4] for i, e in enumerate(lo)}
+    # A6：上限按阶位分档了，第 3 槽设成各自满级，才能验「maxed 段全亮」的卡面。
+    p["skills"] = {e["name"]: (core.skill_max(e) if i == 2 else levels[i % 4])
+                   for i, e in enumerate(lo)}
     core.add_item(p, cfg.SKILL_UP_ITEM, 7)
 
     d = card.build_skills_data(p)
@@ -197,13 +199,16 @@ def test_build_skills_data_details():
         mult = float(e["dmg"]) * (1 + 0.2 * (r["lv"] - 1))
         assert r["cur_mult"] == round(mult, 2)
         assert r["dmg"] == int(round(raw_base * mult * crit_mult)), "伤害须与战斗公式同源"
-        assert r["max"] == 5 and r["segments"] == 5 and r["lit"] == r["lv"]
+        # A6（2026-11-27）：上限按阶位分档（黄5/玄6/地7/天8），段数必须跟上限同源。
+        assert r["max"] == core.skill_max(e) and r["segments"] == r["max"]
+        assert r["lit"] == r["lv"]
     # 天冥宗默认四槽应有主定位与多维效果（防止多维字段没进卡片数据）
     assert any(r["role"] for r in d["rows"]), "四槽全无主定位，多维数据没进卡片"
     assert any(r["chips"] for r in d["rows"]), "四槽全无多维效果，玩家只能看到一个数字"
     assert any(r["maxed"] for r in d["rows"])
-    for r in d["rows"]:
-        assert r["item_need"] == (0 if r["maxed"] else cfg.skill_up_cost(r["lv"]))
+    for r, e in zip(d["rows"], lo):
+        # C2：消耗按阶位缩放，卡面与 skill_up 必须读同一函数。
+        assert r["item_need"] == (0 if r["maxed"] else core.skill_up_cost(r["lv"], e))
 
 
 # ---------------------------------------------------------------------------

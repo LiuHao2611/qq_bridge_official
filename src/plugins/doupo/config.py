@@ -368,8 +368,9 @@ FACTION_SWITCH_COST_PER_LV = 200
 
 
 def faction_switch_cost(lv: int) -> int:
-    """转宗要多少金币：境界越高，越难改换门庭。"""
-    return int(FACTION_SWITCH_COST_BASE + FACTION_SWITCH_COST_PER_LV * max(1, int(lv)))
+    """转宗费：C1 立方项对齐金币产出曲线。"""
+    lv = max(1, int(lv))
+    return int(FACTION_SWITCH_COST_BASE + FACTION_SWITCH_COST_PER_LV * lv + lv ** 3 // 10)
 
 
 # ---------------------------------------------------------------------------

@@ -448,7 +448,7 @@ def build_skills_data(p: dict) -> dict:
     for e in core.loadout_entries(p):
         name = e["name"]
         tier = e["tier"]
-        mx = 5
+        mx = core.skill_max(e)
         lv = max(1, min(mx, int(sk.get(name, 1))))
         maxed = lv >= mx
         base_mult = float(e["dmg"])
@@ -482,7 +482,7 @@ def build_skills_data(p: dict) -> dict:
             "next_dmg": int(round(raw_base * next_mult * crit_mult)),
             "segments": mx, "lit": lv,
             "item": item,
-            "item_need": 0 if maxed else cfg.skill_up_cost(lv),
+            "item_need": 0 if maxed else core.skill_up_cost(lv, e),
         })
 
     fac_name = p.get("faction_name") or "无宗门"

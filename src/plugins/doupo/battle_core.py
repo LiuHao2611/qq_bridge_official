@@ -275,8 +275,11 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 自动服药：先补给再出手（血低时先吃药是当前玩家的直觉操作）
         _try_auto_pill("hp")
         _try_auto_pill("mp")
-        # 随机释放「已上阵、斗气够且冷却已好」的技（Q6）
-        entry, cost = _core._pick_skill(p, mp, rng, round_no=rounds, cd_state=cd_state)
+        # 随机释放「已上阵、斗气够且冷却已好」的技（Q6）；B5 再按血量态势收窄候选。
+        entry, cost = _core._pick_skill(
+            p, mp, rng, round_no=rounds, cd_state=cd_state,
+            ctx={"hp_ratio": hp / max(1, int(st["体力"])),
+                 "foe_hp_ratio": m_hp / max(1, int(mon["hp"]))})
         # 禁技（2026-11-19 修）：被怪挂 silence 或眩晕时本回合只能武器普攻，斗气不扣。
         if int(p_fx.get("silence", 0)) > 0 or _pfx_start["skip"]:
             entry, cost = None, 0
