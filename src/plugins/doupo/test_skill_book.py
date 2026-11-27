@@ -275,21 +275,28 @@ def _learnable_at(fid: str, lv: int) -> list[dict]:
     return [r for r in rows if int(r["unlock"]) <= lv]
 
 
-def test_low_skill_factions_may_have_short_loadout():
-    """2026-11-15 改为：所有宗门进池等级都能凑满四槽，且四槽不该再缩水。
+def test_factions_fill_four_slots_within_douzhiqi():
+    """2026-11-27 按 Q1②「分技与功法」改：四槽在**斗之气阶段内**凑满。
 
-    旧断言允许 4 派「凑不满四槽」，结果逼着当初往宗门里塞炼药/考核/丹会
-    这类非斗技凑数（用户截图里那张四槽卡就是这么来的）。现在由
-    ``skills.ensure_loadout`` 自动补满，本测试改为锁住这个新契约。
+    旧断言要求「入道那一刻（lv1）就有 ≥4 门可学」，是 2026-11-15 为防止
+    有人塞炼药/丹会凑数而加的。用户拍板黄阶斗技按原著段位解锁后，
+    通用池三门掌法变成 3/5/7 段——lv1 只有 1 门可学，正是萧炎三段才学
+    碎石掌的原著节奏，不是数据缩水。契约相应改为：
+      ① 进池等级至少 1 门可学（入道赠技不断档）；
+      ② 斗之气九段（lv9）前必须凑满四槽（四槽玩法不缩水）。
     """
     fac = _load_factions()
-    bad = []
+    bad_early, bad_late = [], []
     for fid in book.FACTION_SKILLS:
         base = fac.POOL_UNLOCK.get(fac.FACTIONS[fid].get("pool"), 1)
-        learn = _learnable_at(fid, base)
-        if len(learn) < 4:
-            bad.append("%s 进池 lv%d 只有 %d 门可学" % (fid, base, len(learn)))
-    assert not bad, "；".join(bad)
+        early = _learnable_at(fid, base)
+        if not early:
+            bad_early.append("%s 进池 lv%d 无可学" % (fid, base))
+        late = _learnable_at(fid, 9)
+        if len(late) < 4:
+            bad_late.append("%s 斗之气九段只有 %d 门可学" % (fid, len(late)))
+    assert not bad_early, "入道断档：%s" % "；".join(bad_early)
+    assert not bad_late, "斗之气内凑不满四槽：%s" % "；".join(bad_late)
 
 
 def test_every_faction_learnable_at_pool_unlock():

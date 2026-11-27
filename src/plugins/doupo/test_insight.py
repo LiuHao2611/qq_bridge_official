@@ -133,6 +133,9 @@ def test_insight_gates_and_success():
     # 老档无 learned → 惰性迁移后照常领悟（2026-11-16 用户「学斗技不要提示老版本」）
     legacy = core.create_player("legacy-x", "老", "g1")
     legacy.pop("learned", None)
+    # 2026-11-27 Q1②：黄阶斗技按段位解锁，lv1 学完裂爪击后下一门要 lv3。
+    # 本用例守的是「老档能迁移并继续领悟」，不是斗之气一段的门槛，故给斗者等级。
+    legacy["lv"] = 10
     loadout_before = list(legacy.get("loadout") or [])
     r = core.insight(legacy, rng=lambda: 0.0)
     check("老档能领悟(不再legacy)", r.get("ok") is True and r.get("reason") != "legacy", str(r))

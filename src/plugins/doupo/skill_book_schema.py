@@ -42,6 +42,29 @@ _DMG_BY_RANK = {
     "天阶低级": 200, "天阶中级": 220, "天阶高级": 240,
 }
 
+#: 斗者起始等级 = config.realm_lv(1)（斗之气 9 段之后的第一个等级）。
+#: 用户 2026-11-27 拍板 Q1②「分技与功法」：**功法与玄阶以上斗技须斗者**，
+#: 黄阶斗技则允许斗之气按段位修习（段位写在显式 unlock 里，如碎石掌=3）。
+#: 本模块刻意不 import config（图鉴可被 _gen_book_doc.py 顶层非包导入），
+#: 由 test_skill_gate 断言本常量恒等于 config.realm_lv(1)，防两处手抄漂移。
+DOUZHE_LV = 10
+
+#: 需要斗者资格才能修习的阶位首字（玄阶及以上，含地阶、天阶）
+_ADVANCED_HEAD = ("玄", "地", "天")
+
+
+def learn_floor(rank: str, kind: str) -> int:
+    """境界闸：这门斗技最低要什么境界才有资格修习。
+
+    只表达「境界资格」，不含段位 / 显式解锁等级（那是 ``unlock`` 的职责）。
+    黄阶斗技返回 1 —— 斗之气可按段位修，与图鉴里的原著引文
+    （碎石掌三段 / 劈山掌五段 / 铁山拳七段）对齐。
+    """
+    if str(kind or "") == "功法" or str(rank or "")[:1] in _ADVANCED_HEAD:
+        return DOUZHE_LV
+    return 1
+
+
 #: 特殊阶的解锁等级（按性质分档；未列出的特殊阶默认 40）
 _UNLOCK_BY_RANK = {
     # 高阶（地/天）：同属「高阶」一档斗气单价，但解锁仍按原著阶位递进
@@ -87,6 +110,9 @@ def _s(name, rank, kind, scope, desc, source, novel="", mp=None, cd=None, dmg=No
 
     if unlock is None:
         unlock = _UNLOCK_BY_RANK.get(str(rank), 40 if tier == "特殊" else 1 if tier == "普通" else 20)
+    # 境界闸折进 unlock：learnable / 卡面「LvN 解锁」/ learn_named「差几级」
+    # 全部只读 unlock 一个字段，改这里就全链路一致，无需逐处补丁。
+    unlock = max(int(unlock), learn_floor(rank, kind))
     return {
         "name": name,
         "rank": rank,

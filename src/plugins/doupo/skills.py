@@ -16,6 +16,7 @@ from . import config as cfg
 from . import factions as fac
 from . import flame_skills as fs
 from . import skill_book as book
+from .skill_book_schema import learn_floor
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,15 @@ def _rank_tier(raw: str) -> str:
     if any(t in raw for t in ("天阶", "地阶")):
         return "高阶"
     return "普通"
+
+
+def _rank_hint(raw: str) -> str:
+    """兜底路径：从宗门资料的括号描述里取阶位首字（玄/地/天），供境界闸判定。"""
+    s = str(raw or "")
+    for head in ("玄阶", "地阶", "天阶"):
+        if head in s:
+            return head
+    return ""
 
 
 def _to_entry(rec: dict, fid: str, origin: str) -> dict:
@@ -97,7 +107,11 @@ def _from_faction_strings(fid: str) -> list[dict]:
         out.append({
             "name": name, "tier": tier, "faction": fid, "origin": "本宗",
             "mp": cfg.SKILL_TIER_MP_FRAC[tier],
-            "dmg": dmg, "unlock": cfg.SKILL_TIER_UNLOCK[tier],
+            "dmg": dmg,
+            # 兜底路径也要过境界闸：功法/玄阶以上须斗者，黄阶按段位（默认 1）。
+            # 阶位从宗门资料的括号描述里解析（"六合游身尺（地阶中，萧厉）[C1]"）。
+            "unlock": max(cfg.SKILL_TIER_UNLOCK[tier],
+                          learn_floor(_rank_hint(raw), "")),
             "desc": raw, "brief": _skill_name(raw), "core": core,
         })
         seen.add(name)
@@ -111,7 +125,8 @@ def _from_faction_strings(fid: str) -> list[dict]:
             "name": name, "tier": "特殊", "faction": fid, "origin": "本宗",
             "mp": cfg.SKILL_TIER_MP_FRAC["特殊"],
             "dmg": cfg.SKILL_TIER_DMG["特殊"],
-            "unlock": int(sp.get("unlock_lv", cfg.SKILL_TIER_UNLOCK["特殊"])),
+            "unlock": max(int(sp.get("unlock_lv", cfg.SKILL_TIER_UNLOCK["特殊"])),
+                          learn_floor(sp.get("rank", ""), "")),
             "desc": sp.get("note", ""), "brief": name,
         })
         seen.add(name)
