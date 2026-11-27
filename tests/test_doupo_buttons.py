@@ -181,7 +181,8 @@ def test_baseline_sane():
     # 2026-11-24 晚：菜单补「外观 · 卡片主题」分组（用户「主题口令菜单上没写」）→ 53→54。
     # 2026-11-25：新增「查看 <物品名>」物品详情 → 54→55。
     # 2026-11-26：新增「傀儡图鉴」「傀儡出战」→ 55→57。
-    assert len(real) == 57, "MENU_GROUPS 基准应为 57 条 canonical 口令，实际 %d" % len(real)
+    # 2026-11-27：新增「卖 <物品> [数量]」→ 57→58。
+    assert len(real) == 58, "MENU_GROUPS 基准应为 58 条 canonical 口令，实际 %d" % len(real)
     for must in ("斗破菜单", "入道", "人物", "修炼", "突破", "战斗", "强化",
                  "斗技", "学斗技", "斗技详情", "升级", "上阵", "宗门", "转宗",
                  "异火", "收服", "养火", "宝库", "买", "炼药", "炼制", "服丹",
@@ -270,6 +271,8 @@ def test_each_card_buttons_are_relevant_family():
         "skill_text": {"斗技", "上阵", "人物"},
         "flame_text": {"养火", "异火", "人物"},
         "buy_text": {"买", "炼药", "宝库"},
+        # 2026-11-27 卖出回执（「卖 血灵草 5」）
+        "sell_text": {"背包", "宝库", "炼药"},
         "craft_text": {"炼药", "服丹", "背包"},
         "use_text": {"背包", "炼药", "查看"},
         "shop_text": {"买", "宝库", "背包"},
@@ -627,7 +630,7 @@ def test_every_command_never_falls_back_to_menu():
     兜底桥只能给 kb_fallback=menu。这类「默认按钮」必须绝迹。
     """
     real = list(db.real_commands())
-    assert len(real) == 57
+    assert len(real) == 58
     bad = []
     for c in real:
         ck = db.reply_card_key_for(c)

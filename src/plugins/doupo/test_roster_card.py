@@ -274,11 +274,21 @@ def test_roster_groups_by_tier():
     groups = d["groups"]
     assert groups, "没有分组，又退回一张平铺表格"
     tiers = [g["tier"] for g in groups]
-    order = [t for t in rank_mod.FAMILIES if t in tiers]
-    assert tiers == order, "分组顺序与 FAMILIES 不一致：%s vs %s" % (tiers, order)
+    # 2026-11-27 用户「阶级要标注完整，地阶高级，别只写个地阶」：分区键从大阶
+    # 改成**完整阶位**（黄阶低级/玄阶高级/…/秘法），排序走 rank_mod.sort_key
+    # （与卡内同源）。大阶另存在 g["family"]，模板拿它取色/取图标。
+    allowed = {f + lv for f in rank_mod.FAMILIES if f != "秘法"
+               for lv in rank_mod.LEVELS} | {"秘法", rank_mod.UNKNOWN}
+    bad = [t for t in tiers if t not in allowed]
+    assert not bad, "分区名不是完整原著阶位：%s" % bad
+    assert tiers == sorted(tiers, key=rank_mod.sort_key), \
+        "分区顺序未按 sort_key（黄→天→秘法，各阶内低→中→高）：%s" % tiers
     for g in groups:
-        assert g["tier"] in rank_mod.FAMILIES, \
-            "分组名「%s」不是原著大阶（退回普通/高阶/特殊三阶说法）" % g["tier"]
+        assert g["family"] in rank_mod.FAMILIES, \
+            "分区大阶「%s」不是原著大阶（退回普通/高阶/特殊三阶说法）" % g["family"]
+        assert g["label"] == g["tier"], "分区标题与分区键不一致"
+        assert all(str(r.get("rank")) == g["tier"] for r in g["rows"]), \
+            "分区「%s」内混进了别的小阶" % g["tier"]
     assert sum(g["count"] for g in groups) == len(d["rows"])
     assert len(d["rows"]) >= 10, "名录卡门数异常偏少：%d" % len(d["rows"])
     for g in groups:
@@ -412,13 +422,24 @@ def test_skill_names_not_truncated_by_wider_badge():
     boxes: list[tuple] = []
     tpl.build(theme, data=data, width=720, boxes=boxes)
     by_label = {b[0]: b for b in boxes}
+    # 2026-11-27 名称改折行（用户「有的斗技名称被省略了，不要出现这种情况」）：
+    # 一行装得下仍是 <名字>.name0；装不下就拆成多行 <名字>.nameN，逐行完整绘制。
+    # 断言同步改口径 ⇒ ①拼接后必须等于原名（一个字都不许吞）；②每行登记宽 == 实测宽
+    # （被 _fit 截成「…」时登记宽会小于实测宽，仍然会红）。
+    _, _, inner_w, _, _ = tpl._cols(720)
     for r in data["rows"]:
-        key = "%s.name" % r["name"]
-        assert key in by_label, "%s 的技能名没被绘制/登记" % r["name"]
-        w_box = by_label[key][3] - by_label[key][1]
-        w_full = tpl._w(r["name"], tpl.FS_NAME, "bold")
-        assert w_box == w_full, "%s 的技能名被截断（登记宽 %d < 实测 %d）" % (
-            r["name"], w_box, w_full)
+        got_lines = tpl._row_texts(r, inner_w)["name_lines"]
+        assert "".join(got_lines) == r["name"], \
+            "技能名被吞字：%s → %s" % (r["name"], got_lines)
+        assert len(got_lines) <= 2, "%s 折成 %d 行（超过两行会压掉描述）" % (
+            r["name"], len(got_lines))
+        for ni, seg in enumerate(got_lines):
+            key = "%s.name%d" % (r["name"], ni)
+            assert key in by_label, "%s 的第 %d 行没被绘制/登记" % (r["name"], ni + 1)
+            w_box = by_label[key][3] - by_label[key][1]
+            w_seg = tpl._w(seg, tpl.FS_NAME, "bold")
+            assert w_box == w_seg, "%s 第 %d 行被截断（登记宽 %d < 实测 %d）" % (
+                r["name"], ni + 1, w_box, w_seg)
 
 
 def test_meta_wrap_keeps_unlock_level_intact():

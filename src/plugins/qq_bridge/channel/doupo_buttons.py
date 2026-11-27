@@ -284,6 +284,9 @@ CARD_ACTIONS = {
     "skill_text": ("斗技", "上阵", "人物"),                     # 学斗技/升级/上阵回执
     "flame_text": ("养火", "异火", "人物"),                      # 收服/养火回执
     "buy_text": ("买", "炼药", "宝库"),                         # 购买回执（区别于 shop）
+    # 2026-11-27「卖 <物品> [数量]」回执：下一步继续卖（背包看存货）/ 查买价（宝库）/ 去炼（炼药）。
+    # 按钮绝不含「卖」自己（self 检查）；组合也不复用 shop 的 (买,炼药,背包)。
+    "sell_text": ("背包", "宝库", "炼药"),                      # 卖出回执
     "craft_text": ("炼药", "服丹", "背包"),                     # 炼丹回执
     "use_text": ("背包", "炼药", "查看"),                       # 服丹回执
     "shop_text": ("买", "宝库", "背包"),                        # 商店文字回执
@@ -347,6 +350,7 @@ REPLY_CARD_KEY: dict[str, str] = {
     "上阵": "skill_text", "斗技详情": "skill_text",
     "收服": "flame_text", "养火": "flame_text",
     "买": "buy_text", "购买": "buy_text",
+    "卖": "sell_text", "出售": "sell_text", "变卖": "sell_text",
     "炼制": "craft_text", "炼丹": "craft_text",
     "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
     "入道": "enter_text", "主题": "enter_text",
@@ -441,7 +445,7 @@ CARD_SELF = {
     "task_submit": "支线结算", "battle_text": "战斗评语", "review_text": "回看文本",
     "tower_text": "爬塔回执", "weekly_text": "周本回执", "cult_text": "修炼回执",
     "equip_text": "装备回执", "skill_text": "斗技回执", "flame_text": "异火回执",
-    "buy_text": "购买回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
+    "buy_text": "购买回执", "sell_text": "卖出回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
     "shop_text": "商店回执", "enter_text": "入道回执", "puppet_text": "傀儡回执",
     "duel_text": "切磋回执",
     "setup_text": "按钮设置", "tip_text": "未开放提示",
@@ -485,7 +489,7 @@ TEXT_CARD_KEYS = frozenset({
     "task_panel", "main_submit", "task_submit",              # 任务族回执
     "tower_text", "weekly_text",                             # 塔 / 周本回执
     "cult_text", "equip_text", "skill_text", "flame_text",   # 修炼 / 装备 / 斗技 / 异火
-    "buy_text", "craft_text", "use_text", "shop_text",       # 买 / 炼 / 服 / 商店
+    "buy_text", "sell_text", "craft_text", "use_text", "shop_text",  # 买 / 卖 / 炼 / 服 / 商店
     "enter_text", "puppet_text", "duel_text",                # 入道 / 傀儡 / 切磋
     "setup_text",                                            # 按钮设置回执
     "tip_text",                                              # 「尚未开放」提示回执
