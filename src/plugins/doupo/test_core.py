@@ -181,10 +181,91 @@ def test_enhance_max_hardcoded():
     assert cfg.weapon_name(8) == "玄重尺"
 
 
-def test_enhance_blocked_at_max():
+def test_enhance_cap_999():
+    """2026-11-27 上限提到 999：L=998 封顶，觉醒后(L=9~998)仍可继续强化。"""
+    assert cfg.WEAPON["max_internal"] == 998
+    assert cfg.WEAPON["max_display"] == 999
+    assert cfg.WEAPON["awaken_internal"] == 9
     p = _p(1)
-    p["weapon"] = 9
+    p["weapon"] = 9           # 已觉醒，但没到 998 上限 → 还能强化
+    p["bag"] = {"炎星石": 20}  # L=9 强化需 10 块，给足
+    res = core.enhance(p)
+    assert res["ok"] is True and p["weapon"] == 10, res
+    assert res["evolved"] is False, "只在 L=9 觉醒那一次报 evolved，之后不重复"
+    # 消耗随等级提高：炎星石有持续消耗出口（用户诉求）
+    assert core.enhance_cost({"weapon": 9}) == 10
+    assert core.enhance_cost({"weapon": 500}) == 501
+    assert core.enhance_cost({"weapon": 997}) == 998
+    p["weapon"] = 998
     assert core.enhance(p)["reason"] == "max"
+
+
+def test_enhance_awakened_grows_every_level():
+    """觉醒后每一级都必须真涨四词条——绝不允许再出现「↗0」。
+
+    2026-11-27 线上事故：上限提到 998 后 `_weapon_rows` 对 L>=9 一律返回同一张
+    max_stats，L 与 L+1 完全相同 → 强化框恒显示「力量 ↗0 敏捷 ↗0」，却照扣
+    炎星石。玩家连点三次（9→10、10→11、11→12）烧掉 10+11+12=33 块换回三个 0。
+
+    守门口径是「全量扫 9→998 每一级的 next-cur 都 > 0」，不是抽查几个点——
+    初版测试只断言 `== max_stats`，恰好把这个 bug 写成了「预期行为」。
+    """
+    want = cfg.WEAPON["max_stats"]
+    p = _p(20)
+
+    # ① 觉醒瞬间（L=9）仍是原著硬编码，一分不多一分不少
+    p["weapon"] = 9
+    cur, nxt = core._weapon_rows(p)
+    assert all(cur[k] == want[k] for k in want), cur
+    assert core.weapon_panel(p)["name"] == "异火恒古尺"
+    # ② 9→10 必须已经开始涨
+    assert all(nxt[k] > cur[k] for k in want), ("9->10 无增长", cur, nxt)
+
+    # ③ 全量扫：每一级 cur 严格大于上一级、next 严格大于 cur
+    prev = dict(cur)
+    for L in range(10, cfg.WEAPON["max_internal"] + 1):
+        p["weapon"] = L
+        cur, nxt = core._weapon_rows(p)
+        for k in want:
+            assert cur[k] > prev[k], ("L=%d 的 %s 没有增长" % (L, k), prev[k], cur[k])
+            assert nxt[k] > cur[k], ("L=%d 的 %s 下一级没增长" % (L, k), cur[k], nxt[k])
+            assert cur[k] >= want[k], ("L=%d 的 %s 低于觉醒基准" % (L, k), cur[k])
+        prev = dict(cur)
+
+    # ④ 面板口径：英雄基础 + 武器值，逐属性各自基础，不因 L>=9 归零
+    p["weapon"] = 500
+    cur, _ = core._weapon_rows(p)
+    st = core.stats(p)
+    for k in want:
+        assert st[k] == core.c_stat(cfg.HERO_BASE[k], 20) + cur[k], (k, st[k])
+
+
+def test_enhance_preview_delta_matches_cost():
+    """强化框预览的四个 ↗ 差值必须与实扣炎星石同笔——不许「扣了石头不涨」。
+
+    单独一条是因为事故的玩家体感就是这张框：等级在涨、石头在扣、四个箭头是 0。
+    """
+    p = _p(20)
+    for L in (9, 12, 40, 500, 997):
+        p["weapon"] = L
+        pv = core.enhance_preview(p)
+        assert pv["cost"] == L + 1, (L, pv["cost"])
+        for k in ("力量", "敏捷", "斗气", "防御"):
+            assert pv["next"][k] > pv["cur"][k], ("L=%d 的 %s 预览差值为 0" % (L, k), pv)
+
+
+def test_enhance_awakened_really_consumes_and_grows():
+    """端到端：L=12 花 13 块炎星石强化后，等级 +1 且四词条真的变大。"""
+    p = _p(20)
+    p["weapon"] = 12
+    p["bag"] = {"炎星石": 100}
+    before, _ = core._weapon_rows(p)
+    res = core.enhance(p)
+    assert res["ok"] is True and p["weapon"] == 13, res
+    assert core.count_item(p, "炎星石") == 87, core.count_item(p, "炎星石")
+    after, _ = core._weapon_rows(p)
+    for k in ("力量", "敏捷", "斗气", "防御"):
+        assert after[k] > before[k], (k, before, after)
 
 
 def test_enhance_needs_stones():

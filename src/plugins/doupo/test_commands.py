@@ -241,19 +241,27 @@ async def main():
     check("强化 成功", "强化成功" in r, r[:60])
     p = await store.get_player(A)
     check("强化后武器 =1", int(p["weapon"]) == 1, f"weapon={p['weapon']}")
-    # 一路强到十级：必须蜕变且封顶
+    # 一路强到十级：必须蜕变（觉醒点仍是 L=9，不随 999 上限变）
     core.add_item(p, "炎星石", 200)
     await store.put_player(p)
     evolved = ""
     for _ in range(12):
         t = await commands.cmd_enhance(store, A)
-        if "异火恒古尺" in t:
+        if "异火恒古尺】现世" in t:   # 觉醒播报只在这里出现一次
             evolved = t
-        if "巅峰" in t:
             break
     check("强化 十级蜕变", "异火恒古尺" in evolved, evolved[:60])
     p = await store.get_player(A)
-    check("武器封顶 internal=9", int(p["weapon"]) == 9, f"weapon={p['weapon']}")
+    check("觉醒后 internal=9", int(p["weapon"]) == 9, f"weapon={p['weapon']}")
+    # 2026-11-27 上限 999：觉醒后还能继续强化消耗炎星石，属性不归零
+    t = await commands.cmd_enhance(store, A)
+    check("觉醒后仍可强化", "强化成功" in t, t[:60])
+    check("觉醒后不重复播报", "异火恒古尺】现世" not in t, t[:60])
+    p = await store.get_player(A)
+    check("强化后 internal=10", int(p["weapon"]) == 10, f"weapon={p['weapon']}")
+    # 直接置到 998 上限：必须挡回
+    p["weapon"] = cfg.WEAPON["max_internal"]
+    await store.put_player(p)
     r = await commands.cmd_enhance(store, A)
     check("强化 满级后挡回", "无法再强化" in r, r[:40])
     # 还原成 0 级，别影响后面战力断言

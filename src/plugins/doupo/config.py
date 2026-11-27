@@ -251,9 +251,8 @@ STAT_BATTLE_ROLE = {
 # 玄重尺  [源码]
 # d/i.hy 表 1 第 0 行：[0, 1, 1, 3, 0, 4, 4,300, 6,260, 5,150, 7,210]
 #   -> 需求 1 级、品质 3(金)、4 条词条：力量+300 敏捷+260 斗气+150 防御+210
-# 强化上限：l.java:304 `g.c[0][3] > 8` -> 已达最高级别，即内部 L 最大 9
-# 界面显示等级 = L + 1（实机强化框：L=0 显示「1 级 ↗ 2 级」）
-# 满级硬编码：h.java:81-89  L==9 时 力量/敏捷 2000、斗气 1000、防御 1200
+# 强化上限：L=9 -> 998（2026-11-27 用户「炎星石没地方消耗」）。L=9 仍原著
+#   2000/2000/1000/1200；L>9 曲线与事故记录见 weapon_curve.awakened_value。
 # ---------------------------------------------------------------------------
 WEAPON = {
     "name": "玄重尺",
@@ -261,9 +260,11 @@ WEAPON = {
     "req_lv": 1,
     "quality": 3,
     "stats": {"力量": 300, "敏捷": 260, "斗气": 150, "防御": 210},
-    "max_internal": 9,          # 内部 L 上限
-    "max_display": 10,          # 界面显示上限
+    "awaken_internal": 9,       # 觉醒点
+    "max_internal": 998,        # L 上限
+    "max_display": 999,
     "max_stats": {"力量": 2000, "敏捷": 2000, "斗气": 1000, "防御": 1200},
+    "awaken_grow": 0.04,
 }
 
 
@@ -271,19 +272,14 @@ def weapon_display_level(internal: int) -> int:
     return int(internal) + 1
 
 
+from .weapon_curve import weapon_stat  # noqa: F401
+
+
 def weapon_name(internal: int) -> str:
     """l.java:1604  h.b[1][g.c[0][3] > 8 ? 2 : 0]"""
     return WEAPON["name_max"] if internal > 8 else WEAPON["name"]
 
 
-def weapon_stat(base: int, internal: int) -> int:
-    """h.java:80-102  收益 = base × (1 + 0.1·L(L+1)/2)；L=9 走硬编码。"""
-    if internal >= 9:
-        return 0  # 由调用方查 max_stats
-    total = base
-    for k in range(internal + 1):
-        total += base * (k * 10) // 100
-    return total
 
 
 # ---------------------------------------------------------------------------

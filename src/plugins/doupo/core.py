@@ -27,6 +27,7 @@ from . import skill_effects as fx
 from . import skill_rank as rank_mod
 from . import sect_mechanics as sm
 from . import weapon_data as wd
+from . import weapon_curve as wcurve
 
 # 纯函数 re-export（实现见 sect_mechanics.py）
 from .sect_mechanics import (  # noqa: E402
@@ -64,16 +65,30 @@ def weapon_base_row(p) -> dict:
 
 
 def _weapon_rows(p) -> tuple[dict, dict]:
-    """(当前, 下一级) 四词条实际值。满级只有玄重尺走硬编码 max_stats 表。"""
+    """(当前, 下一级) 四词条实际值。
+
+    2026-11-27 上限提到 999 后必须区分两个阈值：
+      * ``awaken_internal=9``  觉醒点（原著固定）——L=9 那一刻是硬编码
+        max_stats（2000/2000/1000/1200）；L>9 继续按 sqrt 曲线缓增，
+        由 ``cfg.weapon_stat_awakened`` 单一真源算，**差值永远 > 0**；
+      * ``max_internal=998``   强化上限（界面 999）——只决定还能不能继续强化。
+
+    🚨 2026-11-27 事故：初版让 L>=9 一律 `return max_stats`，L 与 L+1 相同
+    → 强化框恒显示「力量 ↗0」却照扣炎星石（玩家连点三次烧 33 块换三个 0）。
+    守门：``test_core.test_enhance_awakened_grows_every_level`` 全量扫 9..998。
+    """
     name = equipped_weapon(p)
     w = int(p.get("weapon", 0))
     base = weapon_base_row(p)
-    cap = cfg.WEAPON["max_internal"]      # 9
-    top = cap - 1                          # 无硬编码表的武器封顶用 L=8
+    awaken = int(cfg.WEAPON["awaken_internal"])  # 9
+    top = awaken - 1                              # 无硬编码表的武器封顶用 L=8
 
     def at(internal: int) -> dict:
-        if name == "玄重尺" and internal >= cap:
-            return {k: int(cfg.WEAPON["max_stats"][k]) for k in base}
+        if name == "玄重尺" and internal >= awaken:
+            grow = float(cfg.WEAPON["awaken_grow"])
+            return {k: wcurve.awakened_value(int(cfg.WEAPON["max_stats"][k]),
+                                             internal, awaken, grow)
+                    for k in base}
         return {k: cfg.weapon_stat(v, min(internal, top)) for k, v in base.items()}
 
     return at(w), at(w + 1)
@@ -89,7 +104,8 @@ def weapon_panel(p) -> dict:
     w = int(p.get("weapon", 0))
     cur, _ = _weapon_rows(p)
     name = equipped_weapon(p)
-    if name == "玄重尺" and w >= cfg.WEAPON["max_internal"]:
+    # 觉醒用的是固定觉醒点（10 级），不随强化上限 999 变——L>=9 即「异火恒古尺」。
+    if name == "玄重尺" and w >= cfg.WEAPON["awaken_internal"]:
         name = cfg.WEAPON["name_max"]
     return {"name": name, "level": cfg.weapon_display_level(w), "stats": cur}
 
@@ -2665,7 +2681,8 @@ def enhance_cost(p) -> int:
 
 def enhance(p) -> dict:
     w = int(p.get("weapon", 0))
-    if w > 8:
+    # 上限 999 级（内部 L=998）：到了才挡回。觉醒 L=9 之后仍可继续强化消耗炎星石。
+    if w >= int(cfg.WEAPON["max_internal"]):
         return {"ok": False, "reason": "max"}
     cost = enhance_cost(p)
     if not take_item(p, "炎星石", cost):
@@ -2673,7 +2690,9 @@ def enhance(p) -> dict:
     p["weapon"] = w + 1
     _refill(p)
     # 「异火恒古尺」是玄重尺专属觉醒；装备其它武器时只报等级，不冒这条文案。
-    evolved = p["weapon"] > 8 and equipped_weapon(p) == "玄重尺"
+    # 用固定觉醒点 9：只在从 9→10 那一次报觉醒，之后继续强化不再重复播报。
+    evolved = (p["weapon"] == int(cfg.WEAPON["awaken_internal"])
+               and equipped_weapon(p) == "玄重尺")
     return {
         "ok": True, "internal": p["weapon"],
         "display": cfg.weapon_display_level(p["weapon"]),

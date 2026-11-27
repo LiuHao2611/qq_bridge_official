@@ -1091,8 +1091,9 @@ async def cmd_enhance(store, qq) -> str:
     if not p:
         return NOT_ENTERED
     pv = core.enhance_preview(p)
-    if int(p.get("weapon", 0)) > 8:
-        return f"🗡️ {core.weapon_panel(p)['name']} 已至十级巅峰，无法再强化。"
+    if int(p.get("weapon", 0)) >= int(cfg.WEAPON["max_internal"]):
+        return (f"🗡️ {core.weapon_panel(p)['name']} 已至 "
+                f"{cfg.WEAPON['max_display']} 级巅峰，无法再强化。")
 
     head = [
         f"🗡️ {core.weapon_panel(p)['name']}",
