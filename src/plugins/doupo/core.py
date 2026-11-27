@@ -3533,6 +3533,19 @@ def _weapon_task_value(p) -> int:
     return max(0, int(p.get("weapon", 0) or 0))
 
 
+def _flame_task_value(p) -> int:
+    """异火类任务的**状态值**：当前已收服异火里的最高等级。
+
+    2026-11-27 D0（P0 永久死锁）/ D1（文案口径）：ch5「将任意异火升到 1 级」、
+    ch11「升到 3 级」都是**状态要求**，不是喂养次数。旧口径只认 ``main_progress``
+    事件计数，而该事件只在玩家**正读到这条任务时**喂火才累加：
+      * 提前把火喂满 4 级 → 之后再喂只返回 ``max`` → 进度恒 0 → 13 章断在 ch5；
+      * 收服即 1 级不算一次喂养 → 卡面写「升到 1 级」却显示 0/1，玩家照文案做反而不算。
+    与武器同构取状态值真源，两个毛病一起消掉；「任意」取最高级，多火不会倒退。
+    """
+    return max(0, max((int(v or 0) for v in (p.get("flames") or {}).values()), default=0))
+
+
 def main_value(p) -> int:
     """当前主线的**有效进度**：事件计数与状态值取大（渲染与提交都用它）。"""
     t = current_main(p)
@@ -3541,6 +3554,8 @@ def main_value(p) -> int:
     n = int(p.get("main_progress", 0))
     if t.get("kind") == "weapon":
         n = max(n, _weapon_task_value(p))
+    elif t.get("kind") == "flame":
+        n = max(n, _flame_task_value(p))
     return n
 
 
@@ -3552,6 +3567,8 @@ def task_value(p) -> int:
     n = int(t.get("progress", 0))
     if t.get("kind") == "weapon":
         n = max(n, _weapon_task_value(p))
+    elif t.get("kind") == "flame":
+        n = max(n, _flame_task_value(p))
     return n
 
 
