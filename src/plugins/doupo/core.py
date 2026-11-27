@@ -822,7 +822,8 @@ def make_breakthrough_boss(p, rng=random.random, puppet=None, formation_n=0,
         from . import puppet_core as _pc
         _pu_bonus = _pc.puppet_expected_damage(
             puppet, formation_n, flame_mult=puppet_flame_mult, p=snap)
-    mon = monster_scaled(snap, species, puppet_bonus=_pu_bonus)
+    mon = monster_scaled(snap, species, puppet_bonus=_pu_bonus,
+                         use_baseline=False)   # 突破 BOSS：snap 是触发时的标尺，非真实玩家
     mon["hp"] = max(1, int(mon["hp"] * float(cfg.BOSS_BREAK_HP_MULT)))
     mon["atk"] = max(1, int(mon["atk"] * float(cfg.BOSS_BREAK_ATK_MULT)))
     mon["is_boss"] = True
@@ -1019,7 +1020,8 @@ def monster_panel(lv: int, kind: str = "", is_boss: bool = False) -> dict:
     }
 
 
-def monster_scaled(p, mon, puppet_bonus: float = 0.0, at_lv=None) -> dict:
+def monster_scaled(p, mon, puppet_bonus: float = 0.0, at_lv=None,
+                   use_baseline: bool = True) -> dict:
     """把"物种"实例化成一只同阶怪。
 
     为什么不写死数值：玩家每 9 级 c_stat 有一次 阶² 的平方级跃升，
@@ -1031,12 +1033,20 @@ def monster_scaled(p, mon, puppet_bonus: float = 0.0, at_lv=None) -> dict:
     :param at_lv: 把怪实例化到**指定等级**（2026-11-25 章节门禁用）。
         给定时不看真实玩家，改用 ``_baseline_at(at_lv)``（该等级的裸装新号）反解，
         并把实例的 ``lv`` 就地改成该等级 —— 玩家再强也抬不动低章怪的数值。
-        None（默认）→ 沿用旧口径（按玩家等级反解），爬塔/周本/切磋/突破逐字节不变。
+    :param use_baseline: **Q2①（2026-11-27 用户拍板「投入净生效」）**：默认 True，
+        野外自适应怪的反解只看 ``_baseline_at(玩家等级)``（裸装新号），不再用真实
+        玩家面板反解 —— 否则力量 +10000 会让怪血同步变厚，胜率/回合/受伤逐字节不变，
+        装备/丹药/异火/额外六维全是假属性。固定难度玩法（爬塔/周本/遗迹/突破 BOSS）
+        的传入 p 本身就是**标尺**（tower_ref_player / 周一快照 / 突破快照），必须显式
+        传 ``use_baseline=False`` 保留标尺口径，否则会破坏「难度按层/周锁定」红线。
     """
     if at_lv is not None:
         _lv_at = max(1, min(cfg.MAX_LV, int(at_lv)))
         p = _baseline_at(_lv_at)
         mon = dict(mon, lv=_lv_at)   # 复制：绝不改 cfg.MONSTERS 里的物种真源
+    elif use_baseline:
+        # 野外自适应：只用等级基线反解，玩家额外投入在 fight() 里净生效。
+        p = _baseline_at(int(p.get("lv", 1)))
     st = stats(p)
     lv = int(p.get("lv", 1))
     # 等级差只微调"几回合打完"，上下限收紧到 ±20%（原 ±60%/+80%）：
@@ -1972,7 +1982,8 @@ def ruin_scaled_monster(sg: dict, puppet=None, formation_n: int = 0,
         _pu_bonus = _pc.puppet_expected_damage(
             puppet, formation_n, flame_mult=puppet_flame_mult, p=ref)
     return monster_scaled(ref, dict(sg, name=sg.get("monster") or sg["name"]),
-                          puppet_bonus=_pu_bonus)
+                          puppet_bonus=_pu_bonus,
+                          use_baseline=False)   # 遗迹：ref 是层号标尺，保留固定难度
 
 
 def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
@@ -2030,7 +2041,8 @@ def tower_floor(p, st: dict, rng=random.random, temp_bonus=None,
         from . import puppet_core as _pc  # 延迟导入避免与 core 环
         _pu_bonus = _pc.puppet_expected_damage(
             puppet, formation_n, flame_mult=puppet_flame_mult, p=_ref)
-    mon = monster_scaled(_ref, species, puppet_bonus=_pu_bonus)
+    mon = monster_scaled(_ref, species, puppet_bonus=_pu_bonus,
+                         use_baseline=False)   # 爬塔：_ref 是层号标尺，保留固定难度
     mod = tower_mod_from_affixes(affixes, temp_effects)
     # 武器专属效果注入（2026-11-17 用户"武器影响斗技效果"）：当前装备武器的
     # special 按 DIM_MAP 映射到 tower_mod。仅玄重尺默认时同样生效，
@@ -2235,7 +2247,8 @@ def weekly_floor(p, snapshot: dict, st: dict, rng=random.random,
         from . import puppet_core as _pc
         _pu_bonus = _pc.puppet_expected_damage(
             puppet, formation_n, flame_mult=puppet_flame_mult, p=snapshot)
-    mon = monster_scaled(snapshot, species, puppet_bonus=_pu_bonus)
+    mon = monster_scaled(snapshot, species, puppet_bonus=_pu_bonus,
+                         use_baseline=False)   # 周本：snapshot 是周一画像标尺，锁定当周难度
     fp = copy.deepcopy(p)
     fp["hp"] = int(st.get("temp_hp") if st.get("temp_hp") is not None
                    else stats(fp)["体力"])
