@@ -26,6 +26,9 @@
              用显式 NOTE_GAP 与副行拉开，**禁止用全角空格塞进 sub 凑间距**。
              head = True 表示这一行是**分类标题**（如异火卡的「可收服的异火」），
              模板画成「玫红菱形 + 楷体金字」，与普通条目分层；行高不变。
+             image = 物品图名（丹药/异火真名，缺图自动不画；见 :mod:`item_icons`）。
+  grid     True = 背包式 4 列紧凑格子（格内「上图标 + 下名称 + 角标」）
+  row_icon True = 列表行左侧让出一条图槽，标题/副行整体右移（异火卡用）
   tip      底部提示（可留空）
 """
 from __future__ import annotations
@@ -40,6 +43,7 @@ from ..theme import Theme
 from .doupo import _bar, _fit, _pal, _w
 from . import doupo_ui as UI
 from . import doupo_style as S
+from . import item_icons
 
 # ---- 排版（2026-11-14 统一字号规范）----
 PAD = 36              # 内容左右内边距（2026-11-22 由 28 加到 36：游戏风回纹外框
@@ -104,13 +108,14 @@ SUB_ROLE_COLOR = {
 }
 
 
-def _sub_w(content_w: int, item: dict) -> int:
+def _sub_w(content_w: int, item: dict, indent: int = 0) -> int:
     """富文本副行可用宽度（与 build 里的 ``(cx0+cw) - title_x - 8`` 逐字节一致）。
 
     度量与绘制必须同宽，否则 _measure 少算一行 → 文字压到下一行条目上。
+    ``indent`` = 行首图槽占宽（``data["row_icon"]`` 时非零），**两端必须同时传**。
     """
     off = (BADGE_W + 4) if item.get("badge") else 14
-    return content_w - off - 8
+    return content_w - off - 8 - indent
 
 
 def _rich_lines(segs, size: int, max_w: int) -> list[list[tuple[str, str]]]:
@@ -155,14 +160,23 @@ def _rich_lines(segs, size: int, max_w: int) -> list[list[tuple[str, str]]]:
 
 
 
-#: 网格模式固定格高（4 列，每格只放名称 + 数量 + 角标）。
+#: 网格模式固定格高（4 列，每格放「物品图 + 名称 + 角标」）。
 #: 2026-11-24：52 → 60。格子右上/左上要放「几纹」「锁」角标；52 高时角标
 #: 与名称上缘会黏在一起，加 8px 拉开净空。
-GRID_CELL_H = 60
+#: 2026-11-27：60 → 92。物品图（丹药/异火）接进格子后格内变成「上图标、下名称」
+#: 两层，且图**必须落在角标下缘之下**：角标色块下缘在格顶 +15，「三纹」这种
+#: 两字角标横向占掉右上 84~134（格宽 146），居中图标再往上挪必然与它交叠
+#: （首版 80 高实测 boxes 直接报 g3.art × g3.tr）。分层后：角标 15 ← 5px →
+#: 图 20~60 ← 8px → 名称 68~84 ← 8px → 格底。
+GRID_CELL_H = 92
 #: 网格格子间距（格子有自身边框，间距比普通列表行小）。
 GRID_GAP = 8
-#: 网格格子内名称的垂直中线距格顶的距离。**与有无角标无关**——同一行必须基线一致。
-GRID_NAME_CY = GRID_CELL_H // 2 - 1
+#: 格内物品图的可用边长与中线距格顶（20 + 40/2 = 40）。
+GRID_ICON_BOX = 40
+GRID_ICON_CY = 40
+#: 网格格子内名称的垂直中线距格顶的距离。**与有无角标/有无图都无关**——
+#: 同一行必须基线一致（2026-11-24 实图事故：名称随角标下移 4px，一眼看出歪）。
+GRID_NAME_CY = 76
 
 # ---- 格子角标（2026-11-24 二次改版：用户「特殊字体 + 金色光晕 + 骑在边框上」）----
 #: 角标字用**楷体**（doupo_kai.ttf，与「包裹」牌匾同一族；缺文件时 fonts 会告警
@@ -265,11 +279,14 @@ def draw_corner_badge(c: Canvas, g: dict, text: str, cell_x: int, cell_w: int,
     return (px0, py0, px0 + pw, py0 + ph)
 
 
-def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
+def _row_h(item: dict, content_w: int, grid: bool = False,
+           indent: int = 0) -> int:
     """单行高度：主标题 + 可选副行（折行）+ 可选等级条。
 
     ``grid=True``（背包 4 列紧凑网格）固定为 :data:`GRID_CELL_H`，不渲染长说明，
     4 格一行，卡片高度随物品数自然增长（2026-11-24 起背包不再截断/翻页）。
+    ``indent`` = 行首图槽占宽；副行/提示行可用宽度要同步减掉，否则测少一行、
+    绘制时文字压到下一行（测画同源红线）。
     """
     if grid:
         return GRID_CELL_H
@@ -278,14 +295,16 @@ def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
     sub = item.get("sub") or ""
     if segs:
         # 富文本副行（行内分色，如傀儡图鉴的「已拥有材料金色」）：宽度与 build 同源
-        lines = _rich_lines(segs, FS_SMALL, _sub_w(content_w, item))
+        lines = _rich_lines(segs, FS_SMALL, _sub_w(content_w, item, indent))
         h += max(1, len(lines)) * DESC_LH + TITLE_SUB_GAP
     elif sub:
-        lines = Canvas.wrap(sub, FS_SMALL, "regular", content_w - BADGE_W - 14)
+        lines = Canvas.wrap(sub, FS_SMALL, "regular",
+                            content_w - BADGE_W - 14 - indent, orphan=True)
         h += max(1, len(lines)) * DESC_LH + TITLE_SUB_GAP
     note = item.get("note") or ""
     if note:
-        lines = Canvas.wrap(note, FS_NOTE, "regular", content_w - BADGE_W - 14)
+        lines = Canvas.wrap(note, FS_NOTE, "regular",
+                            content_w - BADGE_W - 14 - indent, orphan=True)
         h += NOTE_GAP + max(1, len(lines)) * NOTE_LH
     if item.get("bar"):
         # 字号放大后要给渐变条留足空间，否则说明文字会压到条上
@@ -297,6 +316,25 @@ def _row_h(item: dict, content_w: int, grid: bool = False) -> int:
 #: 宝库药材 50+ 种单列会到 5000px；背包按游戏实机 4 列网格铺开，行数随物品数增长。
 COL_GAP = 18
 MAX_COLS = 4
+
+# ---- 列表行的行首物品图（2026-11-27 接图，异火卡用）------------------------
+#: ``data["row_icon"]`` 为真时，**整卡所有行**统一在左侧让出一条图槽（含分类
+#: 标题行），标题/副行/提示行一起右移 —— 逐行判断会让同一张卡里标题起点参差，
+#: 那比没有图更难看。行高会跟着变（副行折行宽度变窄 → 折行数可能多一行），
+#: 所以 :func:`_row_h` / :func:`_sub_w` 必须同步吃 ``indent``（测画同源红线）。
+ROW_ICON_BOX = 44           # 图可用边长
+ROW_ICON_LEFT = 4           # 图相对行左缘的偏移
+ROW_ICON_TOP = 2            # 图相对行顶的偏移（行内文字从 y+2 起，图与它齐顶）
+ROW_ICON_GAP = 10           # 图右沿到标题左缘
+#: 行首图槽总占宽 = 4 + 44 + 10 = 58
+ROW_ICON_COL = ROW_ICON_LEFT + ROW_ICON_BOX + ROW_ICON_GAP
+
+
+def _indent(data: dict, grid: bool) -> int:
+    """列表行左侧图槽占宽（网格格子自带图，不再让槽）。"""
+    if grid or not data.get("row_icon"):
+        return 0
+    return ROW_ICON_COL
 
 
 def _cols(data: dict) -> int:
@@ -329,10 +367,12 @@ def _measure(data: dict, content_w: int) -> int:
     cols = _cols(data)
     cw = _col_width(content_w, cols)
     grid = _grid(data)
+    indent = _indent(data, grid)
     ys = [y_head] * cols
     for i, r in enumerate(_rows_of(data)):
         k = i % cols
-        ys[k] += _row_h(r, cw, grid=grid) + (GRID_GAP if grid else ROW_PAD)
+        ys[k] += _row_h(r, cw, grid=grid, indent=indent) + (
+            GRID_GAP if grid else ROW_PAD)
     # 末尾留白用 UI.PAD_B(54)：底部两角只有短 L 线，26 收尾会贴框（2026-11-22）
     tail = GRID_GAP if grid else ROW_PAD   # 扣回最后一行多加的间距（网格/列表各自口径）
     y = max(ys) - tail + BAND_GAP + 1 + TIP_GAP + FS_TIP + UI.PAD_B
@@ -390,19 +430,32 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     cols = _cols(data)
     cw = _col_width(content_w, cols)
     grid = _grid(data)
+    indent = _indent(data, grid)
     # 表头高度必须与 _measure 完全一致（含副标题），否则双列底边会错位
     col_y = [y] * cols
     for ri, item in enumerate(_rows_of(data)):
         k = ri % cols
         cx0 = x0 + k * (cw + COL_GAP)
         y = col_y[k]
-        rh = _row_h(item, cw, grid=grid)
+        rh = _row_h(item, cw, grid=grid, indent=indent)
         if grid:
             # 游戏包裹式紧凑格子：每格只画「名称 + 数量」，长说明不进格子
             # （说明是选中态信息，QQ 卡无交互，故并入底部 tip）。
             c.rounded_rect((cx0, y, cx0 + cw - 2, y + rh - 2), radius=8,
                            fill=p["panel"], outline=p["panel_ln"], width=1)
             name_txt = str(item.get("title") or "")
+            cell_cx = cx0 + (cw - 2) // 2
+            # 物品图（2026-11-27 接图）：居中骑在名称上方。角标在左右两角、图在
+            # 正中，横向三者互不重叠；**必须画在 rounded_rect 之后**，否则被格底盖掉。
+            art = item_icons.icon_layer(str(item.get("image") or ""),
+                                       GRID_ICON_BOX, GRID_ICON_BOX)
+            if art is not None:
+                aw, ah = art.size
+                ax = cell_cx - aw // 2
+                ay = y + GRID_ICON_CY - ah // 2
+                c.paste_alpha(art, (ax, ay))
+                if boxes is not None:
+                    boxes.append(("g%d.art" % ri, ax, ay, ax + aw, ay + ah))
             is_locked = bool(item.get("corner_tl")) or name_txt.startswith("〔锁〕")
             tr = str(item.get("corner_tr") or "")
             tl = str(item.get("corner_tl") or "")
@@ -417,10 +470,9 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
                     boxes.append(("g%d.%s" % (ri, "tr" if _right else "tl"),) + bb)
             shown = S.fit(name_txt, cw - 16, FS_SMALL, "regular")
             tcol = p["accent_color"] if is_locked else p["text_color"]
-            cell_cx = cx0 + (cw - 2) // 2
-            # 名称中线**恒定**，不因角标下移：同行有无角标的格子必须基线对齐
+            # 名称中线**恒定**，不因角标/有无图下移：同行必须基线对齐
             # （card-design 红线「同列同排元素起点一致」，2026-11-24 实图见破厄丹比
-            # 三纹青灵丹低 4px → 已修）。角标只是占掉格子上缘，不挤名称。
+            # 三纹青灵丹低 4px → 已修）。角标只占格子上缘、图只占名称上方，都不挤名称。
             cell_cy = y + GRID_NAME_CY
             S.small(c, (cell_cx, cell_cy), shown, size=FS_SMALL, color=tcol,
                     anchor="mm", max_w=cw - 16)
@@ -447,9 +499,22 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             rec("r%d.badge" % ri, S.fit(badge, BADGE_W - 16, FS_BADGE, "regular"),
                 cx0 + (BADGE_W - 8) // 2, by + bh // 2,
                 FS_BADGE, "regular", "mm")
-            title_x = cx0 + BADGE_W + 4
+            title_x = cx0 + BADGE_W + 4 + indent
         else:
-            title_x = cx0 + 14
+            title_x = cx0 + 14 + indent
+
+        # 行首物品图（2026-11-27 接图）：整卡让槽，图只画在真有图的行上。
+        # 图与标题齐顶（ROW_ICON_TOP），高度 ROW_MIN=66 装得下 44+2，不吃行高。
+        if indent:
+            art = item_icons.icon_layer(str(item.get("image") or ""),
+                                        ROW_ICON_BOX, ROW_ICON_BOX)
+            if art is not None:
+                aw, ah = art.size
+                ax = cx0 + (BADGE_W + 4 if badge else ROW_ICON_LEFT)
+                ay = y + ROW_ICON_TOP + (ROW_ICON_BOX - ah) // 2
+                c.paste_alpha(art, (ax, ay))
+                if boxes is not None:
+                    boxes.append(("r%d.art" % ri, ax, ay, ax + aw, ay + ah))
 
         # 右侧信息测量（绘制走 bold，度量也必须走 bold，否则标题会被挤掉）
         right = item.get("right")
@@ -463,9 +528,10 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             # 分组头行（数据层显式标 head=True，如异火卡的「本宗传承 / 可收服的异火」）：
             # 玫红菱形 + 楷体金字。以前这种行和普通条目一样是白色粗体，玩家分不清
             # 「这是分类」还是「这是某一项」（2026-11-22 实拍确认层级不清）。
-            txx = cx0 + 20
+            txx = cx0 + 20 + indent
             ImageDraw.Draw(UI.img_of(c)).polygon(
-                [(cx0 + 6, ty - 7), (cx0 + 13, ty), (cx0 + 6, ty + 7), (cx0 - 1, ty)],
+                [(cx0 + 6 + indent, ty - 7), (cx0 + 13 + indent, ty),
+                 (cx0 + 6 + indent, ty + 7), (cx0 - 1 + indent, ty)],
                 fill=UI.rgb(p["fret"]) + (255,))
             UI.kai_text(c, (txx, ty), S.fit(title_txt, (cx0 + cw) - txx - 8 - right_w,
                                             FS_ITEM, "kai"),
@@ -508,7 +574,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
             cy += len(rlines) * DESC_LH
         sub = item.get("sub") or ""
         if sub:
-            lines = Canvas.wrap(sub, FS_SMALL, "regular", (cx0 + cw) - title_x - 8)
+            lines = Canvas.wrap(sub, FS_SMALL, "regular",
+                                (cx0 + cw) - title_x - 8, orphan=True)
             for i, ln in enumerate(lines):
                 S.small(c, (title_x, cy + i * DESC_LH), ln,
                         size=FS_SMALL, color=p["dim_color"])
@@ -518,7 +585,8 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
         # 独立提示行：显式 gap，不与副行连读（card-design 红线 5：禁止空格凑间距）
         note = item.get("note") or ""
         if note:
-            lines = Canvas.wrap(note, FS_NOTE, "regular", (cx0 + cw) - title_x - 8)
+            lines = Canvas.wrap(note, FS_NOTE, "regular",
+                                (cx0 + cw) - title_x - 8, orphan=True)
             ny = cy + NOTE_GAP + NOTE_LH // 2
             for i, ln in enumerate(lines):
                 S.small(c, (title_x, ny + i * NOTE_LH), ln,

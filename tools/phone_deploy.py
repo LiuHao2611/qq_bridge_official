@@ -14,6 +14,8 @@
 用法（在电脑 Git Bash，cwd = qq_bridge_official）：
   # 推一个/几个文件并校验（每个路径相对仓库根，如 src/plugins/doupo/core.py）
   python tools/phone_deploy.py push src/plugins/doupo/core.py
+  # 整目录推美术资产（只在 ALLOWED_BINARY_DIRS 白名单内；一次 scp -r + 一次 md5 汇总）
+  python tools/phone_deploy.py push-assets src/plugins/qq_bridge/pic/templates/assets/doupo_item_icons
   # 只校验当前线上状态（不推、不重启）
   python tools/phone_deploy.py verify
   # 校验特征串是否在日志出现
@@ -73,6 +75,10 @@ ALLOWED_BINARY_FILES = (
 )
 ALLOWED_BINARY_DIRS = (
     "src/plugins/qq_bridge/pic/templates/assets/doupo_rank_icons/",
+    # 2026-11-27 物品图接入（详情卡 / 背包格 / 异火卡）：109 张丹药+异火 PNG
+    # （丹药 83 + 异火 26，约 1.36MB）是**运行必需的美术资产**，不是截图。
+    # 同样只放行这一个目录，绝不泛开 .png。
+    "src/plugins/qq_bridge/pic/templates/assets/doupo_item_icons/",
 )
 
 
@@ -287,8 +293,80 @@ def cmd_push(files: list[str], grep: str | None, no_restart: bool) -> int:
     return 0
 
 
+def _dir_allowed(rel: str) -> bool:
+    """目录是否在资产白名单内（前后都补斜杠，防 ``...icons2/`` 这类前缀误命中）。"""
+    key = rel.replace("\\", "/").strip("/") + "/"
+    return any(key == d or key.startswith(d) for d in ALLOWED_BINARY_DIRS)
+
+
+def _dir_files(rel: str) -> list[str]:
+    base = ROOT / rel
+    return sorted(p.relative_to(ROOT).as_posix() for p in base.rglob("*") if p.is_file())
+
+
+def cmd_push_assets(rel: str) -> int:
+    """整目录推美术资产（只放 :data:`ALLOWED_BINARY_DIRS` 白名单里的目录）。
+
+    为什么不复用 ``push``：109 张 PNG 走「逐个 scp + 逐个 md5」是 200+ 次 ssh
+    往返（这个手机约 3 分钟），中途断一次还得从头来。这里走专线：
+    ``scp -r`` 一次传完 → 远端 ``cp -f`` 落位 → **一次** ``md5sum *`` 汇总比对。
+    比对**只比 md5 集合不比文件名**：文件名是中文，Windows 与 busybox 两端的
+    编码不同，比名字会假红；md5 是 ASCII，比集合等价于逐文件比内容。
+    """
+    rel = str(rel).replace("\\", "/").rstrip("/")
+    if not (ROOT / rel).is_dir():
+        raise GateFail(f"不是目录: {rel}")
+    if not _dir_allowed(rel):
+        raise GateFail(f"目录推送只允许白名单 {ALLOWED_BINARY_DIRS}，拒绝 {rel}")
+    files = _dir_files(rel)
+    if not files:
+        raise GateFail(f"目录里没有文件: {rel}")
+    for f in files:
+        check_path_allowed(f)
+    local = {f: md5_file(ROOT / f) for f in files}
+    size_kb = sum((ROOT / f).stat().st_size for f in files) // 1024
+    print(f"[A1] {rel}: {len(files)} 个文件 / {size_kb}KB，本地 md5 已算")
+
+    parent = os.path.dirname(rel)
+    ssh(f"mkdir -p {TMP}/{parent}")
+    cp = run_local(["scp", "-q", "-r", str(ROOT / rel), f"{HOST}:{TMP}/{parent}/"])
+    if cp.returncode != 0:
+        raise GateFail(f"scp -r 失败: {cp.stderr.strip()[:200]}")
+
+    # 推前守卫（与 push 同口径：存档/.env 不正常就停）
+    for n in guard_env_and_save():
+        print("  ", n)
+    guard_bundle_sqlite()
+
+    cp = ssh(f"mkdir -p {REMOTE_ROOT}/{rel} && cp -f {TMP}/{rel}/* {REMOTE_ROOT}/{rel}/")
+    if cp.returncode != 0:
+        raise GateFail(f"落位失败: {rel}: {cp.stderr.strip()[:200]}")
+    print(f"[A2] 已落位 {REMOTE_ROOT}/{rel}")
+
+    # L3 校验：远端目录里的 md5 集合必须与本地完全一致（也不许多、不许少）
+    cp = ssh(f"cd {REMOTE_ROOT}/{rel} && md5sum * 2>/dev/null")
+    if cp.returncode != 0:
+        raise GateFail(f"远端 md5 汇总失败: {cp.stderr.strip()[:200]}")
+    remote = sorted(line.split()[0] for line in cp.stdout.splitlines() if line.strip())
+    mine = sorted(local.values())
+    if remote != mine:
+        only_local = sorted(set(mine) - set(remote))
+        only_remote = sorted(set(remote) - set(mine))
+        raise GateFail(
+            f"md5 集合不一致：电脑 {len(mine)} 个 / 手机 {len(remote)} 个"
+            f"（只在电脑 {len(only_local)} 个，只在手机 {len(only_remote)} 个）")
+    print(f"[A3] 远端 {len(remote)} 个文件的 md5 全等 ✓")
+
+    commit = run_local(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"]).stdout.strip() or "unknown"
+    write_deployed(commit, files, local)
+    print(f"[A4] .deployed 已写 commit={commit}")
+    print("PASS ✅")
+    return 0
+
+
 def cmd_verify(grep: str | None) -> int:
     notes = guard_env_and_save()
+
     guard_bundle_sqlite()
     for n in notes:
         print("  ", n)
@@ -377,11 +455,22 @@ def cmd_selftest() -> int:
     expect_fail("目录穿越", lambda: check_path_allowed("src/../../etc/passwd"))
     expect_fail("不允许后缀", lambda: check_path_allowed("src/x.exe"))
     expect_fail("不存在的源", lambda: check_path_allowed("src/__no_such__.py"))
+    # 2026-11-27 push-assets：目录白名单必须守住（否则整个 src 都能整目录推上去）
+    def _bad_dir(rel: str):
+        if not _dir_allowed(rel):
+            raise GateFail(f"目录不在白名单: {rel}")
+    expect_fail("push-assets 非白名单目录", lambda: _bad_dir("src/plugins/doupo"))
+    expect_fail("push-assets 前缀仿冒", lambda: _bad_dir(
+        "src/plugins/qq_bridge/pic/templates/assets/doupo_item_icons2"))
     # 正例：合法路径应通过
     legal = "bot.py"
     check_path_allowed(legal)
     print(f"  PASS 放行: {legal}")
-    print(f"selftest {ok}/6 反例全拦 + 正例放行 ✅")
+    legal_dir = "src/plugins/qq_bridge/pic/templates/assets/doupo_item_icons/"
+    if not _dir_allowed(legal_dir):
+        raise SystemExit(f"  FAIL 该放行的资产目录被拦: {legal_dir}")
+    print(f"  PASS 放行: {legal_dir}")
+    print(f"selftest {ok}/8 反例全拦 + 正例放行 ✅")
     return 0
 
 
@@ -406,6 +495,13 @@ def main() -> int:
         elif cmd == "verify":
             grep = args[args.index("--grep") + 1] if "--grep" in args and args.index("--grep") + 1 < len(args) else None
             return cmd_verify(grep)
+        elif cmd == "push-assets":
+            dirs = [a for a in args[1:] if not a.startswith("--")]
+            if not dirs:
+                raise GateFail("push-assets 需要至少一个资产目录")
+            for d in dirs:
+                cmd_push_assets(d)
+            return 0
         elif cmd == "selftest":
             return cmd_selftest()
         elif cmd == "drift":

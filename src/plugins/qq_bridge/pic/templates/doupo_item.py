@@ -18,14 +18,19 @@
   * **正常段落**：段名 = 小金菱形 + 金色楷体；正文 = 逐行折行的点阵黄字
     （浅色主题换深墨字，保证对比度），段与段之间只有一条细暗线，
     **没有序号圆徽、没有圆角气泡**；
-  * 底部沿用回纹横带 + tip 单行。
+  * 底部沿用回纹横带 + tip 单行；
+  * **居中物品头像行**（2026-11-27 接图）：副标题下方一格 88×88 硬边直角框装
+    物品图，深底（牌匾的 ``plaq_bot``）让自带辉光的图像立得起来。**不放牌匾
+    左右两角**——四角回纹角花占 (19,19)~(79,79)，贴角面板会把它切成断线。
+    数据层不带 ``image`` 或该物品没有图（药材/材料/杂项）时整段不画，卡片与
+    加图前逐像素一致（``_height`` 与 ``build`` 同源判 ``_art_of``）。
 
 card-design 合规：度量优先（``UI.tw`` / ``UI.fit`` / ``S.wrap_cjk``）、
 显式 gap（常量集中在文件头）、高度内容驱动（``_plan`` 测画共用）、
 ``boxes`` 自检；配色只走 ``_pal(t)`` → ``doupo_ui.pal()``，双主题零改动跟随。
 
 输入由 ``doupo.card.build_item_detail_data`` 生成：
-  title / subtitle / groups:[{name, rows:[...]}] / tip
+  title / subtitle / image / groups:[{name, rows:[...]}] / tip
 """
 from __future__ import annotations
 
@@ -36,6 +41,7 @@ from ..theme import Theme
 
 from . import doupo_ui as UI
 from . import doupo_style as S
+from . import item_icons
 from .doupo import _pal
 
 PAD = UI.PAD_X              # 36 内容左右内边距（距外框内线 19px）
@@ -55,19 +61,34 @@ TIP_GAP = 20                # 框到回纹横带
 TIP_LEAD = 14               # 横带到 tip 文字
 MIN_H = 360
 
+# ---- 物品头像格（2026-11-27 接图）----------------------------------------
+# 🚨 **不能放牌匾左右两角**：卡片外框四角各有一朵 unit=10 的完整回纹角花，实测
+# 占据 (19,19)~(79,79)，任何贴角的面板都会把它压成断线（首版实拍抓到左上角
+# 回纹被方框切成半截，一眼就是渲染坏了）。牌匾又居中占掉 x=210~510，
+# 顶栏根本没有能放下 70px+ 图而不压东西的位置 —— 故改为**副标题下方的居中
+# 头像行**：竖排多一段高度，但左右对称、与角花/副标题饰线/信息框全无交叠。
+ICON_HERO = 88              # 头像格外框边长
+ICON_GAP_T = 14             # 副标题（或无副标题时的牌匾）到头像格
+ICON_GAP_B = 18             # 头像格到信息框
+ICON_BORDER = 2             # 外框线宽（与信息框的 2px 玫红线同口径）
+ICON_PADIN = 5              # 框线到图的留白
+#: 图可用边长 = 88 - 2*2 - 2*5 = 74
+ICON_BOX = ICON_HERO - ICON_BORDER * 2 - ICON_PADIN * 2
+
 _DEMO = {
-    "title": "火属性魔核",
-    "subtitle": "傀儡材料 · 背包 ×1",
+    "title": "青灵丹",
+    "subtitle": "丹药 · 四品 · 背包 ×3",
+    "image": "青灵丹",
     "groups": [
         {"name": "本效", "rows": [
-            "傀儡的一件料，不入口；凑齐配方即开炉",
-            "品阶越高，成傀档位与魔核加成越好",
+            "修为 +500",
+            "药老言：提升实力的基础丹药（三纹青灵丹系）",
         ]},
         {"name": "从何而来", "rows": [
-            "傀儡遗迹 / 魔兽掉落（发「傀儡 遗迹」探）",
+            "炼制｜青焰草×1、黑天麻×1、紫叶兰×2",
         ]},
     ],
-    "tip": "发「傀儡 配方」看整套配方 · 发「傀儡」看名录",
+    "tip": "服丹 青灵丹 用掉一枚 · 发「查看 <物品名>」接着看别的",
 }
 
 
@@ -95,10 +116,39 @@ def _plan(data: dict, content_w: int) -> tuple[list[dict], int]:
     return plans, total
 
 
+def _art_of(data: dict):
+    """物品图图层（无图/坏图返回 None）。**测高与绘制同源**：两处都调它。"""
+    return item_icons.icon_layer(str(data.get("image") or ""), ICON_BOX, ICON_BOX)
+
+
 def _height(data: dict, blocks_h: int) -> int:
     sub_h = (FS_SUB + 12) if str(data.get("subtitle") or "") else 0
+    icon_h = (ICON_GAP_T + ICON_HERO + ICON_GAP_B) if _art_of(data) else 0
     frame_h = FRAME_PAD_T + blocks_h + FRAME_PAD_B
-    return UI.TITLE_H + sub_h + frame_h + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B
+    return (UI.TITLE_H + sub_h + icon_h + frame_h
+            + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B)
+
+
+def _draw_hero_icon(c: Canvas, g: dict, layer, width: int, y: int) -> int:
+    """居中的物品头像格；返回信息框上沿 y。
+
+    帧语言与信息框一致（硬边直角 + 2px 玫红外线 + 1px 亮线内衬，**不用圆角**）。
+    底色走牌匾的深段 ``plaq_bot``：物品图四边自带一圈淡辉光，压在浅色 panel 上
+    会**糊成一片**（首版浅色主题实拍：绿花丹药直接看不出形状），深底才立得起来。
+    """
+    cx = int(width) // 2
+    sy = int(y + ICON_GAP_T)
+    sx = cx - ICON_HERO // 2
+    d = ImageDraw.Draw(UI.img_of(c))
+    d.rectangle((sx, sy, sx + ICON_HERO, sy + ICON_HERO),
+                fill=UI.rgb(g["plaq_bot"]) + (255,))
+    d.rectangle((sx, sy, sx + ICON_HERO, sy + ICON_HERO),
+                outline=UI.rgb(g["fret"]) + (255,), width=ICON_BORDER)
+    d.rectangle((sx + 4, sy + 4, sx + ICON_HERO - 4, sy + ICON_HERO - 4),
+                outline=UI.rgb(g["fret_hi"]) + (255,), width=1)
+    w, h = layer.size
+    c.paste_alpha(layer, (cx - w // 2, sy + ICON_HERO // 2 - h // 2))
+    return sy + ICON_HERO + ICON_GAP_B
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -138,6 +188,17 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
     y = UI.card_shell(c, g, str(data.get("title") or "查看物品"), width=width)
     if sub:
         y = UI.sub_line(c, g, y, sub, size=FS_SUB)
+
+    # ---- 居中物品头像行（2026-11-27 接图；无图则整段不占位）----------------
+    art = _art_of(data)
+    if art is not None:
+        yy = _draw_hero_icon(c, g, art, width, y)
+        if boxes is not None:
+            cx_ = width // 2
+            top_ = int(y + ICON_GAP_T)
+            boxes.append(("icon", cx_ - ICON_HERO // 2, top_,
+                          cx_ + ICON_HERO // 2, top_ + ICON_HERO))
+        y = yy
 
     # ---- 解包游戏展示框：硬边直角 + 双线 + 左上回纹角 ----------------------
     fy0 = int(y)

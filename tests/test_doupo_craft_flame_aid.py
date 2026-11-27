@@ -199,7 +199,9 @@ def test_cmd_craft_fail_reply_has_no_success_flavor():
 # 3 接线守门：三处调用点都带护炉行
 # ---------------------------------------------------------------------------
 def test_cmd_craft_wires_flame_aid_at_all_three_sites():
-    path = os.path.join(PLUGINS, "doupo", "commands.py")
+    # 2026-11-27：炼药命令组从 commands.py 外迁到 commands_craft.py（200KB 红线），
+    # 对外仍经 commands.cmd_craft re-export；结构守门改扫新文件，接线意图不变。
+    path = os.path.join(PLUGINS, "doupo", "commands_craft.py")
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
     funcs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}

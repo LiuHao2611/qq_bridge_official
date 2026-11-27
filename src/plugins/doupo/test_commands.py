@@ -129,8 +129,9 @@ async def main():
     import pathlib
     here = pathlib.Path(__file__).resolve().parent
     offenders = []
-    for fn in ("__init__.py", "commands.py", "card.py", "core.py",
-               "config.py", "store.py", "avatar.py", "_throttle.py"):
+    for fn in ("__init__.py", "commands.py", "commands_craft.py", "danlei.py",
+               "danlei_cmd.py", "card.py", "core.py", "config.py", "store.py",
+               "avatar.py", "_throttle.py"):
         src = (here / fn).read_text(encoding="utf-8")
         for node in ast.walk(ast.parse(src)):
             if (isinstance(node, ast.Constant) and isinstance(node.value, str)

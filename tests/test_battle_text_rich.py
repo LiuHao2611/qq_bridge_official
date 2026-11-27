@@ -177,7 +177,7 @@ def _res(n=2, win=True, rounds=None, puppet_hits=0, tier="普通", move="劈山�
         if puppet_hits:
             for _ in range(puppet_hits):
                 log.append({"kind": "傀儡击", "dmg": 7965, "puppet": True,
-                            "helper": "天级·玄", "tier": 2, "skin": "金",
+                            "helper": "天妖傀·玄", "tier": 2, "skin": "金",
                             "formation": 1})
         log += [{"kind": "拳脚", "dmg": 100} for _ in range(6)]
         detail.append({"index": i, "name": "怪%d" % i, "lv": 20, "kind": "魔兽",
@@ -215,7 +215,8 @@ def test_puppet_line_appears_only_when_puppet_strikes():
     with_p = _render(_res(puppet_hits=2))
     no_p = _render(_res(puppet_hits=0))
     assert "🧿" in with_p, "傀儡出手了却没露脸：\n%s" % with_p
-    assert "天级傀儡" in with_p, "傀儡行没写档位：\n%s" % with_p
+    assert "天妖傀" in with_p, "傀儡行没写档位（原著正名 天妖傀）：\n%s" % with_p
+    assert "天妖傀·天妖傀" not in with_p, "播报把新名二次拼接了：\n%s" % with_p
     assert "🧿" not in no_p, "没傀儡却冒出傀儡行：\n%s" % no_p
 
 

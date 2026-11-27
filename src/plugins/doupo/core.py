@@ -29,6 +29,7 @@ from . import skill_rank as rank_mod
 from . import sect_mechanics as sm
 from . import weapon_data as wd
 from . import weapon_curve as wcurve
+from . import danlei as _danlei
 
 # 纯函数 re-export（实现见 sect_mechanics.py）
 from .sect_mechanics import (  # noqa: E402
@@ -2993,7 +2994,7 @@ def _mat_short(p, rec, n_furnace: int = 1):
     return missing, gaps
 
 
-def craft(p, name, rng=random.random, now_ts=None) -> dict:
+def craft(p, name, rng=random.random, now_ts=None, has_puppet=False) -> dict:
     rec = cfg.RECIPE_BY_NAME.get(name)
     if not rec:
         return {"ok": False, "reason": "nodrug"}
@@ -3039,6 +3040,10 @@ def craft(p, name, rng=random.random, now_ts=None) -> dict:
         if cfg.danwen_allowed(rec) and (_t := dw.roll(rec.get("grade", ""))):
             add_item(p, cfg.danwen_name(name, _t), 1)
             res["danwen"] = _t
+        # 丹雷（2026-11-27）：七品以上成丹引雷、扣血；低阶 plan 返回 None 零改动。
+        if (_dl := _danlei.settle(p, rec.get("grade", ""), int(stats(p)["体力"]),
+                                  has_puppet, rng)):
+            res["danlei"] = _dl
         if _danhui > 0:
             res["danhui"] = round(_danhui, 4)
         return res
@@ -3078,7 +3083,7 @@ def _alch_level_up(p) -> str:
     return name if idx != start else ""
 
 
-def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
+def craft_batch(p, name, n, rng=random.random, now_ts=None, has_puppet=False) -> dict:
     """连续开炉 N 炉（原著「烧药得经验」的批量形态）。
 
     与单发 ``craft()`` 的关系：**新增独立入口，不改单发语义**（单发被 test_core
@@ -3166,14 +3171,20 @@ def craft_batch(p, name, n, rng=random.random, now_ts=None) -> dict:
     p["alch_exp"] = int(p.get("alch_exp", 0)) + exp
     alch_up = _alch_level_up(p)
     p["last_craft"] = now_ts
-    return {"ok": True, "name": name, "rate": rate, "diff": diff,
-            "n": n, "n_done": n_done, "n_ok": n_ok, "n_fail": n_fail,
-            "n_danwen": n_danwen,
-            "exp": exp, "exp_factor": exp_factor, "mp_used": mp_per * n_done,
-            "mp_left": int(p.get("mp", 0)), "dross": cfg.CRAFT_FAIL_DROSS * n_fail,
-            "alch_up": alch_up, "alch": int(p.get("alch", 0)),
-            "alch_exp": int(p.get("alch_exp", 0)), "limited": limited,
-            "missing": miss, "gaps": gaps}
+    # 丹雷（2026-11-27）：整批按成功炉数统一结算、settle 内 cap 封顶 3 道防自劈致死。
+    _dl = _danlei.settle(p, rec.get("grade", ""), int(stats(p)["体力"]),
+                         has_puppet, rng, n_ok)
+    out = {"ok": True, "name": name, "rate": rate, "diff": diff,
+           "n": n, "n_done": n_done, "n_ok": n_ok, "n_fail": n_fail,
+           "n_danwen": n_danwen,
+           "exp": exp, "exp_factor": exp_factor, "mp_used": mp_per * n_done,
+           "mp_left": int(p.get("mp", 0)), "dross": cfg.CRAFT_FAIL_DROSS * n_fail,
+           "alch_up": alch_up, "alch": int(p.get("alch", 0)),
+           "alch_exp": int(p.get("alch_exp", 0)), "limited": limited,
+           "missing": miss, "gaps": gaps}
+    if _dl:
+        out["danlei"] = _dl
+    return out
 
 
 def _advance_one(p) -> int:

@@ -66,8 +66,8 @@ CREATE TABLE IF NOT EXISTS puppets (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     qq            TEXT    NOT NULL,
     name          TEXT    NOT NULL,
-    tier          INTEGER NOT NULL DEFAULT 0,   -- 0=人级铜 1=地级银 2=天级金
-    tier_name     TEXT    NOT NULL DEFAULT '人级傀儡',
+    tier          INTEGER NOT NULL DEFAULT 0,   -- 0=铜傀 1=地妖傀 2=天妖傀
+    tier_name     TEXT    NOT NULL DEFAULT '铜傀',
     skin          TEXT    NOT NULL DEFAULT '铜',
     body_name     TEXT    NOT NULL DEFAULT '',
     body_realm    TEXT    NOT NULL DEFAULT '',
@@ -226,7 +226,7 @@ class PuppetStore:
         )
         vals = [
             qq, str(data.get("name") or "傀儡"),
-            int(data.get("tier") or 0), str(data.get("tier_name") or "人级傀儡"),
+            int(data.get("tier") or 0), str(data.get("tier_name") or cfg.PUPPET_TIERS[0]),
             str(data.get("skin") or "铜"),
             str(data.get("body_name") or ""), str(data.get("body_realm") or ""),
             int(data.get("body_star") or 0), int(bool(data.get("body_fresh", True))),

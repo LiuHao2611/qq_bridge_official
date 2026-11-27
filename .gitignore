@@ -68,6 +68,12 @@ _backup_*/
 # （自制资产，build 不覆盖，见同目录 README.md），不是调试截图；缺图 gate(strict) 会硬拦。
 !src/plugins/qq_bridge/pic/templates/assets/checkin_gold/*.png
 
+# ===== 斗破丹药/异火物品图标：必需的**源码资产**，随代码交付 =====
+# 同样被根 `*.png` 命中，按子目录精确放行。109 张（丹药 83 + 异火 26），合计约
+# 1.36MB，全部来自游戏美术素材（同风格重制，非截图），物品详情卡与背包格子直接
+# 贴图用。原件在 `D:/AI/斗破丹药异火图鉴`，本目录是**运行必需**的一份副本。
+!src/plugins/qq_bridge/pic/templates/assets/doupo_item_icons/*.png
+
 # ===== DIY 硬件行情：上游 frocloud 数据集 CSV 是源码资产，随代码交付 =====
 # 顶层 `data/` 通配会误伤 vendored_frocloud/data/*.csv；dataset.py 运行时直接
 # 读这 7 张表，漏推则容器内行情功能即崩。上游 .gitignore 也明确要求跟踪。

@@ -983,8 +983,8 @@ async def cmd_fight(store, qq) -> str:
         lines.append(f"⋯ 略去中间 {folded} 式常规攻防")
     # 2026-11-25 傀儡助阵行（用户「或者高阶傀儡」）：只在傀儡真的出手时出现。
     # 取所有傀儡击的伤害**合计**——单条只反映一回合，合计才是这具傀儡的贡献。
-    # 名字要拼全：log 的 helper 是「天级·玄」（puppet_core 造名时把「傀儡」二字
-    # 截掉了），单看「天级·玄」玩家不知道那是傀儡，故用 cfg.PUPPET_TIERS 补回档位。
+    # 名字要拼全：log 的 helper 是「天妖傀·玄」（puppet_core 造名时把「傀儡」二字
+    # 截掉了），单看这个名字玩家不知道那是傀儡，故用 cfg.PUPPET_TIERS 补回档位。
     if pup_hits:
         _pd = sum(int(it.get("dmg") or 0) for it in pup_hits)
         _p0 = pup_hits[0]
@@ -992,7 +992,7 @@ async def cmd_fight(store, qq) -> str:
         _tier_name = cfg.PUPPET_TIERS[_pt] if 0 <= _pt < len(cfg.PUPPET_TIERS) else ""
         _body = str(_p0.get("helper") or "").split("·")[-1]
         if _body == "傀儡":
-            # 老档傀儡 name 为空时 helper 兜底成「傀儡」，别再拼一次 → 「天级傀儡·傀儡」
+            # 老档傀儡 name 为空时 helper 兜底成「傀儡」，别再拼一次 → 「天妖傀·傀儡」
             _body = ""
         _pname = f"{_tier_name}·{_body}" if (_tier_name and _body) else \
             (_tier_name or _body or "傀儡")
@@ -2007,165 +2007,9 @@ async def cmd_recipes(store, qq, page=1) -> str:
     return "\n".join(out)
 
 
-def _parse_craft_count(arg: str) -> tuple[str, int]:
-    """从「炼制」参数里拆出 (丹名片段, 炉数)。
-
-    只认明确的批量写法，避免误伤丹名里的数字：
-      * 「回灵丹 5次」/「回灵丹5炉」/「回灵丹 5」→ 5
-      * 「回灵丹×5」/「回灵丹x5」/「回灵丹*5」→ 5
-      * 其余（含「炼制 回灵丹」）→ 炉数 1
-    """
-    import re
-    s = (arg or "").strip()
-    m = re.search(r"[×xX*]\s*(\d+)\s*$", s)
-    if m:
-        return s[:m.start()].strip(), max(1, int(m.group(1)))
-    m = re.search(r"\s+(\d+)\s*(?:次|炉|个|副)?\s*$", s)
-    if m and int(m.group(1)) > 1:
-        return s[:m.start()].strip(), max(1, min(int(m.group(1)), cfg.CRAFT_BATCH_MAX))
-    return s, 1
-
-
-def _craft_flame_aid_line(p, success: bool = True) -> str:
-    """炼药播报的护炉行（2026-11-26）：按玩家**实有且真进成功率**的火分组。
-
-    与 ``alchemy_rate_bonus`` 同源判定，无炼药火返回空串（空火开局不会被硬塞一句）。
-    ``success`` 区分成败用两组文案：失败时绝不出现「恰到好处」这类成功向旁白。
-    """
-    from . import flame_bonus as _fb
-    detail = _fb.alchemy_flame_names(p)
-    xian = tuple(d["name"] for d in detail if d["identity"] == "异火")
-    beast = tuple(d["name"] for d in detail if d["identity"] == "兽火")
-    return txt.craft_flame_aid(xian, beast, success=success)
-
-
-async def cmd_craft(store, qq, name) -> str:
-    p = await _player(store, qq)
-    if not p:
-        return NOT_ENTERED
-    name = (name or "").strip()
-    if not name:
-        return "用法：炼制 回灵丹（发「炼药」看全部丹方）"
-    name, n_furnace = _parse_craft_count(name)
-    if not name:
-        return "用法：炼制 回灵丹 5次（一次连炼5炉）／炼制 回灵丹（单炉）"
-    if n_furnace > 1:
-        return await _cmd_craft_batch(store, qq, p, name, n_furnace)
-    hit = next((n for n in cfg.RECIPE_NAMES if name in n or n in name), None)
-    if not hit:
-        return "无此丹方。发「炼药」看全部。"
-    res = core.craft(p, hit)
-    if res.get("reason") == "nofire":
-        return "🔥 你尚未拥有火焰，无法开炉炼药——异火举世罕见，可于九星突破战胜强敌，或炼制兽火单方获得。"
-    if res.get("reason") == "buyonly":
-        return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」（{res['buy']} 金），或先寻得丹方。"
-    if res.get("reason") == "cd":
-        await store.put_player(p)
-        return txt.craft_cd(res["left"])
-    # D2：带丹名，别的丹不能凑数。
-    chance = core.advance_task(p, "craft", 1, item=hit) if res.get("ok") else None
-    await store.put_player(p)
-    # 2026-11-25 越阶提示：原著第495章四品勉强炼五品「成功率太小」，
-    # 越2档以上「几无可能」。只有**真越阶（diff>0）**才提示，且只在失败时提示：
-    # diff<0 是「高品阶炼低阶」的加成（四品炼一品十拿九稳），旧版 `if over:` 把
-    # 负数也当越阶，公然在成功回执里印「⚠ 越-3档——几无可能」（用户实测骂过）。
-    over = max(0, int(res.get("diff") or 0))
-    over_hint = txt.craft_over(over) if over else ""
-    if not res.get("ok"):
-        if res.get("reason") == "mat":
-            # 2026-11-26 用户要求：缺料提示底部直接给每味药材的购买按钮（一次买够）。
-            cctx.arm_craft(p, hit, 1)
-            return txt.craft_mat("、".join(res["missing"]), 1)
-        if res.get("reason") in ("fail",):
-            msg = txt.craft_fail(res["dross"], cfg.rate_cn(res["rate"]), over_hint,
-                                 seed=int(res["dross"]))
-            # 2026-11-26 用户反馈：失败还讲「火候恰到好处」自相矛盾。
-            # 失败回执改接失败专用护炉旁白（火竭力相护却没压住）。
-            aid = _craft_flame_aid_line(p, success=False)
-            if aid:
-                msg += "\n" + aid
-            if res.get("alch_up"):
-                msg += "\n" + txt.alch_up(res["alch_up"])
-            return msg
-        return txt.craft_fail_plain()
-    _grade = str(cfg.RECIPE_BY_NAME.get(hit, {}).get("grade") or "")
-    msg = txt.craft_success(hit, _grade, cfg.rate_cn(res["rate"]))
-    aid = _craft_flame_aid_line(p)
-    if aid:
-        msg += "\n" + aid
-    if res.get("danwen"):
-        msg += "\n" + txt.craft_danwen(hit, 1)
-    # 成功回执不再附「越档几无可能」——丹都成了还泼冷水，只会让人以为出错了。
-    if res.get("alch_up"):
-        msg += "\n" + txt.alch_up(res["alch_up"])
-    out = [msg]
-    out.extend(_chance_lines(chance, qq))
-    # 2026-11-26：炼成后最自然的下一步是吃掉 —— 服丹/查看/再炼/炼药 四颗按钮。
-    cctx.arm_done(p, hit, 1)
-    return "\n".join(out)
-
-
-async def _cmd_craft_batch(store, qq, p, name, n) -> str:
-    """批量连炼回包（一条消息，纯中文成数）。
-
-    一处输出=一条消息：成败、经验、斗气、晋阶全并进这段文本，不拆两条。
-    """
-    hit = next((nm for nm in cfg.RECIPE_NAMES if name in nm or nm in name), None)
-    if not hit:
-        return "无此丹方。发「炼药」看全部。"
-    res = core.craft_batch(p, hit, n)
-    if res.get("reason") == "nofire":
-        return "🔥 你尚未拥有火焰，无法开炉炼药——可于九星突破得火，或炼制兽火单方。"
-    if res.get("reason") == "buyonly":
-        return f"【{hit}】你手上没有此方，无法开炉——去「宝库」直接「买 {hit}」。"
-    if res.get("reason") == "cd":
-        await store.put_player(p)
-        return txt.craft_cd(res["left"])
-    if not res.get("ok"):
-        # craft_batch 的 not-ok：nodrug / buyonly / cd / nofire / mat / mp。
-        # 2026-11-26 黑盒 N2：缺料走与单发同一套 craft_mat（带「缺什么」），
-        # 斗气不足走 craft_mp；都不再落到泛化的「炉中火候难成」。
-        # 缺口按**本次炉数**算（10 炉就报 10 炉的量），底部挂每味药材的买齐按钮。
-        if res.get("reason") == "mat" and res.get("missing"):
-            cctx.arm_craft(p, hit, n)
-            return txt.craft_mat("、".join(res["missing"]), n)
-        if res.get("reason") == "mp":
-            return txt.craft_mp()
-        return txt.craft_generic_fail()
-
-    # 任务推进按实际成功炉数（一炉一丹）；D2 带丹名。
-    chance = core.advance_task(p, "craft", int(res["n_ok"]),
-                               item=hit) if res["n_ok"] else None
-    await store.put_player(p)
-
-    lines = [txt.craft_batch_head(hit, res["n_done"], res["n_ok"], res["n_fail"],
-                                  cfg.rate_cn(res["rate"]))]
-    # 批量里只要有一炉失败，就不说「恰到好处」这类成功向旁白（2026-11-26）。
-    aid = _craft_flame_aid_line(p, success=(int(res.get("n_fail", 0)) == 0))
-    if aid:
-        lines.append(aid)
-    detail = txt.craft_batch_detail(res["n_ok"], res["dross"], res["exp"])
-    if res.get("exp_factor", 1.0) < 1.0:
-        detail += f"（低阶丹，经验{cfg.rate_cn(res['exp_factor'])}计）"
-    lines.append(detail)
-    if res.get("n_danwen"):
-        lines.append(txt.craft_danwen(hit, int(res["n_danwen"])))
-    lines.append(f"　斗气 -{res['mp_used']}（余{res['mp_left']}）")
-    if res.get("limited") in ("mat", "mp"):
-        lines.append(txt.craft_batch_limited(res["limited"]))
-        # 药材中途见底：把「再炼完这批还缺多少」写明，并挂买齐按钮（点完直接开炉）。
-        if res["limited"] == "mat" and res.get("gaps"):
-            cctx.arm_craft(p, hit, n)
-            lines.append(txt.craft_need(_detail_of(res["gaps"]), n))
-    if res.get("alch_up"):
-        lines.append(txt.alch_up(res["alch_up"]))
-    out = ["\n".join(lines)]
-    out.extend(_chance_lines(chance, qq))
-    if res["n_ok"] and res.get("limited") != "mat":
-        # 一批炼出几十枚，最自然的下一步是吃掉（按钮同单发：服丹/查看/再炼/炼药）。
-        # 药材见底时**不覆盖**上面的买齐按钮——那时补料比吃丹更急。
-        cctx.arm_done(p, hit, n)
-    return "\n".join(out)
+# 2026-11-27 炼药命令组外迁：实现见 commands_craft.py，对外入口不变。
+# 原 cmd_craft / _cmd_craft_batch / _parse_craft_count / _craft_flame_aid_line
+# 四个函数整体迁出，为 commands.py 腾出 200KB 红线余量；丹雷接线在新模块内。
 
 
 async def cmd_bag(store, qq) -> str:
@@ -3861,4 +3705,12 @@ from .commands_puppet import (  # noqa: E402
     _cmd_puppet_formation,
     _cmd_puppet_claim,
     _cmd_puppet_awaken,
+)
+
+# 2026-11-27 炼药命令组外迁：实现见 commands_craft.py，对外入口不变。
+from .commands_craft import (  # noqa: E402
+    cmd_craft,
+    _cmd_craft_batch,
+    _parse_craft_count,
+    _craft_flame_aid_line,
 )

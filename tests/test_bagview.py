@@ -200,7 +200,18 @@ def t_corner_geometry_inside_cell():
     # ⑦ 名称中线与「有无角标」无关（常量，不是条件表达式）
     name_top = tpl.GRID_NAME_CY - tpl.FS_SMALL // 2
     assert name_top > tpl.CORNER_CY_OFF + tpl.corner_badge_h() // 2, name_top
-    assert tpl.GRID_NAME_CY * 2 <= tpl.GRID_CELL_H, "名称中线把格子撑爆"
+    # 2026-11-27 接图：格内多了一层物品图，名称整体下移到图下方。原来这条写的是
+    # 「中线 × 2 ≤ 格高」（等价于「名称必须落在格子上半」），接图后不再成立；
+    # 换成它真正要守的两件事：**名称整体在格内**、**图夹在角标与名称之间**。
+    assert tpl.GRID_NAME_CY + tpl.FS_SMALL // 2 <= tpl.GRID_CELL_H - 4, (
+        "名称下缘出格：%s + %s > %s" % (tpl.GRID_NAME_CY, tpl.FS_SMALL // 2,
+                                       tpl.GRID_CELL_H))
+    icon_top = tpl.GRID_ICON_CY - tpl.GRID_ICON_BOX // 2
+    icon_bot = tpl.GRID_ICON_CY + tpl.GRID_ICON_BOX // 2
+    assert icon_top >= tpl.corner_bottom(0) + 2, (
+        "物品图顶压到角标色块：%s < %s（「三纹」这类两字角标横向占掉右上角，"
+        "图往上挪一定交叠）" % (icon_top, tpl.corner_bottom(0)))
+    assert icon_bot <= name_top - 2, "物品图底压到名称：%s >= %s" % (icon_bot, name_top)
 
 
 def t_row_baseline_aligned():

@@ -892,13 +892,13 @@ def build_flames_data(p: dict) -> dict:
             if not p.get("diyan"):
                 continue
             owned.append({"title": name, "right": "已得",
-                          "sub": f["desc"], "note": ""})
+                          "sub": f["desc"], "note": "", "image": name})
             continue
         lv = int(fl.get(name, 0))
         if lv <= 0:
             continue
         owned.append({"title": name, "right": _lv_right(lv), "sub": f["desc"],
-                      "note": _need_note(lv, int(f["need"]))})
+                      "note": _need_note(lv, int(f["need"])), "image": name})
 
     # ② 数值异火（B 线） / ③ 兽火+新生异火：desc 本身已写明「炼药成功率每级 +N%」，
     #    不再额外拼一行加成前缀（拼了就是同一个数字说两遍，卡面更乱）。
@@ -907,7 +907,8 @@ def build_flames_data(p: dict) -> dict:
         if lv <= 0:
             continue
         owned.append({"title": f["name"], "right": _lv_right(lv),
-                      "sub": f["desc"], "note": _need_note(lv, int(f["need"]))})
+                      "sub": f["desc"], "note": _need_note(lv, int(f["need"])),
+                      "image": f["name"]})
 
     if owned:
         rows.append({"title": "已收服", "right": "", "head": True,
@@ -921,6 +922,9 @@ def build_flames_data(p: dict) -> dict:
     return {
         "icon": "star", "title": "异火",
         "subtitle": f"已收服 {len(owned)} 朵 · 药渣 ×{dross}",
+        # 2026-11-27 接图：整卡左侧让一条图槽（分类标题行一起让，否则标题起点
+        # 参差），每行带自己的火图。没图的行（分类标题）就是空槽。
+        "row_icon": True,
         "rows": rows,
         "tip": commands.flame_usage_hint(p),
     }
@@ -990,6 +994,9 @@ def build_bag_data(p: dict, locked=None) -> dict:
         # 显示名一律剥掉丹纹后缀（用户：丹药名称不要变），纹数交给右上角角标
         shown = cfg.base_of_danwen(name) if tier else name
         row = {"title": f"{shown} ×{n}", "sub": known.get(name) or known.get(shown, "")}
+        # 2026-11-27 接图：格子里的物品图（带纹丹用基础丹名的美术；药材/材料/杂项
+        # 没有图，模板查不到就整块不画）。名称与右上角纹字角标仍是用户定的那一套。
+        row["image"] = shown
         if tier:
             row["corner_tr"] = cfg.DANWEN_TIERS[min(3, tier) - 1]
             row["sub"] = "丹纹丹：本效之外，服下另得随机限时/限次赐福"
@@ -1223,7 +1230,7 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
     }
     for pu in roster:
         tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(
-            int(pu.get("tier", 0)), ("人级傀儡", "铜"))
+            int(pu.get("tier", 0)), cfg.PUPPET_TIER_BY_IDX[0])
         body = "%s（%s%s）" % (
             pu.get("body_name") or "—", pu.get("body_realm") or "凡躯",
             ("·%d星" % pu["body_star"]) if pu.get("body_star") else "")
@@ -1232,7 +1239,7 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
         g = pc.guard_profile(pu, p, pc.formation_count(roster))
         _si = pc.soul_feed_info(pu)
         out["puppets"].append({
-            "name": str(pu.get("name") or "傀儡"),
+            "name": pc.display_name(pu),
             "badge": "%s · %s皮%s" % (tier_name, skin, " · 出战" if pu.get("id") == elig.get("active_id") else ""),
             "atk": str(int(pc.puppet_attack(pu, p))),
             "lines": [
@@ -1260,6 +1267,12 @@ def build_puppet_data(roster: list, elig: dict, p: dict | None = None) -> dict:
                 "养魂 %d/%d%s · 有效灵魂 %d" % (
                     _si["fed"], _si["cap"], "（已满）" if _si["maxed"] else "",
                     _si["total"]),
+                # 2026-11-27 用户「我都不知道养魂是干啥的怎么操作」：数值行旁补一条
+                # 口径说明。常量取真源，不硬编码；说明走 lines（_wrap 折行 + 内容驱动高度），
+                # 不塞进单行 tip（_fit 会截断）。告知「是什么/用什么/怎么发/涨多少」。
+                "养魂：发「傀儡 养魂」渡【%s】，+%d灵魂/枚（上限%d，攻血甲同涨）" % (
+                    cfg.PUPPET_SOUL_PILL, int(cfg.PUPPET_SOUL_FEED_GAIN),
+                    int(cfg.PUPPET_SOUL_FEED_MAX)),
             ],
             "active": bool(pu.get("id") == elig.get("active_id")),
         })
@@ -1670,7 +1683,11 @@ def build_item_detail_data(p: dict, name: str) -> dict | None:
         groups.append({"name": "从何而来", "rows": src_rows or ["来历不详"]})
         tip = ("服丹 %s 用掉一枚" % raw) if not tier else ("服丹 %s 本效+赐福一起生效" % raw)
         tip += " · 发「查看 <物品名>」接着看别的"
-        return {"title": raw, "subtitle": sub, "groups": groups, "tip": tip}
+        # 2026-11-27 接图：带上物品图名，模板自己查 ``pic/templates/assets/
+        # doupo_item_icons`` 决定画不画（缺图自动回退，数据层不判断有没有图）。
+        # 带纹丹（一纹破厄丹…）没有独立画，用**基础丹名**那件美术。
+        return {"title": raw, "subtitle": sub, "image": base_name,
+                "groups": groups, "tip": tip}
 
     # ---- 二、药材（宝库随身商店） ------------------------------------------
     herb = cfg.HERB_BY_NAME.get(raw)

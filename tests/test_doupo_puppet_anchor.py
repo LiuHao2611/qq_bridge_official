@@ -507,6 +507,32 @@ def test_card_shows_realm_label():
           % (data["puppets"][1]["atk"], int(pc.puppet_attack(PU_TIAN, p))))
 
 
+def test_card_explains_soul_feed():
+    """2026-11-27 用户「我都不知道养魂是干啥的怎么操作」：傀儡卡必须有养魂说明行。
+
+    光有「养魂 30/200」数值不够 —— 得说清「渡什么/怎么发口令/涨多少」，且数值
+    与常量真源一致（不硬编码）。这条守门防止说明行被删回纯数值。
+    """
+    from doupo import card, config as _cfg
+
+    p = core.tower_ref_player(81)
+    data = card.build_puppet_data([dict(PU_DI, id=1)], {"active_id": 1}, p)
+    blob = "\n".join(data["puppets"][0]["lines"])
+    # 数值行仍在
+    check("养魂 " in blob and "有效灵魂" in blob,
+          "傀儡卡丢了养魂数值行：%s" % blob)
+    # 操作说明行：用什么丹、口令、每枚增量、上限，全部来自真源
+    need = [
+        _cfg.PUPPET_SOUL_PILL,
+        "傀儡 养魂",
+        "攻血甲",  # 说明要落到三个出口，不是孤立数值
+        "+%d灵魂/枚" % int(_cfg.PUPPET_SOUL_FEED_GAIN),
+        "上限%d" % int(_cfg.PUPPET_SOUL_FEED_MAX),
+    ]
+    for token in need:
+        check(token in blob, "傀儡卡养魂说明缺「%s」：%s" % (token, blob))
+
+
 def test_fight_single_source():
     """fight 的傀儡输出必须来自 ``puppet_expected_damage``（唯一函数）。
 

@@ -423,7 +423,7 @@ def make_puppet(p: dict, body: dict, core_info: dict, soul: dict,
     body_realm = str(body.get("body_realm") or (b_row[1] if len(b_row) > 1 else ""))
     body_star = int(body.get("body_star") or (b_row[2] if len(b_row) > 2 else 0))
     return {
-        "name": "%s·%s" % (tier_name[:-2] or "傀儡", str(body.get("body_name") or "玄")[:1]),
+        "name": "%s·%s" % (cfg.PUPPET_TIERS[tier], str(body.get("body_name") or "玄")[:1]),
         "tier": tier, "tier_name": tier_name, "skin": skin,
         "body_name": b_name,
         "body_realm": body_realm,
@@ -923,11 +923,38 @@ def formation_burst(puppet: Optional[dict], roster: Optional[list] = None,
     return up
 
 
+def display_name(puppet: dict) -> str:
+    """傀儡玩家可见名（唯一入口，2026-11-27 名字对齐原著）。
+
+    老存档 ``name`` 存的是旧档位前缀（「人级·铁」/「地级·玄」/「天级·强」），
+    新命名是「铜傀·铁」/「地妖傀·玄」/「天妖傀·强」。本函数按 ``tier`` 重算档位
+    前缀并保留原躯体首字，老档不改库也显示新名 —— 只读、不动数值。
+    tier 缺失时退回按旧前缀字符串映射，兼容战斗 log 里只有 name 的瘦 dict。
+    """
+    raw = str((puppet or {}).get("name") or "").strip()
+    t = int((puppet or {}).get("tier", 0) or 0)
+    pre = cfg.PUPPET_TIERS[max(0, min(2, t))]
+    if not raw or raw == "傀儡":
+        return pre
+    # 已含新档位前缀（避免二次拼「铜傀·铜傀·铁」）
+    if any(raw.startswith(x + "·") for x in cfg.PUPPET_TIERS):
+        return raw
+    # 只翻译「旧档位前缀·X」这一种老存档格式（人级/地级/天级，含「级傀儡」全称）；
+    # 其余名字（如早期测试与手工档的「铁卫傀」「铜尸傀」）原样保留 —— 只改档位名，
+    # 绝不截断玩家已有的完整名。
+    _OLD = ("人级傀儡", "地级傀儡", "天级傀儡", "人级", "地级", "天级")
+    for old in _OLD:
+        if raw.startswith(old + "·"):
+            body = raw[len(old) + 1:].strip()
+            return "%s·%s" % (pre, body) if body and body != "傀儡" else pre
+    return raw
+
+
 def puppet_log_entry(puppet: dict, dmg: int, formation_n: int = 0) -> dict:
     """傀儡击 log 条目；字段由 _mark 补齐，渲染层只 .get()。"""
     return {
         "dmg": int(dmg), "kind": "傀儡击", "puppet": True,
-        "helper": str(puppet.get("name") or "傀儡"),
+        "helper": display_name(puppet),
         "tier": int(puppet.get("tier") or 0),
         "skin": str(puppet.get("skin") or "铜"),
         "awakened": bool(puppet.get("awakened")),

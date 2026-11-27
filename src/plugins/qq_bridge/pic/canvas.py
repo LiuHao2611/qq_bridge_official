@@ -469,13 +469,22 @@ class Canvas:
         return _measure(str(text), int(size), role, _measure_family.get())[0]
 
     @staticmethod
-    def wrap(text: str, size: int, role: str, max_width: int) -> list[str]:
+    def wrap(text: str, size: int, role: str, max_width: int,
+             orphan: bool = False) -> list[str]:
         """按最大宽度换行。中文逐字断行，英文/数字按空白断词。
 
         性能：旧实现对每个前缀 ``cur+ch`` 重新调 ``text_width``（整体 O(N²) 的 getbbox）；
         新实现对每个字符只取一次宽度（``text_width`` 按 (字符,字号,字重) 命中缓存），
         累加判断换行 → O(N)。CJK 字形无字距，逐字累加宽度与整串测量一致；
         拉丁文混排误差在卡片内边距容差内。断行逻辑与旧版逐字符一致。
+
+        ``orphan=True``：开启**行首禁则**（默认关，逐字断行的老行为不变）。
+        逐字断行会把收尾标点甩到下一行独占一行（2026-11-27 异火卡接物品图后，
+        副行可用宽度窄了 58px，「…炼药成功率每级 +3」+ 单独一个「。」）；
+        开启后按「追い出し」处理：末行整行都是收尾标点时，把上一行最后一个字
+        一起挪下来（``…每级 +`` / ``3。``），**两行都不超出 max_width**——
+        不采用「把标点塞回上一行」的悬挂式（那会顶破右边距，8px 边距的卡直接
+        怼到边框上）。
         """
         if max_width <= 0:
             return [emoji_safe(str(text))]
@@ -497,7 +506,32 @@ class Canvas:
                     cur_w += w
             if cur:
                 lines.append(cur)
+        if orphan:
+            Canvas._pull_orphan_punct(lines)
         return lines
+
+    #: 不能出现在**行首**的收尾标点（禁则处理清单：句读、右引号右括号、单位尾符）
+    LINE_HEAD_FORBIDDEN = "。，、；：！？）」』】…·％%"
+
+    @staticmethod
+    def _pull_orphan_punct(lines: list[str]) -> None:
+        """把行首的收尾标点「追い出し」掉：上一行末字随它一起挪下来（原地改）。
+
+        循环条件只看**末行首字符是不是禁则标点**（长文本可能连续出现「%」「。」），
+        每次只挪一个字、且上一行必须还剩 2 个字以上（否则会把上一行清空，
+        反而多出一个空行）。最多挪 4 次，防病态输入把整段拖下来。
+        """
+        for _ in range(4):
+            if len(lines) < 2:
+                return
+            tail = lines[-1]
+            if not tail.strip() or tail[0] not in Canvas.LINE_HEAD_FORBIDDEN:
+                return
+            prev = lines[-2]
+            if len(prev) <= 1:
+                return
+            lines[-2] = prev[:-1]
+            lines[-1] = prev[-1] + tail
 
     @staticmethod
     def ellipsis(text: str, size: int, role: str, max_width: int) -> str:

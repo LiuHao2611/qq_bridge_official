@@ -234,7 +234,7 @@ def battle_puppet(name: str, dmg: str, skin: str = "") -> str:
     条目，伤害归因是「傀儡的木桶五维」而不是玩家力量／斗气。并进高光句等于
     把傀儡的功劳记到玩家属性上，与「人物卡属性↔战斗强关联」的脸面冲突。
 
-    ``name`` 取条目里的 ``helper``（如「天级傀儡·玄」），``skin`` 取铜/银/金，
+    ``name`` 取条目里的 ``helper``（如「天妖傀·玄」），``skin`` 取铜/银/金，
     有皮肤才加前缀（老档傀儡没有 skin 字段，不能硬拼「铜皮」）。
     """
     tag = f"{skin}皮" if skin else ""
@@ -1007,8 +1007,8 @@ CALL_SAMPLES: tuple[str, ...] = (
     battle_spot("劈山掌 3621", tier="高阶", move="劈山掌"),
     battle_spot("天火三玄变 9000", tier="特殊", move="天火三玄变"),
     battle_spot("普攻 2100", move="普攻"),
-    battle_puppet("天级傀儡·玄", "7965", "金"),
-    battle_puppet("人级傀儡·铁", "120"),
+    battle_puppet("天妖傀·玄", "7965", "金"),
+    battle_puppet("铜傀·铁", "120"),
     battle_defeat(),
     battle_gain("血灵蟒", "一千八", "九百", "血灵草×2"),
     battle_gain("血灵蟒等3名", "0", "0", win=False),

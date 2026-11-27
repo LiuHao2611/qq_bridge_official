@@ -89,7 +89,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         return await _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg)
     # 默认：展示当前傀儡
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
-    tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], ("人级傀儡", "铜"))
+    tier_name, skin = cfg.PUPPET_TIER_BY_IDX.get(cur["tier"], cfg.PUPPET_TIER_BY_IDX[0])
     # atk 必须传 p：不传 p 会走躯体境界标尺，卡面数字与实战（fight 传真实 p）
     # 就是两张皮（2026-11-20 第三轮口径：min(躯体境界标尺, 玩家输出 × CAP)）。
     atk = pc.puppet_attack(cur, p)
@@ -103,7 +103,7 @@ async def cmd_puppet(store, qq, arg="", pstore=None) -> str:
         pc.fire_grade_of_tier(cur["fire_tier"]), "兽火")
     si = pc.soul_feed_info(cur)
     lines = [
-        "【%s】%s档 · %s皮" % (cur["name"], tier_name, skin),
+        "【%s】%s档 · %s皮" % (pc.display_name(cur), tier_name, skin),
         "　躯体：%s（%s%s）" % (cur["body_name"] or "—",
                               cur["body_realm"] or "凡躯",
                               ("·%d星" % cur["body_star"]) if cur["body_star"] else ""),
@@ -175,16 +175,18 @@ def deploy_button_pairs(roster, active_id) -> list[tuple[str, str]]:
     """「傀儡出战」回执上每具傀儡一颗**直接出战**按钮：``((label, 口令), ...)``。
 
     2026-11-26 用户「我要的出战按钮是直接出战傀儡的按钮，你回复个当前出战是啥意思，
-    多此一举」。所以按钮 = 动作本身：点「人级·强」就切到那具，不再回文本让玩家
+    多此一举」。所以按钮 = 动作本身：点「铜傀·强」就切到那具，不再回文本让玩家
     二次打「傀儡 出战 序号」。label 上限 10 字（平台硬限），★ 标当前出战。
 
     口令走 custom 带参哨兵（``傀儡出战 <序号>``），由 ``button_dispatch`` 拼成
     ``doupo:cbtn:`` 按钮；本函数零通道依赖，纯数据，可直接单测。
     """
+    from . import puppet_core as pc
+
     out: list[tuple[str, str]] = []
     act = int(active_id or 0)
     for i, x in enumerate(list(roster or []), 1):
-        name = str(x.get("name") or "")
+        name = pc.display_name(x)
         label = ("★" + name) if int(x.get("id") or 0) == act else name
         out.append((label[:10], "傀儡出战 %d" % i))
     return out[:12]   # 平台行数有限；超过 12 具的极端名录只挂前 12 颗
@@ -258,10 +260,10 @@ async def _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg) -> str:
         lines = ["【傀儡出战】点下方按钮直接出战"]
         for i, x in enumerate(roster, 1):
             tier_name, _skin = cfg.PUPPET_TIER_BY_IDX.get(
-                int(x.get("tier", 0)), ("人级傀儡", "铜"))
+                int(x.get("tier", 0)), cfg.PUPPET_TIER_BY_IDX[0])
             mark = " ★" if cur and x["id"] == cur["id"] else ""
             lines.append("　%d. %s（%s）· 攻 %d%s" % (
-                i, x["name"], tier_name, int(pc.puppet_attack(x, p)), mark))
+                i, pc.display_name(x), tier_name, int(pc.puppet_attack(x, p)), mark))
         return "\n".join(lines)
     # 解析目标：优先纯序号，其次名字包含
     target = None
@@ -272,16 +274,19 @@ async def _cmd_puppet_deploy(store, qq, p, roster, elig, pstore, arg) -> str:
         else:
             return "【傀儡出战】序号超出范围（你有 %d 具，填 1~%d）。" % (len(roster), len(roster))
     else:
-        target = next((x for x in roster if a in str(x.get("name") or "")), None)
+        # 新旧名都能匹配：老档 name 存旧前缀、display_name 出玩家看到的新名，
+        # 两处都查，玩家照卡上新名或照老习惯输入都能切到那具。
+        target = next((x for x in roster
+                       if a in str(x.get("name") or "") or a in pc.display_name(x)), None)
         if target is None:
             return "【傀儡出战】没有名字含「%s」的傀儡，发「傀儡 出战」看清单。" % a
     if cur and target["id"] == cur["id"]:
-        return "【傀儡出战】%s 已在出战中。" % target["name"]
+        return "【傀儡出战】%s 已在出战中。" % pc.display_name(target)
     await pstore.set_active(qq, int(target["id"]))
     tier_name, _skin = cfg.PUPPET_TIER_BY_IDX.get(
-        int(target.get("tier", 0)), ("人级傀儡", "铜"))
+        int(target.get("tier", 0)), cfg.PUPPET_TIER_BY_IDX[0])
     return "⚔️ 傀儡出战已切换：【%s】（%s）· 肉身攻击 %d。下一场战斗即刻改用这具。" % (
-        target["name"], tier_name, int(pc.puppet_attack(target, p)))
+        pc.display_name(target), tier_name, int(pc.puppet_attack(target, p)))
 
 
 async def cmd_puppet_codex(store, qq, pstore=None, report=None) -> str:
@@ -441,7 +446,7 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="", report=None) -> str:
     if report is not None:
         report.update({
             "ok": True,
-            "name": puppet["name"], "recipe": rec["name"],
+            "name": pc.display_name(puppet), "recipe": rec["name"],
             "custom": bool(rec.get("custom")), "pid": int(pid),
             "tier": int(puppet["tier"]), "nominal_tier": int(nominal),
             "tier_name": tier_name, "skin": skin,
@@ -460,7 +465,7 @@ async def cmd_craft_puppet(store, qq, pstore=None, arg="", report=None) -> str:
             "　肉身攻击 %d　%s（不吃斗气/斗技）\n"
             "　斗气 -%d（余 %d）%s\n"
             "　发「傀儡」查看；雷淬可再升档。" % (
-                puppet["name"], tier_name, skin, rec["name"], pid,
+                pc.display_name(puppet), tier_name, skin, rec["name"], pid,
                 "、".join(cost), atk, realm_label,
                 need_mp, int(p["mp"]), fire_note))
 
@@ -611,7 +616,7 @@ async def _cmd_puppet_temper(store, qq, p, roster, elig, pstore, times: int = 1)
     # 天级雷纹满层（purity 到硬上限）才拒绝；天级未满层仍可淬（黑魔雷长线）。
     if cur["tier"] >= 2 and int(cur.get("purity", 0)) >= pc.purity_hard_max():
         return "【%s】雷纹已满（%d 层），此界圆满，无需再淬。" % (
-            cur["name"], int(cfg.PUPPET_VEIN_MAX))
+            pc.display_name(cur), int(cfg.PUPPET_VEIN_MAX))
     # 2026-11-20 修 bug：雷淬石以前**永不消耗**（只扣金币），掉落的石头毫无用处。
     # P1-2：按 times 倍一次性校验总消耗，绝不「扣一半中断留烂摊子」。
     mats = await pstore.materials(qq)
@@ -668,7 +673,7 @@ async def _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg) -> str:
     if name not in cfg.PUPPET_BODY_TIERS:
         return "无此躯体「%s」。可选：%s。" % (name, "、".join(cfg.PUPPET_BODY_TIERS))
     if str(name) == str(cur.get("body_name") or ""):
-        return "【%s】已是%s之躯，无须重炼。" % (cur["name"], name)
+        return "【%s】已是%s之躯，无须重炼。" % (pc.display_name(cur), name)
     new = pc.reforge_body(cur, name)
     if not new:
         return "换躯失败：躯体数据异常，未扣任何材料。"
@@ -683,7 +688,7 @@ async def _cmd_puppet_reforge(store, qq, p, roster, elig, pstore, arg) -> str:
     new_tier = cfg.PUPPET_TIER_BY_IDX[int(new["tier"])][0]
     return ("🦴 换躯重炼：【%s】躯体换为【%s】（%s%s），档位 %s→%s；"
             "雷淬纯度/有灵/认主全部保留，旧躯不返还。"
-            % (cur["name"], name, new["body_realm"],
+            % (pc.display_name(cur), name, new["body_realm"],
                ("·%d星" % new["body_star"]) if new["body_star"] else "",
                old_tier, new_tier))
 
@@ -712,7 +717,7 @@ async def _cmd_puppet_soul_feed(store, qq, p, roster, elig, pstore, arg) -> str:
     info = pc.soul_feed_info(cur)
     n_formation = pc.formation_count(roster)
     head = "🧿 【%s】灵魂强度 %d/%d（基准 %d + 养魂 %d）" % (
-        cur["name"], info["fed"], info["cap"], pc.soul_base(cur), info["fed"])
+        pc.display_name(cur), info["fed"], info["cap"], pc.soul_base(cur), info["fed"])
     if info["maxed"]:
         return (head + "\n　已至养魂上限，再喂也是白费 —— 丹留在你包里。\n"
                 "　换一具傀儡养：发「傀儡」看名录。")
@@ -735,7 +740,7 @@ async def _cmd_puppet_soul_feed(store, qq, p, roster, elig, pstore, arg) -> str:
     atk0 = int(pc.puppet_attack(cur, p))
     atk1 = int(pc.puppet_attack(dict(cur, soul_fed=int(res["fed"])), p))
     lines = [
-        "🧿 养魂：「%s」渡入【%s】×%d" % (pill, cur["name"], used),
+        "🧿 养魂：「%s」渡入【%s】×%d" % (pill, pc.display_name(cur), used),
         "　灵魂强度 +%d（%d/%d）· 有效灵魂 %d"
         % (used * int(res["gain"]), after["fed"], after["cap"], after["total"]),
         # 数值必须给「看得见的落点」：灵魂不是独立的孤立数值，它同时喂攻击/气血/护甲。
@@ -766,7 +771,7 @@ async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
     n = pc.formation_count(roster)
     if n < 2:
         return "结阵须至少两具傀儡。你目前 %d 具。" % n
-    names = "、".join(x["name"] for x in roster[:10])
+    names = "、".join(pc.display_name(x) for x in roster[:10])
     need = int(getattr(cfg, "PUPPET_FORMATION_BURST_N", 3))
     cur = next((x for x in roster if elig and x["id"] == elig.get("active_id")), roster[0])
     tier = max(0, min(2, int(cur.get("tier", 0) or 0)))
@@ -779,7 +784,7 @@ async def _cmd_puppet_formation(qq, roster, elig, pstore) -> str:
     nxt = cfg.PUPPET_TIER_BY_IDX[min(2, tier + 1)][0]
     return ("【傀儡结阵】%d 具同场：%s\n"
             "　阵成！【%s】本场暂化【%s】；金光散后复为原档，不永久升档、零消耗。"
-            % (n, names, cur["name"], nxt))
+            % (n, names, pc.display_name(cur), nxt))
 
 
 async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
@@ -793,7 +798,7 @@ async def _cmd_puppet_claim(store, qq, p, arg, pstore) -> str:
         wild = await pstore.wild_puppets()
         if not wild:
             return "遗迹里暂无无主残傀。打通「傀儡遗迹」第三段可遇。"
-        listing = "、".join("id=%s %s" % (x["id"], x["name"]) for x in wild[:8])
+        listing = "、".join("id=%s %s" % (x["id"], pc.display_name(x)) for x in wild[:8])
         return "遗迹无主残傀：%s。发「傀儡 收服 <id>」降服（需 %d 金）。" % (
             listing, cfg.PUPPET_CLAIM_COST)
     pid = int(m.group(1))
@@ -835,7 +840,7 @@ async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore, arg="") -> str:
     from . import puppet_core as pc
     cur = next((x for x in roster if x["id"] == elig["active_id"]), roster[0])
     if cur.get("awakened"):
-        return "【%s】已有灵智，无需再熔。" % cur["name"]
+        return "【%s】已有灵智，无需再熔。" % pc.display_name(cur)
     ok, why = pc.gate_soul(p)
     if not ok:
         return "❌ 熔魂须灵魂力量够强：" + why
@@ -856,5 +861,5 @@ async def _cmd_puppet_awaken(store, qq, p, roster, elig, pstore, arg="") -> str:
     await store.put_player(p)
     await pstore.update_puppet(qq, cur["id"], awakened=True)
     return ("🔥 陷阱已成，反噬被拦下！熔魂入体：【%s】生出灵智，可主动出手——"
-            "已是北王式改良傀儡，非基础款。" % cur["name"])
+            "已是北王式改良傀儡，非基础款。" % pc.display_name(cur))
 
