@@ -27,6 +27,54 @@ from __future__ import annotations
 
 import re
 
+#: 定身基础成功率（2026-11-27 Q5/B3）。旧版 root 直接写状态 = 100% 必中，
+#: 低阶控制技锁死必打关、新手起手强度取决于随机赠技。数据里 effects[i].p
+#: 可低于此值做差异化，但**不能高于**它，防止把定身又写成必中。
+ROOT_BASE_P = 0.60
+#: BOSS / 精英的控制抗性：定身成功率乘 (1 - 此值)。
+BOSS_ROOT_RESIST = 0.75
+#: 同一目标连续被定身，每次成功率递减；最低保留 20%，不做完全免疫。
+ROOT_DIMINISH = 0.25
+ROOT_MIN_FACTOR = 0.20
+
+# E3/Q5：藤蔓类控制（木灵缚）的地形 / 属性门控。卡面原文写「石板地、沙丘、
+# 水面抽不出藤；遇火属性斗气当场烧断」，旧版战斗从不判定 —— 现在把这两条
+# 做成 effect 上的 ``gate="vine"`` 条件，由 core.encounter 按章节地域挂地形、
+# 由 fight 从怪物名/兽火推属性，经 ctx 传进来。其余 gate 仍是 flavor 文案。
+VINE_DEAD_TERRAIN = frozenset(("石板地", "沙丘", "水面"))
+#: 只认死地关键词，不写「城」这种过宽词——否则 ch1「乌坦城·萧家后山」
+#: 会被误判成石板地，后山明明有土有木，木灵缚该正常生根。
+_TERRAIN_RULES = (
+    (("沙漠", "沙丘", "石漠", "沙海"), "沙丘"),
+    (("海", "泽", "湖"), "水面"),
+    (("遗迹", "墓", "殿"), "石板地"),
+    (("帝都", "宗"), "石板地"),
+)
+
+
+def terrain_of_region(region: str) -> str:
+    """章节地域名 → 藤蔓能否生根。无命中一律「沃土」（木灵缚正常生效）。
+
+    关键词只取卡面明文列出的三类死地，不凭空发明新地形。纯字符串判定，
+    不 import config，保持本模块零副作用的边界。
+    """
+    s = str(region or "")
+    for keys, terrain in _TERRAIN_RULES:
+        if any(k in s for k in keys):
+            return terrain
+    return "沃土"
+
+
+def monster_is_fire(mon) -> bool:
+    """目标是否带火属性斗气（藤蔓缠上去会被烧断）。
+
+    只认怪物自带的 ``flame`` 字段或名字里的 火/炎/焰 字样；两者都没有就 False，
+    绝不靠「看起来像火」猜。寒火/水炎按字面仍属火系斗气，同样烧藤。
+    """
+    s = "%s %s" % (str((mon or {}).get("flame") or ""),
+                   str((mon or {}).get("name") or ""))
+    return any(k in s for k in ("火", "炎", "焰"))
+
 # ---------------------------------------------------------------------------
 # 1. 词表
 # ---------------------------------------------------------------------------
@@ -344,8 +392,29 @@ def on_hit(effects, self_state: dict, target_state: dict, dmg: int, rng,
             notes.append("禁技")
 
         elif t == "root":
-            target_state["root"] = max(target_state["root"], max(1, d))
-            notes.append("定身")
+            # E3/Q5：藤蔓技的地形成活 / 火属性焚藤，卡面限制真进战斗。
+            # 只有数据里显式 gate="vine" 的技吃这条；其他定身技口径不变。
+            # E3/Q5：藤蔓技的地形成活 / 火属性焚藤，卡面限制真进战斗。
+            # 只有数据里显式 gate="vine" 的技吃这条；其他定身技口径不变。
+            if e.get("gate") == "vine":
+                if str(ctx.get("terrain") or "") in VINE_DEAD_TERRAIN:
+                    notes.append("藤无从生")
+                    continue
+                if ctx.get("target_fire"):
+                    notes.append("藤被烧断")
+                    continue
+            # Q5/B3：定身要有概率、BOSS 要有抗性、连续控制要递减。
+            # ctx 由 fight 传入 boss_resist；纯计算调用不传时按普通怪处理。
+            chance = min(p if e.get("p") is not None else ROOT_BASE_P, ROOT_BASE_P)
+            resist = max(0.0, min(1.0, float(ctx.get("boss_resist") or 0.0)))
+            times = int(target_state.get("root_times") or 0)
+            factor = max(ROOT_MIN_FACTOR, 1.0 - ROOT_DIMINISH * times)
+            if rng() < chance * (1.0 - resist) * factor:
+                target_state["root"] = max(target_state["root"], max(1, d))
+                target_state["root_times"] = times + 1
+                notes.append("定身")
+            else:
+                notes.append("定身未成")
 
         elif t == "knockback":
             target_state["root"] = max(target_state["root"], 1)

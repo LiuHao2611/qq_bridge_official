@@ -164,7 +164,19 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
     # 「玩家命中减怪闪避」是同一条公式的另一半。m_hit=0（手搓怪）时不变。
     p_hit = _core.hit_rate(p)
     dodge = max(0.0, min(95.0, _core.dodge_rate(p) + float(tm.get("evade_add", 0))) - m_hit)
-    m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
+    # Q5/B3：BOSS / 精英对定身有控制抗性，普通怪按基础概率判定。
+    _root_resist = (float(fx.BOSS_ROOT_RESIST)
+                    if (mon.get("is_boss") or _core.mon_tier(_kind) in ("elite", "boss"))
+                    else 0.0)
+    # E3/Q5：藤蔓技门控传参——地形来自 core.encounter 按章节地域挂到 mon 上，
+    # 火属性由怪物名 / 自带兽火推断。手搓怪与无 chapter 的爬塔/周本不挂 terrain
+    # → 空串按「沃土」处理，木灵缚正常生效，既有战斗逐字节不变。
+    m_ctx = {"target_flags": set(), "target_hp_ratio": 1.0,
+             "boss_resist": _root_resist,
+             "terrain": str(mon.get("terrain") or ""),
+             "target_fire": fx.monster_is_fire(mon)}
+    # Q6：每场战斗独立的斗技冷却表（技名 → 上次释放回合），跨场不结转。
+    cd_state: dict[str, int] = {}
 
     # 2026-11-17 完整战斗回看的「逐条快照」：每条 log 都带当时的敌我血量/斗气，
     # 回看卡直接读字段，不再靠上下文猜。只加字段，不改任何结算顺序。
@@ -263,7 +275,8 @@ def fight(p, mon, rng=random.random, aid=None, roll_aid=True, tower_mod=None,
         # 自动服药：先补给再出手（血低时先吃药是当前玩家的直觉操作）
         _try_auto_pill("hp")
         _try_auto_pill("mp")
-        entry, cost = _core._pick_skill(p, mp, rng)   # 随机释放「已上阵且斗气够」的技
+        # 随机释放「已上阵、斗气够且冷却已好」的技（Q6）
+        entry, cost = _core._pick_skill(p, mp, rng, round_no=rounds, cd_state=cd_state)
         # 禁技（2026-11-19 修）：被怪挂 silence 或眩晕时本回合只能武器普攻，斗气不扣。
         if int(p_fx.get("silence", 0)) > 0 or _pfx_start["skip"]:
             entry, cost = None, 0

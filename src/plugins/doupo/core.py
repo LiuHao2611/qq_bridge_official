@@ -1156,8 +1156,14 @@ def _loadout_entries(p) -> list[dict]:
     return ents if ents else _legacy_entries()
 
 
-def _pick_skill(p, mp: int, rng=random.random):
-    """在「已上阵且斗气足够」的技中随机挑一个；都不够 -> (None, 0) 转普攻。"""
+def _pick_skill(p, mp: int, rng=random.random, round_no: int = 0, cd_state=None):
+    """在「已上阵、斗气足够且**冷却已好**」的技中随机挑一个。
+
+    2026-11-27 Q6：斗技详情卡一直写着「冷却 N 回合」，但旧版选招只按斗气过滤，
+    同一技可以每回合连放 —— 卡面数值是死字段。现在每场战斗自带一张 ``cd_state``
+    （技名 → 上次释放回合），``round_no - used < cd`` 的技本回合不可用。
+    ``cd_state=None`` 时逐字节沿用旧口径（供纯计算/既有测试调用）。
+    """
     entries = _loadout_entries(p)
     if not entries:
         return None, 0
@@ -1166,11 +1172,19 @@ def _pick_skill(p, mp: int, rng=random.random):
     options = []
     for e in entries:
         c = sk_mod.tier_cost_by_lv(e["tier"], mpmax, plv)
-        if c <= mp:
-            options.append((e, c))
+        if c > mp:
+            continue
+        cd = int(e.get("cd") or 0)
+        if cd > 0 and cd_state is not None:
+            used = cd_state.get(e["name"])
+            if used is not None and round_no - int(used) < cd:
+                continue
+        options.append((e, c))
     if not options:
         return None, 0
     e, c = options[min(len(options) - 1, int(rng() * len(options)))]
+    if cd_state is not None and int(e.get("cd") or 0) > 0:
+        cd_state[e["name"]] = int(round_no)
     return e, c
 
 
@@ -1638,6 +1652,11 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     # chapter 给定 → 只抽已开通章的怪（硬锁），且每只怪实例化到
     # min(玩家等级, 该怪所属章的基准等级)；None → 走旧口径，逐字节不变。
     specs = pick_encounter(p, roll_encounter_count(p, rng), rng, chapter=chapter)
+    # E3/Q5：章节地域 → 地形，供藤蔓类斗技（木灵缚）的 gate 真判定。
+    # 只有野外章节遭遇战挂；爬塔/周本/突破/切磋不传 chapter，mon 无 terrain
+    # → 战斗 ctx 里按「沃土」处理，这些固定难度玩法逐字节不变。
+    _terrain = (fx.terrain_of_region(cfg.CHAPTER_REGION.get(chapter, ""))
+                if chapter is not None else "")
     st = stats(p)
     fade = max(0.0, float(cfg.ENCOUNTER_FADE))
     heal = max(0.0, float(cfg.ENCOUNTER_REST_HEAL))
@@ -1685,6 +1704,8 @@ def encounter(p, rng=random.random, locked=None, auto_pill=True,
     for i, spec in enumerate(specs):
         mon = dict(monster_scaled(p, spec, puppet_bonus=_pu_bonus,
                                   at_lv=_mon_lvs[i]))
+        if _terrain:
+            mon["terrain"] = _terrain
         # 连战第 i 敌削弱（首敌不削），只缩放 hp/atk，def 与产出不动
         scale = max(0.8, 1.0 - i * fade)
         if i:
@@ -2408,6 +2429,9 @@ def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
     _def_p = max(0, int(sp["防御"] * root_p))
     # 2026-11-15 多维效果：p 的增益在 p_fx、挂给 vic 的减益在 v_fx，反之亦然
     p_fx, v_fx = fx.new_state(), fx.new_state()
+    # Q6：切磋双方各自一份冷却表，每场独立（与 fight 同口径）。
+    cd_p: dict[str, int] = {}
+    cd_v: dict[str, int] = {}
     v_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
     p_ctx = {"target_flags": set(), "target_hp_ratio": 1.0}
     hp_p0, hp_v0 = max(1, hp_p), max(1, hp_v)
@@ -2431,7 +2455,7 @@ def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
         # p 出手
         hp_before, mp_before, foe_hp_before = hp_p, mp_p, hp_v
         v_ctx["target_hp_ratio"] = hp_v / hp_v0
-        e, c = _pick_skill(p, mp_p, rng)
+        e, c = _pick_skill(p, mp_p, rng, round_no=rounds, cd_state=cd_p)
         if int(p_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
             e, c = None, 0
         hit = _hit(p, int(sv["防御"] * root_v), e, rng, p_fx, v_fx, v_ctx)
@@ -2471,7 +2495,7 @@ def duel(p, vic, rng=random.random, puppet=None, formation_n=0,
             # vic 出手
             hp_before_v, mp_before_v, foe_hp_before_v = hp_v, mp_v, hp_p
             p_ctx["target_hp_ratio"] = hp_p / hp_p0
-            e2, c2 = _pick_skill(vic, mp_v, rng)
+            e2, c2 = _pick_skill(vic, mp_v, rng, round_no=rounds, cd_state=cd_v)
             if int(v_fx.get("silence", 0)) > 0:   # 禁技：只能普攻
                 e2, c2 = None, 0
             hit2 = _hit(vic, int(sp["防御"] * root_p), e2, rng, v_fx, p_fx, p_ctx)
