@@ -1,0 +1,100 @@
+#!/sbin/openrc-run
+# qq_bridge_official —— 纯 Linux（pmOS/Alpine）下的守护服务
+name="qq-bridge"
+description="qq_bridge_official (NoneBot2 + OneBot v11 / QQ 官方通道)"
+
+command="/home/pmos/venv/bin/python"
+command_args="bot.py"
+command_user="pmos:pmos"
+directory="/home/pmos/qq_bridge"
+
+pidfile="/run/${RC_SVCNAME}.pid"
+command_background="yes"
+respawn_delay=15
+respawn_max=0
+
+output_log="/home/pmos/qq_bridge/logs/service.log"
+error_log="/home/pmos/qq_bridge/logs/service.err.log"
+
+depend() {
+    need net
+    after NetworkManager sshd logdy
+    use dns
+}
+
+start_pre() {
+    checkpath --directory --owner pmos:pmos --mode 0755 /home/pmos/qq_bridge/logs
+    checkpath --file --owner pmos:pmos --mode 0644 /home/pmos/qq_bridge/logs/service.log
+    checkpath --file --owner pmos:pmos --mode 0644 /home/pmos/qq_bridge/logs/service.err.log
+    # WiFi 起来要几十秒，等有默认路由再启动，避免 bot 启动即连不上 QQ
+    i=0
+    while [ $i -lt 40 ]; do
+        if ip route 2>/dev/null | grep -q '^default'; then
+            break
+        fi
+        sleep 3
+        i=$((i + 1))
+    done
+    einfo "default route ready after ${i} checks"
+
+    # ---- DNS 就绪守卫（2026-11-25 19:35 事故后加；11-27 09:5x 二次事故后加固）----
+    # 事故：push 重启瞬间「默认路由已起、DNS 还没好」→ nonebot QQ 适配器拉
+    # gateway 失败一次（httpx.ConnectError [Errno -3] / Failed to get gateway
+    # info）→ bot 此后不再重连，群消息全部进不来，表现为「发战斗没反应」。
+    #
+    # 11-27 加固原因：只验 bots.qq.com 不够。适配器真正拉 gateway 走的是
+    # api.sgroup.qq.com，两个子域在 dnsmasq 里是**各自独立**的缓存项——前一个热了
+    # 不代表后一个不冷。实测 bots.qq.com 第 1 轮就过（"DNS ready after 0 checks"），
+    # 随后 api.sgroup.qq.com 冷解析 2.5s 仍抛 EAI_AGAIN，适配器照样一命不续。
+    # 现在把适配器会碰的域名逐个验到**全部**可解析才放行。
+    # 只等不修：最多 20 轮 ×3s=60s；全热时第 1 轮就过。
+    _dns_hosts="bots.qq.com api.sgroup.qq.com api.qq.com"
+    d=0
+    while [ $d -lt 20 ]; do
+        _dns_ok=1
+        for _h in $_dns_hosts; do
+            getent hosts "$_h" >/dev/null 2>&1 || { _dns_ok=0; break; }
+        done
+        [ "$_dns_ok" = "1" ] && break
+        sleep 3
+        d=$((d + 1))
+    done
+    if [ "$_dns_ok" = "1" ]; then
+        einfo "DNS ready after ${d} checks (${_dns_hosts})"
+    else
+        ewarn "⚠️ DNS 预热 ${d} 轮仍未全通（${_dns_hosts}）——适配器可能拉不到 gateway，请查 nmcli/resolv.conf"
+    fi
+
+    # ---- 出网 TCP 就绪守卫（2026-11-27 二次事故后加）----
+    # 11-27 实测：DNS 12/12 全通、20~40ms，`getent` 第 1 轮就过，但适配器启动后仍然
+    # `httpx.ConnectError: [Errno -3] / Failed to get gateway info`，且此后一命不续。
+    # 原因是「DNS 热」不等于「射频醒」：dnsmasq 命中缓存时根本没出网卡，
+    # 手机 WiFi 省电休眠状态下**第一发真实报文会丢**，适配器只要失败一次就放弃重连。
+    # 所以这里再加一道真实 TCP 握手探测，既唤醒链路又验证整条出网路径。
+    # 只等不修：最多 20 轮 ×3s=60s。
+    t=0
+    while [ $t -lt 20 ]; do
+        if nc -z -w 5 api.sgroup.qq.com 443 >/dev/null 2>&1 \
+           && nc -z -w 5 bots.qq.com 443 >/dev/null 2>&1; then
+            break
+        fi
+        sleep 3
+        t=$((t + 1))
+    done
+    if [ $t -lt 20 ]; then
+        einfo "出网 TCP 443 就绪 after ${t} checks"
+    else
+        ewarn "⚠️ 出网 TCP 443 探测 ${t} 轮仍失败 —— 适配器大概率连不上，请查 wlan0/网关"
+    fi
+
+    # ---- 数据路径守卫（2026-11-21 20:15 事故后加）----
+    # 事故：手机端 .env 少了 DOUPO_DATA_PATH → 插件回落到 src/plugins/doupo/data/
+    # 里那份示例库（2 行占位数据）→ 老玩家在群里发「人物」被要求重新入道。
+    # 这道闸只「出声」，不改任何业务行为：一旦包内又冒出 sqlite，日志里立刻看得见。
+    for f in src/plugins/doupo/data/doupo.sqlite src/plugins/xiuxian/data/xiuxian.sqlite; do
+        if [ -f "/home/pmos/qq_bridge/$f" ]; then
+            ewarn "⚠️ $f 出现了 —— DOUPO_DATA_PATH/XIUXIAN_DATA_PATH 可能失效，玩家会看到空白存档！"
+        fi
+    done
+    einfo "数据路径：$(grep -hE '^(DOUPO|XIUXIAN)_DATA_PATH=' /home/pmos/qq_bridge/.env | tr '\n' ' ')"
+}
