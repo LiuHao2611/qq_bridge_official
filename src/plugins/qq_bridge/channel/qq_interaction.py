@@ -10,21 +10,28 @@
      /二游/小游戏分发与出图 → 按钮点击与手打口令行为零分叉。
 
 ⚠️ 官方文档：指令回调类场景需在 3 秒内 ``PUT /interactions/{id}`` 响应，否则超时。
-   本模块先尽力 ack（best-effort，适配器若有 ack 方法），再异步跑业务；即便 ack
-   不可用也不影响消息照常发出（用户仍能看到按钮触发的回复，只是客户端 loading 略久）。
-   ack 失败只记日志，绝不阻断。
+   本模块 **后台调度** ack（best-effort，2026-11-27 起不再串行 await）——冷 DNS 下
+   put_interaction 会卡 5s，串行 await 曾把按钮回复整体拖慢（线上 23:11 铁证）。
+   ack 与业务无数据依赖，放后台跑，业务立即继续；即便 ack 不可用/失败也不影响
+   消息照常发出。ack 失败只记日志，绝不阻断。
 
 降级：回调解析/分发任何异常都只记日志（CLOSE-02 记全不静默吞），绝不让一个坏
 按钮拖垮官方 Bot 的事件循环。
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
 from ..config import get_logger, jlog
 
 log = get_logger()
+
+#: 后台 ACK task 的强引用集合（防 GC：asyncio 只弱引用 task，无引用会在跑到
+#: 网络 I/O 前被回收，导致 ACK 从未发出）。done_callback 里消费异常，避免
+#: "Task exception was never retrieved" 刷屏。
+_ack_tasks: set["asyncio.Task"] = set()
 
 _INTERACTION_AVAILABLE = False
 QQBot = None       # type: ignore[assignment,misc]
@@ -135,12 +142,48 @@ async def _ack_interaction(bot: Any, event: Any) -> None:
         log.warning(jlog("official_interaction_ack_unsupported",
                          note="adapter has no put_interaction; send still proceeds"))
         return
+    t0 = time.time()
     try:
         await fn(interaction_id=iid, code=0)
-        log.info(jlog("official_interaction_ack_ok", interaction_id=iid[:16]))
+        log.info(jlog("official_interaction_ack_ok", interaction_id=iid[:16],
+                      duration_ms=int((time.time() - t0) * 1000)))
     except Exception as e:  # noqa: BLE001 — ACK 失败不阻断业务回复
         log.warning(jlog("official_interaction_ack_failed", api="put_interaction",
-                         error=type(e).__name__, detail=str(e)[:160]))
+                         error=type(e).__name__, detail=str(e)[:160],
+                         duration_ms=int((time.time() - t0) * 1000)))
+
+
+def _schedule_ack(bot: Any, event: Any) -> None:
+    """后台调度 ACK，**绝不阻塞业务回复**（2026-11-27 慢回复优化）。
+
+    🔴 线上铁证：23:11:08 ``official_interaction_ack_failed``（冷 DNS 卡 5s）
+    → 23:11:13 业务才开始 ``official_send_connect_retry`` —— 串行 await ACK
+    把按钮点击的回复硬拖了 5s。ACK 只是告诉平台「收到点击」，与业务回复无
+    数据依赖，且失败已被 ``_ack_interaction`` 内部吞掉记日志。故放后台跑，
+    业务立即继续构造 ctx + 分发 + 发送。
+
+    asyncio 只弱引用 task，必须把 task 存进模块级集合保持强引用，否则可能在
+    进入网络 I/O 前被 GC、ACK 从未真正发出（客户端 loading 转圈）。
+    """
+    try:
+        task = asyncio.create_task(_ack_interaction(bot, event),
+                                   name="official-interaction-ack")
+
+        def _done(t: "asyncio.Task") -> None:
+            _ack_tasks.discard(t)
+            # 消费异常，避免 "Task exception was never retrieved"（防御性；
+            # _ack_interaction 内部已 catch 所有异常，正常不会走到）
+            if not t.cancelled():
+                exc = t.exception()
+                if exc is not None:
+                    log.warning(jlog("official_interaction_ack_task_error",
+                                     error=type(exc).__name__, detail=str(exc)[:160]))
+
+        _ack_tasks.add(task)
+        task.add_done_callback(_done)
+    except RuntimeError as e:  # 无运行中事件循环（离线单测等）
+        log.warning(jlog("official_interaction_ack_schedule_failed",
+                         error=type(e).__name__, detail=str(e)[:120]))
 
 
 async def handle_interaction(bot: QQBot, event: QQEvent) -> None:  # type: ignore[valid-type]
@@ -169,8 +212,10 @@ async def handle_interaction(bot: QQBot, event: QQEvent) -> None:  # type: ignor
         log.info(jlog("official_button_non_group_skip", chat_type=chat_type, cmd=cmd))
         return
 
-    # ack 尽力而为（不 await 业务前的长耗时逻辑）
-    await _ack_interaction(bot, event)
+    # ack 尽力而为：**后台调度，绝不 await**（2026-11-27 慢回复优化）。
+    # 冷 DNS 下 put_interaction 会卡 5s，串行 await 会把业务回复一起拖慢；
+    # ACK 与业务无数据依赖，放后台跑，业务立即继续。详见 _schedule_ack 注释。
+    _schedule_ack(bot, event)
 
     # 构造与 normal 群消息一致的完整 ctx（GROUP_PREFIX/USER_PREFIX 与 official.py 同源）
     from .base import make_ctx  # noqa: PLC0415

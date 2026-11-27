@@ -593,6 +593,17 @@ async def _on_startup() -> None:
         except Exception as e:  # noqa: BLE001
             log.error(jlog("smarthome_webhook_start_failed", error=type(e).__name__,
                            detail=str(e)[:200]))
+    # 官方通道 DNS 保活（2026-11-27）：定期解析 api.sgroup.qq.com /
+    # api.bot.qq.com，让手机 dnsmasq 缓存常热，消除「休眠后首发解析卡 5s」
+    # 导致的偶发慢回复。仅域名解析、不建 TCP、不碰账号；失败只记日志。
+    # 只在官方适配器可用时启动（双轨隔离，NapCat 单机无官方通道时零影响）。
+    if QQBot is not None and Config.official_configured():
+        try:
+            from .channel import dns_keepwarm  # noqa: PLC0415
+            dns_keepwarm.start()
+        except Exception as e:  # noqa: BLE001 — 保活起不来不拖垮启动
+            log.error(jlog("official_dns_keepwarm_hook_failed",
+                           error=type(e).__name__, detail=str(e)[:200]))
 
 
 async def _on_shutdown() -> None:
@@ -652,6 +663,13 @@ async def _on_shutdown() -> None:
         except Exception as e:  # noqa: BLE001
             log.warning(jlog("%s_stop_failed" % name, error=type(e).__name__,
                              detail=str(e)[:160]))
+    # 停官方通道 DNS 保活（2026-11-27）
+    try:
+        from .channel import dns_keepwarm  # noqa: PLC0415
+        await dns_keepwarm.stop()
+    except Exception as e:  # noqa: BLE001
+        log.warning(jlog("official_dns_keepwarm_stop_failed",
+                         error=type(e).__name__, detail=str(e)[:160]))
 
 
 # ==================== 计划定时执行（2026-09-13）====================
