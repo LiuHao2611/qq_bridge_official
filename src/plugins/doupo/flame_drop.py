@@ -54,22 +54,37 @@ def beast_pill_result(p: dict, rec: dict) -> dict | None:
     """兽火单方（effect=beast_flame）的服用结果，None 表示不是兽火丹。
 
     返回 {"ok", "reason"?}；真正的扣丹/写 flames 由 core.use_item 做（需 take_item）。
-    已持有该兽火 → flame_dup（不吞丹，与掉落重复同口径）。
+    2026-11-28 用户口径：已持有该兽火→服丹自动升一级（不吞丹）；满级→flame_max
+    拒绝（不吞丹，满级不再需要）。
     """
     if str(rec.get("effect") or "") != "beast_flame":
         return None
     bname = str(rec.get("flame") or "")
     fl = p.get("flames") or {}
-    if int(fl.get(bname, 0)) > 0:
-        return {"ok": False, "reason": "flame_dup", "flame": bname}
-    return {"ok": True, "flame": bname}
+    cur = int(fl.get(bname, 0) or 0)
+    if cur >= int(cfg.FLAME_MAX_LV):
+        return {"ok": False, "reason": "flame_max", "flame": bname}
+    return {"ok": True, "flame": bname, "leveled": cur > 0, "new_lv": cur + 1}
 
 
-def roll_flame_drop(lv: int, rng=None, rng_val: float | None = None) -> dict:
+def _exclude_maxed(pool: list[str], p: dict | None) -> list[str]:
+    """2026-11-28：满级火焰不再掉落——从池里剔除已达 FLAME_MAX_LV 的火。
+
+    ``p`` 为 None（老测试/纯决策调用）不过滤，保持向后兼容。
+    """
+    if not p:
+        return pool
+    fl = p.get("flames") or {}
+    return [n for n in pool if int(fl.get(n, 0) or 0) < int(cfg.FLAME_MAX_LV)]
+
+
+def roll_flame_drop(lv: int, rng=None, rng_val: float | None = None,
+                    p: dict | None = None) -> dict:
     """掉火决策：返回 {"ok", "kind"(beast/yihuo), "name", "rate"}。
 
     ``rng`` 是可调用对象；``rng_val`` 供测试直接注入 [0,1) 的值（不改存档）。
     兽火档掷 BOSS_FLAME_DROP_BEAST（500‰），异火档掷 BOSS_FLAME_DROP_YIHUO（1000‰=必中）。
+    ``p`` 可选：传入时满级火从池剔除（用户「满级后就不再掉落该火焰」）。
     """
     if rng is None:
         import random
@@ -78,14 +93,14 @@ def roll_flame_drop(lv: int, rng=None, rng_val: float | None = None) -> dict:
     tier = flame_tier_for_lv(lv)
     if tier == "yihuo":
         rate = int(cfg.BOSS_FLAME_DROP_YIHUO)
-        pool = yihuo_pool_for_lv(lv)
+        pool = _exclude_maxed(yihuo_pool_for_lv(lv), p)
         if r < rate and pool:
             # 用 rng 再抽一朵（rng_val 固定时取首朵，保证测试确定性）
             idx = 0 if rng_val is not None else int(float(rng()) * len(pool)) % len(pool)
             return {"ok": True, "kind": "yihuo", "name": pool[idx], "rate": rate}
     else:
         rate = int(cfg.BOSS_FLAME_DROP_BEAST)
-        pool = beast_pool_for_lv(lv)
+        pool = _exclude_maxed(beast_pool_for_lv(lv), p)
         if r < rate and pool:
             idx = 0 if rng_val is not None else int(float(rng()) * len(pool)) % len(pool)
             return {"ok": True, "kind": "beast", "name": pool[idx], "rate": rate}
@@ -96,8 +111,11 @@ def wild_flame_drops(p: dict, won_names, rng=None, add_item_fn=None) -> list[str
     """野外「对应魔兽掉火」（2026-11-24 用户口径）：每只被击败的兽火魔兽各掷一次。
 
     只掉 ``cfg.MONSTER_FLAME`` 里登记的对应兽火（不是随机池）；千分率
-    ``BEAST_MONSTER_DROP_RATE``（500=50%）。已持有 → 折算药渣，不重复给（防刷）。
-    返回本场**实际新得**的火名列表（已持有/没掉的不在内），供战报展示。
+    ``BEAST_MONSTER_DROP_RATE``（500=50%）。
+    2026-11-28 用户口径：重复获得→自动升一级（不再折算药渣）；满级→不再掉落。
+    返回本场**获得或升级**的火名列表（没掉的不在内），供战报展示；元素为
+    ``(火名, 是否升级, 新等级)`` 不兼容既有调用——故仍返回火名列表，升级信息
+    另见 ``p["flames"]``。
     """
     if rng is None:
         import random
@@ -108,11 +126,13 @@ def wild_flame_drops(p: dict, won_names, rng=None, add_item_fn=None) -> list[str
         flame = cfg.MONSTER_FLAME.get(str(nm))
         if not flame or int(float(rng()) * 1000) >= int(cfg.BEAST_MONSTER_DROP_RATE):
             continue
-        if int(fl.get(flame, 0)) > 0:
-            if add_item_fn is not None:
-                add_item_fn(p, "药渣", 30)
-            continue
-        fl[flame] = 1
+        cur = int(fl.get(flame, 0) or 0)
+        if cur >= int(cfg.FLAME_MAX_LV):
+            continue  # 满级不再掉落
+        if cur > 0:
+            fl[flame] = cur + 1  # 重复→自动升一级
+        else:
+            fl[flame] = 1
         got.append(flame)
     return got
 

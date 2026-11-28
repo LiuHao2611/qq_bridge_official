@@ -35,6 +35,7 @@ from . import factions as fac
 from . import battle_flavor as _flavor
 from . import flame_drop as _fdrop
 from . import flame_skills as fs
+from . import flame_view as _fview
 from . import skill_book as book
 from . import skill_rank as rank_mod
 from . import tower_data as td
@@ -805,7 +806,8 @@ async def cmd_break(store, qq, rng=None) -> str:
         if fl.get("ok"):
             _kind = "兽火" if fl.get("kind") == "beast" else "异火"
             lines.append(txt.flame_drop(fl["name"], _kind, bool(fl.get("duplicate")),
-                                        fl.get("dross", 30)))
+                                        fl.get("dross", 30),
+                                        leveled=int(fl.get("leveled") or 0)))
         if br.get("tiandi"):
             lines.append(txt.tiandi_success())
             return "\n".join(lines)
@@ -1028,10 +1030,11 @@ async def cmd_fight(store, qq) -> str:
         lines.append("🧩 傀儡料 " + "、".join("%s×%d" % (n, int(c)) for n, c in pup))
     if pup_fail:
         lines.append("⚠️ 傀儡料未入傀儡库：" + "、".join(pup_fail))
-    # 对应魔兽掉火（用户 2026-11-24）：只有真正新得的才列出，重复已折算药渣
+    # 对应魔兽掉火（2026-11-24 起，2026-11-28 口径更新）：新得即收服、重复即淬炼升级、
+    # 满级不再掉落；flame_drops 只列本场真正新得或升级的火。
     _bf = list(res.get("flame_drops") or [])
     if _bf:
-        lines.append("🔥 收服兽火 " + "、".join(_bf))
+        lines.append("🔥 收服/淬炼兽火 " + "、".join(_bf))
     # ② 代价（「防御」字样固定出现：属性↔战斗强关联的稳定锚点）
     auto = res.get("auto_pills") or {}
     _pill = int(auto.get("hp", 0)) + int(auto.get("mp", 0))
@@ -2297,6 +2300,12 @@ async def cmd_view(store, qq, arg: str = "") -> str:
                 "药材与天材地宝看得见价格与用途。")
     name = item_lookup(arg)
     if not name:
+        # 2026-11-28 用户「火焰也要能查看，含主动/被动/获取途径，禁止遗漏」：
+        # 火焰名不在物品表里，item_lookup 落空后先查火焰全集，命中即出火焰详情。
+        fn = next((n for n in _fview.all_flame_names()
+                   if arg in n or n in arg), None)
+        if fn:
+            return _fview.view_text(fn)
         return ("没找到「%s」这件东西。\n　发「包裹」看自己有什么 · 发「宝库」看药材 · "
                 "发「炼药」看能炼的丹方" % arg)
     return _view_text(name)
@@ -2531,7 +2540,7 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
             await store.mark_pill_used(str(qq), hit, int(res["mark_used"]))
         if not res.get("ok"):
             reason = res.get("reason")
-            if reason in ("none", "full", "notuse", "need_puppet"):
+            if reason in ("none", "full", "notuse", "need_puppet", "flame_max", "flame_dup"):
                 stop_reason = reason
                 break
             # resisted / 其它：药已扣、有回执文案，记下后继续（连服抗性丹会连扣）
@@ -2556,6 +2565,9 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
         if stop_reason == "notuse":
             return ("🧪 【%s】不是口服之物 —— 丹还在你包里。\n"
                     "　发「升级 技能名」把它用在斗技上（每级 1 份，最高 5 级）。" % hit)
+        if stop_reason in ("flame_max", "flame_dup"):
+            return ("🔥 对应的兽火已满 %d 级，不再需要这枚【%s】—— 丹还在你包里。"
+                    % (cfg.FLAME_MAX_LV, hit))
         return last_msg or "无法服用。"
 
     note = ""

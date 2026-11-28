@@ -87,7 +87,11 @@ def boss_win(rounds: int, name: str) -> str:
     return f"　鏖战 {rounds} 回合，【{name}】终于溃散。"
 
 
-def flame_drop(name: str, kind: str, duplicate: bool, dross: int | str) -> str:
+def flame_drop(name: str, kind: str, duplicate: bool, dross: int | str,
+               leveled: int = 0) -> str:
+    if leveled:
+        return (f"　劫后余烬里又见【{name}】，此火已在你身，"
+                f"借机淬炼——升至 {leveled} 级。")
     if duplicate:
         return (f"　劫后余烬里又见【{name}】，此火已在你身，"
                 f"化作药渣 ×{dross}。")

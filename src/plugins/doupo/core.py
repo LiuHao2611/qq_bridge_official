@@ -20,6 +20,7 @@ from . import config as cfg
 from . import doupo_text as txt
 from . import flame_bonus as _flame_bonus, temp_buff as tb, danwen as dw
 from . import flame_drop as _fdrop
+from . import flame_milestone as _milestone
 from . import econ  # 出售定价单一真源（2026-11-27 背包商品出售）
 from .flame_drop import s_flame_gate  # noqa: E402  纯函数外迁，保持 core.s_flame_gate 入口
 from . import factions as fac
@@ -332,6 +333,13 @@ def stats(p) -> dict:
     if p.get("diyan"):
         for k in out:
             out[k] = int(out[k] * 1.2)
+
+    # 2026-11-28 火焰收集里程碑：所有持有火焰等级之和达档 → 永久全属性加成。
+    # 与帝炎/宗门比例同为乘算；空火玩家 bonus=0，数值逐字节不变（守门断言）。
+    _ms_pct = _milestone.bonus_pct(p)
+    if _ms_pct:
+        for k in out:
+            out[k] = int(out[k] * (1.0 + _ms_pct))
 
     _clan_pct = sect_allstat_pct(p)  # 古族/天府 六维比例
     if _clan_pct:
@@ -1020,16 +1028,39 @@ def roll_breakthrough_flame(p, rng=random.random) -> dict:
     lv = int(p.get("lv", 1))
     # 突破成功后调用方已 level_up？此函数在 level_up 之前调用（见 nine_star_breakthrough），
     # 故用 lv+1 作为"突破后境界"决定掉落档（低境界掉兽火，斗宗以上掉异火）。
-    d = _fdrop.roll_flame_drop(lv + 1, rng=rng)
+    # 2026-11-28 传 p：满级火焰不再进掉落池（用户要求）。
+    d = _fdrop.roll_flame_drop(lv + 1, rng=rng, p=p)
     name, kind = d["name"], d["kind"]
     if not name:
         return {"ok": False, "name": "", "kind": ""}
+    # 2026-11-28 用户「重复获得火焰就直接自动升一级」：不再折算药渣，
+    # 改由统一入口 grant_flame 处理（重复→lv+1，满级→折算药渣兜底）。
+    return grant_flame(p, name, kind=kind)
+
+
+def grant_flame(p: dict, name: str, kind: str = "") -> dict:
+    """统一授予火焰入口（2026-11-28）：新得→1 级，重复→自动升 1 级。
+
+    - 未在 ``p["flames"]``：写 1 级，``duplicate=False``；
+    - 已有且未满级：等级 +1，``duplicate=True, leveled=新等级``（用户要求）；
+    - 已到 ``FLAME_MAX_LV``：不再升级，折算药渣兜底（掉落决策已排除满级火，
+      这里是并发/老路径的二次保险），``duplicate=True, maxed=True``。
+    帝炎走 diyan 成就位、A/S 收藏火不靠此入口，调用方需自行分流。
+    """
     fl = p.setdefault("flames", {})
-    if int(fl.get(name, 0)) > 0:
+    cur = int(fl.get(name, 0) or 0)
+    if cur <= 0:
+        fl[name] = 1
+        return {"ok": True, "name": name, "kind": kind,
+                "duplicate": False, "leveled": 1}
+    if cur >= int(cfg.FLAME_MAX_LV):
         add_item(p, "药渣", 30)
-        return {"ok": True, "name": name, "kind": kind, "duplicate": True, "dross": 30}
-    fl[name] = 1
-    return {"ok": True, "name": name, "kind": kind, "duplicate": False}
+        return {"ok": True, "name": name, "kind": kind,
+                "duplicate": True, "maxed": True, "dross": 30}
+    fl[name] = cur + 1
+    _refill(p)
+    return {"ok": True, "name": name, "kind": kind,
+            "duplicate": True, "leveled": cur + 1}
 
 
 def _refill(p) -> None:
@@ -3244,9 +3275,14 @@ def use_item(p, name, used_counts=None, rng=random.random, _skip_take=False) -> 
             return {"ok": False, "reason": _bp["reason"], "pill": name}
         if not take_item(p, name, 1):
             return {"ok": False, "reason": "none"}
-        p.setdefault("flames", {})[_bp["flame"]] = 1
-        return {"ok": True, "msg": "炼化【%s】，兽火【%s】已认你为主" % (name, _bp["flame"]),
-                "flame": _bp["flame"], "kind": "beast"}
+        # 2026-11-28 重复兽火丹→自动升一级（beast_pill_result 已算 new_lv）。
+        _newlv = int(_bp["new_lv"])
+        p.setdefault("flames", {})[_bp["flame"]] = _newlv
+        _msg = ("炼化【%s】，兽火【%s】升至 %d 级" % (name, _bp["flame"], _newlv)
+                if _bp.get("leveled") else
+                "炼化【%s】，兽火【%s】已认你为主" % (name, _bp["flame"]))
+        return {"ok": True, "msg": _msg,
+                "flame": _bp["flame"], "kind": "beast", "leveled": bool(_bp.get("leveled"))}
     st = stats(p)
     # 2026-11-23：气血/斗气已满时不扣物（旧版先扣再算，白丢一枚只回「+0」）。
     eff = str(rec.get("effect") or "")
