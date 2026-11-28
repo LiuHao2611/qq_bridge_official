@@ -105,7 +105,7 @@ def _closing(ctx: dict) -> str:
 
     # 4) 傀儡助阵：本场真有傀儡出手才出召唤物梗。
     if has_puppet:
-        return _pick(("平 A 尊者。", "我又何尝不是天才。"), seed)
+        return _pick(("平 A 尊者。", "傀儡一拳落下，对面再没起来。"), seed)
 
     # 5) 拖沓局：回合数真的多（≥10）才自嘲「卡点」。
     if rounds >= 10:

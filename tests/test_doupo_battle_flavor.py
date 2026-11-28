@@ -61,7 +61,7 @@ EVIL = {"桀桀桀。", "猖狂。", "此子断不可留，否则日后必成大
 CRUSH = {"侥幸罢了。",
          "这一击，竟撕裂了虚空。他发出的斗气波动，竟然比我还强。"}
 NARROW = {"神清气爽。", "怎么很想说一句猖狂。"}
-PUPPET = {"平 A 尊者。", "我又何尝不是天才。"}
+PUPPET = {"平 A 尊者。", "傀儡一拳落下，对面再没起来。"}
 LOSE = {"无奈地摇了摇头。", "别急，我在卡点。"}
 REALM = {"斗宗强者，恐怖如斯。", "半圣之下，皆为蝼蚁。"}
 
@@ -163,7 +163,7 @@ all_flavors = {
     "桀桀桀。", "今日谁保他，谁与我魂殿为敌！", "此子断不可留，否则日后必成大患！",
     "猖狂。", "焰分噬浪尺！", "侥幸罢了。", "恐怖如斯。",
     "这一击，竟撕裂了虚空。他发出的斗气波动，竟然比我还强。",
-    "神清气爽。", "怎么很想说一句猖狂。", "平 A 尊者。", "我又何尝不是天才。",
+    "神清气爽。", "怎么很想说一句猖狂。", "平 A 尊者。", "傀儡一拳落下，对面再没起来。",
     "别急，我在卡点。", "无奈地摇了摇头。", "斗宗强者，恐怖如斯。", "半圣之下，皆为蝼蚁。",
 }
 check("落地句池>=15句(用户嫌少后的扩充)", len(all_flavors) >= 15, str(len(all_flavors)))
@@ -379,6 +379,49 @@ def _beast_of(name, kind):
 #    让它「吐着信子」说话。必须先看 detail 的 kind。
 check("魂殿护法不判成魔兽", _beast_of("魂殿鹜护法", "魂殿") is False)
 check("岩蛇仍判成魔兽", _beast_of("岩蛇", "魔兽") is True)
+
+
+# ---- 13. 说辞合理闸（2026-11-28 用户「看看日志，把不合理的优化掉或者去掉」）----
+# 从真回包探针逐句读出来的问题，按玩家可见行为钉死：
+#   ① 败局 💥 行说「砸实/落在要害」，后面又接「像拍在铁板上」——自相矛盾；
+#   ② 垃圾掉落吹捧行说「不值几个钱」，与「吹到天上」的要求正好相反；
+#   ③ 败局鼓励「你动了」——人都倒了，逻辑不通；
+#   ④ 胜局判词后旁白混进第三人称「他」，战报通篇第二人称「你」；
+#   ⑤ 傀儡梗「我又何尝不是天才」主语不明（谁天才？），且原著这句是天妖傀说的。
+from doupo import doupo_text as _dt  # noqa: E402
+
+_BANNED_PHRASES = (
+    "像拍在一块铁板上",      # ① 与「砸实落在要害」自相矛盾
+    "不值几个钱的东西",      # ② 贬低战利，与 trash 档「吹到天上」相反
+    "躺着不动才可怕——你动了。",  # ③ 败局已倒下，不能说「你动了」
+    "整场都被他牵着走",      # ④ 人称漂移（他→你）
+    "嘴角缓缓掀起一抹冷笑，他动了。",  # ④ 同上
+    "我又何尝不是天才",      # ⑤ 主语混乱的泛化梗
+)
+_all_copy = []
+for _grp in (_dt.CLIMAX_AFTER, _dt.DROP_GLORY, _dt.GLORY_LINES, _dt.CHAPTER_SCENE):
+    for _pool in _grp.values():
+        _all_copy.extend(_pool)
+for _pool in (_dt.RALLY_LINES, _dt.MOCK_LINES, _dt.QUOTE_FALLBACK,
+              _dt.NPC_SPEAKERS["药老"]):
+    _all_copy.extend(x[0] if isinstance(x, tuple) else x for x in _pool)
+for _pool in vd._PRAISE.values():
+    _all_copy.extend(_pool)
+for _bad in _BANNED_PHRASES:
+    check("说辞不回潮[%s]" % _bad,
+          not any(_bad in str(x) for x in _all_copy),
+          str([x for x in _all_copy if _bad in str(x)][:2]))
+check("傀儡梗池不含主语混乱句",
+      not any("何尝不是天才" in x
+              for s in range(40)
+              for x in bf.flavor_lines({
+                  "win": True, "tier": "great", "foe_kind": "", "move": "",
+                  "realm_idx": 0, "has_puppet": True, "rounds": 3, "seed": s,
+              })))
+_lose_npc = {_dt.npc_line(1, s, "lose") for s in range(40)}
+check("败局药老插话按种子轮换(不再每场复读)", len(_lose_npc) >= 2, str(_lose_npc))
+check("败局药老插话仍是逐字原文", all(
+    any(x[0] in line for x in _dt.NPC_SPEAKERS["药老"]) for line in _lose_npc))
 
 check("人型反派喊「小子」不是「你」",
       any("小子" in vd.taunt("skill_short", s, foe="魂殿鹜护法", beast=False)
