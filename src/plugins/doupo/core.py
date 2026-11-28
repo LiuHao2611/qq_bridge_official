@@ -29,6 +29,7 @@ from . import skill_rank as rank_mod
 from . import sect_mechanics as sm
 from . import weapon_data as wd
 from . import weapon_curve as wcurve
+from . import cultivate_balance as _cult
 from . import danlei as _danlei
 
 # 纯函数 re-export（实现见 sect_mechanics.py）
@@ -584,7 +585,10 @@ def settle(p, now_ts=None) -> dict:
     cap_sec = float(CULTIVATE_OFFLINE_CAP_SEC)
     capped = elapsed > cap_sec
     billable = min(elapsed, cap_sec)
-    gain = int(billable / 60.0 * cfg.CULTIVATE_PER_MIN * flame_exp_mult(p))
+    # 2026-11-28 修炼平衡：速率按境界分档（前中期快、后期慢），见 cultivate_balance。
+    # lv=1 精确等于 CULTIVATE_PER_MIN（既有测试锚点不变），塔修炼仍走固定基线。
+    rate = _cult.cultivate_rate(int(p.get("lv", 1)))
+    gain = int(billable / 60.0 * rate * flame_exp_mult(p))
     if gain > 0:
         p["exp"] = int(p.get("exp", 0)) + gain
     p["last_settle"] = now_ts

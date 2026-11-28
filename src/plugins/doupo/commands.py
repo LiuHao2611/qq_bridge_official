@@ -17,6 +17,7 @@ from datetime import date
 
 from . import battle_comments as bc
 from . import battle_review as br
+from . import boss_taunts as _taunts
 from . import bagview
 from . import card_theme
 from . import config as cfg
@@ -744,7 +745,7 @@ async def cmd_cultivate(store, qq) -> str:
     _shown_exp = min(int(p["exp"]), need) if need else int(p["exp"])
     return (f"{head}\n修为 {_fmt(_shown_exp)}/{_fmt(need) if need else '—'}{tip}\n"
             f"当前：{cfg.full_realm(lv)}\n"
-            f"（想快些可发「入塔」借心火成倍修炼，需火能与火晶卡）")
+            f"　欲速成可入天焚炼气塔借心火修炼，发「入塔」。")
 
 
 async def cmd_break(store, qq, rng=None) -> str:
@@ -787,7 +788,13 @@ async def cmd_break(store, qq, rng=None) -> str:
         if _intro and _intro != _appear:
             head.append(f"　{_intro}")
         if not br["win"]:
-            return "\n".join(head + [txt.boss_fail(br["rounds"], _fmt(br["hp_end"]))])
+            # 2026-11-28 用户「突破失败结尾带一句 BOSS 原著嘲讽台词，多句随机」。
+            # 台词池见 boss_taunts（复用已核对的 quotes + 带出处的补充）；无原著
+            # 台词的魔兽/龙套返回空串，只出 boss_fail 正文，绝不代编。用独立随机
+            # 源，绝不碰 core 的 rng，避免破坏既有胜败确定性测试。
+            _taunt = _taunts.pick_taunt(_name)
+            return "\n".join(head + [txt.boss_fail(br["rounds"], _fmt(br["hp_end"]),
+                                                   taunt=_taunt)])
         # 战胜：挑一条原著台词作收尾（不渲染内部战力快照数字）。
         _quotes = tuple(_ch.get("quotes") or ())
         _end_quote = ("　「%s」——话音未落，强敌已溃。" % _quotes[-1]) if _quotes else ""

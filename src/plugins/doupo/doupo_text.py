@@ -71,9 +71,16 @@ def need_exp(need: str) -> str:
             "去「战斗」或「修炼」积蓄。")
 
 
-def boss_fail(rounds: int, hp_end: str) -> str:
-    return (f"　鏖战 {rounds} 回合，斗气不济而败（余血 {hp_end}）。\n"
+def boss_fail(rounds: int, hp_end: str, taunt: str = "") -> str:
+    """战败正文。taunt 为可选的原著嘲讽台词（2026-11-28），附在结尾。
+
+    空串时不附加任何台词行——无原著台词的魔兽/龙套不会开口，不代编。
+    """
+    body = (f"　鏖战 {rounds} 回合，斗气不济而败（余血 {hp_end}）。\n"
             "　修为未散，调息再来——「突破」可再战此劫。")
+    if taunt:
+        body += f"\n　对手冷笑：「{taunt}」"
+    return body
 
 
 def boss_win(rounds: int, name: str) -> str:
