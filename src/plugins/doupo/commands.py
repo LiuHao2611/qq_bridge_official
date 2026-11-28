@@ -990,7 +990,7 @@ async def cmd_fight(store, qq) -> str:
             "foe_kind": "", "move": str(high.get("move") or ""),
             "has_puppet": bool(pup_hits), "rounds": int(res.get("rounds") or 0),
             "seed": _seed,
-        }) or _verdict.praise(_vd["case"], _seed)
+        }) or _verdict.praise(_vd["case"], _vd["seed"])
         if _praise:
             lines.append("　" + _praise)
     # 2026-11-24 限时增益：药力还有余就得在战报里露一行，否则玩家以为丹白吃了。
@@ -1087,7 +1087,7 @@ async def cmd_fight(store, qq) -> str:
     # 必须是最后一行——前面全是数据与自己的不甘，最后才轮到对手补一刀。
     # 没有活着的怪（detail 为空 / 全灭）时 taunt 返回空串，绝不冒认谁在说话。
     if not res.get("win"):
-        _taunt = _verdict.taunt(_vd["case"], _seed, foe=_vd["foe"], skill=_vd["skill"])
+        _taunt = _verdict.taunt(_vd["case"], _vd["seed"], foe=_vd["foe"], skill=_vd["skill"])
         if _taunt:
             lines.append("　" + _taunt)
     # 空行一律丢掉：铺垫等「可能不出句」的段落返回空串时，别让 QQ 里多一条空白。

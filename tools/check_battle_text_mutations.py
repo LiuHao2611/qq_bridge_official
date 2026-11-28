@@ -25,6 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEXT = os.path.join(ROOT, "src/plugins/doupo/doupo_text.py")
 CMD = os.path.join(ROOT, "src/plugins/doupo/commands.py")
 TEST = os.path.join(ROOT, "tests/test_battle_text_rich.py")
+FLAVOR_TEST = os.path.join(ROOT, "tests/test_doupo_battle_flavor.py")
+VERDICT = os.path.join(ROOT, "src/plugins/doupo/battle_verdict.py")
 
 
 def nl_of(path: str) -> str:
@@ -169,7 +171,7 @@ MUTATIONS = [
     dict(
         mid="M17 败局没有嘲讽",
         path=CMD,
-        old=['        _taunt = _verdict.taunt(_vd["case"], _seed, foe=_vd["foe"], skill=_vd["skill"])'],
+        old=['        _taunt = _verdict.taunt(_vd["case"], _vd["seed"], foe=_vd["foe"], skill=_vd["skill"])'],
         new=['        _taunt = ""'],
         why="败局只有鼓励没有嘲讽，情绪只扬不抑（2026-11-28 起嘲讽由活着的怪开口）",
     ),
@@ -222,6 +224,49 @@ MUTATIONS = [
              '        return "crush"'],
         why="越级斩杀被当成普通大捷吹，最该吹的时刻哑了",
     ),
+    # ---- 第三轮：多维度诊断 + 大句池 + 随机（2026-11-28 用户二次纠正）----
+    dict(
+        mid="M22 斗气枯竭判成零暴击",
+        path=VERDICT,
+        old=['            out["case"] = "no_mp"'],
+        new=['            out["case"] = "crit_dry"'],
+        why="用户点名的「没斗气多去炼药」被泛化的零暴击嘲讽顶掉",
+    ),
+    dict(
+        mid="M23 暴击串维度消失",
+        path=VERDICT,
+        old=['            out["case"] = "crit_storm"'],
+        new=['            out["case"] = "plain"'],
+        why="三连暴击的爽点被平胜句抹掉，赢了也说不出赢在哪",
+    ),
+    dict(
+        mid="M24 句池缩到一句",
+        path=VERDICT,
+        old=['    return pool[rng.randrange(len(pool))]'],
+        new=['    return pool[0]'],
+        why="每档只剩一句，打十场复读十遍（用户「语句一定要多」落空）",
+    ),
+    dict(
+        mid="M25 随机退化成取模",
+        path=VERDICT,
+        old=['    return pool[rng.randrange(len(pool))]'],
+        new=['    return pool[int(seed) % len(pool)]'],
+        why="等间隔种子全落同一句，看起来随机其实固定轮转",
+    ),
+    dict(
+        mid="M26 嘲讽冒认说话人",
+        path=VERDICT,
+        old=['    return tpl.replace("{foe}", foe).replace("{skill}", str(skill or ""))'],
+        new=['    return tpl.replace("{foe}", "它").replace("{skill}", str(skill or ""))'],
+        why="怪名被替换成「它」，最后一行变成无主旁白",
+    ),
+    dict(
+        mid="M27 差一口气抢走没气嘲讽",
+        path=VERDICT,
+        old=['        elif plain_ratio >= _PLAIN_RATIO_DRY and low_mp:'],
+        new=['        elif False:'],
+        why="「没斗气多炼药」被泛化的「就差一点」顶掉，玩家不知道该改什么",
+    ),
 ]
 
 
@@ -248,7 +293,19 @@ def run_test():
         s = ln.strip()
         if " passed" in s or " failed" in s:
             total = s.strip("= ")
-    return r.returncode, fails, total, out
+    code = r.returncode
+
+    # 第二道：脚本式守门（手机无 pytest 也能跑），覆盖 15+15 个诊断维度、
+    # 每档句池与随机轮换。只跑 pytest 的话 battle_verdict.py 的变异根本没人拦。
+    s = subprocess.run([sys.executable, FLAVOR_TEST], cwd=ROOT,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       timeout=600)
+    sout = s.stdout.decode("utf-8", "replace")
+    out += "\n--- script: test_doupo_battle_flavor ---\n" + sout
+    if s.returncode != 0:
+        code = 1
+        fails += [ln.strip() for ln in sout.splitlines() if ln.startswith("FAIL ")]
+    return code, fails, total, out
 
 
 def main():
@@ -303,6 +360,13 @@ def main():
         for mid, _, _, _, why in bad:
             print("  漏网：" + mid + " —— " + why)
         return 1
+    # 2026-11-28 事故：早退路径绕过 finally，把源码留在改坏状态还以为全绿。
+    # 跑完必须自己核一次工作区，不能只信 MUTATION_TOTAL。
+    import subprocess as _sp
+    st = _sp.run(["git", "status", "--porcelain"], cwd=ROOT,
+                 stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True).stdout.strip()
+    print("--- git status（应只剩本轮预期改动）---")
+    print(st or "(clean)")
     return 0
 
 

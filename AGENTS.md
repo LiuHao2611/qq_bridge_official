@@ -122,7 +122,7 @@
 | **炼药丹雷：七品起成丹必引雷扣血、有出战傀儡 50% 全额免伤并淬炼（用户 2026-11-27 拍板三选）**。原著第920处「傀儡抗一两道五色丹雷还行、度过丹雷痴人说梦」「吸收雷霆之力的傀儡徐徐修复」是唯一依据；此前 `CRAFT_SUCCESS` 只有文案无机制=假机制，现已补真。常量/判定唯一源 `doupo/danlei.py`（`DANLEI_MIN_IDX=6`/`DAMAGE_RATE`/`GUARD_CHANCE=0.50`/`BATCH_CAP=3`），低阶 plan=None 逐字节零改动；异步落库 `danlei_cmd.py`（挡下→`puppet_core.temper` 淬炼，不额外扣雷淬石/金币）。🚨 地板 `apply_hp` 必须 `max(min(before,floor), before-hurt)`——只拦扣过头、绝不反向给残血加血；地板复用 `cfg.LOSE_HP_FLOOR` 禁另造 0.05。🚨 炼药命令组已迁 `commands_craft.py`（commands.py 破 200KB 红线），AST 结构守门扫新模块 | `tools/check_danlei.py --check`（契约全过）+ `--selftest`（8 类变异全抓）；`test_danlei.py` 9 行为测试；零回归 `test_core` 35、`test_commands` 137、`test_use_danwen` 85、`tests/test_doupo_craft_flame_aid.py` 15 |
 | **玩法细则卡 / 成傀卡必须气泡包裹，不许纯文本行平铺**（用户 2026-11-22「纯文本较多、信息密集的卡片按当前思路优化」）。盘点 13 张斗破模板：8 张已气泡/分层（人物/技能/宗门/名录/战斗/遗迹/丹方/傀儡）、`doupo_style` 是公共模块、menu/list 已结构分层（口令大字/右侧状态/等级条，不属纯文本墙）——真正纯文本平铺的只有 2 张，已改：① `doupo_help.py` 每【】组一个圆角气泡（组名靛紫粗体+竖条+分割线，组内要点折行），`_layout` 按组聚合算气泡高，2074→2474px；② `doupo_craft.py` 旧版 `return _battle.build()` 因 data 缺 rich 字段落进 **legacy 纯文本骨架**（隐藏技术债），改独立分组气泡+序号圆标+subtitle 强调条。两张都走 `_pal()` 吃新配色、boxes 自检 0 | `tmp/check_help_boxes.py`（11 组 62 盒 800×2474 PROBLEMS 0）、`tmp/check_craft_boxes.py`（3 组 18 盒 800×664 PROBLEMS 0）+ 真出图肉眼核对；`tests/test_doupo_puppet_craft_card.py::test_manifest` 静态断言改验独立气泡骨架（`def _plan`/`c.ellipse`/`_pal(t)`，反证退回 `_battle.build` 即红）；craft `TOTAL FAILED=0`；全量 40 测试文件 0 失败。`雷淬纯度 0%` 后的 `□□□□` 是 `puppet_core.dye_bar` 的 `■□`(U+25A0/25A1) 空心态，字体有真字形，非豆腐框 |
 | **每个玩家可见回包携带的按钮，唯一目的是「让玩家立刻能做下一步」，禁止默认塞主菜单、禁止挂与本次结果无关的按钮**（用户 2026-11-28 立永久纪律原话：「每个反馈给玩家可见的信息携带的按钮目的都是方便玩家操作，明白了吗」）：判据三条——① 点它能推进当前状态（入塔 → 结算 → 出塔），不是复述播报里刚做完的事；② 该结果不该出现的按钮一律不挂（塔中不挂「战斗」、塔外不挂「出塔」，没火能时「修炼」点了也只会再失败一次）；③ 按钮文字必须与播报里出现的口令逐字一致（播报写「发「修炼」结算」按钮就得是「修炼」，不许换成「查看」「继续」）。实现红线：`doupo_buttons.CARD_ACTIONS[card_key]` 是唯一真源，**同一口令的不同结果必须走状态化按钮组**——`commands.cmd_furnace_enter_state` 返回 `(播报文本, state_key)`，`button_dispatch` 用 `send_key = state_key or card_key` 发键，禁止一个口令只挂一组死按钮、禁止在 handler 里临时拼按钮数组。现行塔类五组：`cult_text`(修炼/出塔/火能) · `tower_blocked`(战斗/火能) · `tower_settle_up`(突破/修炼/出塔) · `tower_out_text`(修炼/火能/战斗) · `tower_energy_text`(修炼/换卡/战斗) | `tests/test_doupo_buttons.py` 31 项（按钮族基线 + 禁主菜单/禁自身 + dispatch plan 一致 + 入站首词派生一致 + 卡片集合一致）；`doupo/test_tower_cultivate.py` 第⑤节用 `ast` 直接读 `CARD_ACTIONS` 字面量做**第二套独立基准**（不走运行时 import，避免同一份真源自证），变异 3 组全红：按钮回退旧组 / 没火能挂错组 / 修为满不给突破组 |
-| **战斗台词必须由「对局诊断」驱动、位置写死：胜局赞叹紧跟判词行，败局嘲讽在战报最后一行由活着的怪开口点名失败点**（用户 2026-11-28 原话：「战斗播报的结尾台词恐怖如斯有点莫名其妙……这种胜局赞叹的台词应该加到『二星大斗师斗晶映体』这一句的后面……败局就放在结尾让活着的怪讲出，嘲讽语句」「败局的嘲讽要嘲讽到失败点子上」「后台要有一个对局情况分析，准确判断出失败原因或者成功原因，针对性的嘲讽或者吹捧」「有的台词确实经典出圈，但也要插对地方」）。红线四条——① 胜局赞叹**只允许**出现在判词行（`XX·XX，N 回合大捷——斗气未散。`）正下方一行，`cmd_fight` 里紧跟 `encounter_head` 之后 `lines.append`，禁止再追加到战报末尾；② 败局嘲讽**只允许**是战报最后一行，格式 `　<怪名><动作>：「……」`，说话人必须是 `res["detail"][-1]["name"]`（活到最后那只），禁止无主语的旁白式 `🥀 无奈地摇了摇头。`；③ 台词必须由真实 log 判据选出 case（`battle_verdict.analyze`），禁止按「赢/输」两态随机抽；④ 出圈台词（恐怖如斯／三十年河东／我命由我不由天）只能挂「有具体事实」的槽位（境界≥斗宗、卡点回合数、傀儡输出更高），无具体事实时宁可说「赢了就是赢了」，禁止硬插。**实现红线**：`battle_verdict.py` 是唯一诊断真源（`_PRAISE`/`_TAUNT` 每 case 2~3 句按 seed 轮换）；`battle_flavor._closing` 只留「有具体事实」三档，`closing_line()` 供结算槽单取，**具体事实的梗优先、无事实才由对局分析出句**；`taunt()` 缺 `foe` 返回空串（绝不冒认说话人）；`_skill_cap` 查不到阶位上限时 `cap=0` 让调用方闭嘴。败因优先级 `reflect > no_mp > dodged > skill_short > skill_cap > controlled > squishy > overmatched`，**`skill_short`（没满级）必须先于 `skill_cap`（已满级）判定**，否则「练得不够火候」和「满级也就这样」两套嘲讽会串台 | `tests/test_battle_text_rich.py` 44 项（`test_praise_sits_right_after_verdict`：判词 +1 行是赞叹、+2 行必须是 💥；败局判词下一行必须直接是 💥、末行必须带「」且含「怪」、`🥀` 全局不许出现；胜局 `🏅` 恰好 1 且末行不许再吹）；`tests/test_doupo_battle_flavor.py` 43 项（惨胜/败局的结算槽必须返回 `[]`，通用梗回潮即红）；`tools/check_battle_text_mutations.py` 23 组变异全红（M17 撤掉嘲讽 / M20 胜局不赞叹 / M21 赞叹挪到战报最前 + 既有 M1~M19 池内长短、越级优先等）；`tmp/battle_report_probe.py` 造 8 种真实形状 res 出整段战报肉眼核对 |
+| **战斗台词必须由「对局诊断」驱动、位置写死、**每维多句且确定性随机**（用户 2026-11-28 二次纠正原话：「你怎么只把我说到的纬度加上了，你要从各个维度去评判啊，各种语句一定要多，随机，懂吗」）：判据全部取自真实 log，**败局 15 维** `reflect > dot_death > controlled > dodged > potion_futile > no_mp > skill_short > skill_cap > one_trick > tier_low > near_win > crit_dry > squishy > fast_loss > overmatched`，**胜局 15 维** `clutch > comeback > crush > burst > puppet > crit_storm > tier_high > skillful > devour > lucky > potion > speed > frugal > clean > plain`。🚨 **可操作的失败点（没气 / 招式没满级 / 满级阶位低 / 一招到底 / 只会低阶）必须排在 `near_win`（就差一口气）之前**——探针实测顺序反了会把用户点名的「多去炼药」顶掉；`skill_short` 必须先于 `skill_cap`（「没练够」vs「练满也就这样」语义相反）。每档 **6 句**，种子混进伤害/暴击/回合/嗑药/出手条数，用 `random.Random(...).randrange()` 取一条；**禁止 `seed % len(pool)`**（等间隔种子会复读），同时保留同场同句（回看/回执一致）。🚨 `analyze` 的 `out["seed"]` 必须在「无出手记录」提前返回**之前**算好，否则空 res 让整条战报 KeyError。位置纪律不变：胜局赞叹紧跟判词行，败局嘲讽只做最后一行、活着的怪开口。| `tests/test_battle_text_rich.py` **45 项**（位置钉死 + 三种真实输法端到端末句落到对应档）；`tests/test_doupo_battle_flavor.py` **110 项**（15+15 维逐个判、每档 120 种子抽满 6 句、跨池长种子仍换句、同场同句、说话人齐全、可操作点优先于「差一口气」）；`tools/check_battle_text_mutations.py` **29/29 全红**（M22 维度被顶 / M23 暴击串消失 / M24 句池缩一句 / M25 退化取模 / M26 冒认说话人 / M27 优先级反转，+ 既有 M1~M21）；脚本跑完自带 `git status --porcelain` 核对源码已恢复 |
 | **跑变异/注错类脚本后必须立刻 `git status --porcelain` 核对源码干净，不能只看 `MUTATION_TOTAL`**（2026-11-28 真实事故：`tools/check_battle_text_mutations.py` 在 M17 锚点命中 0 次时提前 `return 2`，绕过 `finally` 恢复，把 `doupo_text.py` 的 `_quote` 永久改成「我命由我不由天」，导致后续 BASELINE 集体误报「池外台词」、还差点被当成新 bug 去查） | 脚本自身：每处替换走 `try/finally` 恢复 + 运行结束打印 `git status --porcelain`；**人工判据**：`MUTATION_TOTAL == CAUGHT` **且** `git status` 只剩本轮预期改动文件，两条都满足才算通过；一旦发现源码被改坏，用 `git checkout -- <file>` 还原，禁止手工「改回去」（手改容易留半截） |
 
 ---
@@ -3724,3 +3724,49 @@ M17 撤掉败局嘲讽（`_taunt = ""`）→ 红1 · M20 胜局不赞叹（`if F
 - `tests/test_battle_text_rich.py` **44 passed**、`tests/test_doupo_battle_flavor.py` **43 passed**；
 - `test_commands` **141/141**、`test_core` **35/35**、`test_offline_cap` **6/6**；
 - 全量 63 个文件 **707 passed / 20 failed / 2 skipped**，20 条与既有基线**逐条同名**（`alchemy_grade`3 `choice_ttl`1 `code_explain`2 `flame_beast`2 `item_card`2 `puppet_anchor`2 `puppet_guard`2 `sect_p0`1 `sect_p1`2 `skill_effects_land`2 `temp_buff`1）⇒ 零新增红。
+
+
+---
+
+## 变更记录 · 2026-11-28　对局诊断扩到 30 维 + 每档 6 句确定性随机（用户「只把我说的维度加上了」）
+
+### 二次纠正（原话）
+「你怎么只把我说到的纬度加上了，你要从各个维度去评判啊，各种语句一定要多，随机，懂吗」。
+第一版只做了用户**举例**的斗气枯竭 / 斗技没满级 / 满级阶位低，把真实 log 里大量信号浪费了：
+暴击、中毒 DoT、嗑药数、斗技阶位、招式花样、回合数、对面残血、中途血线、斗气余量、吞噬、气运……
+而且每档只有 2~3 句、`seed % len` 轮换，打几场就复读。
+
+### 诊断从 8+8 档扩到 15+15 维
+- 败局：`reflect / dot_death / controlled / dodged / potion_futile / no_mp / skill_short /
+  skill_cap / one_trick / tier_low / near_win / crit_dry / squishy / fast_loss / overmatched`
+- 胜局：`clutch / comeback / crush / burst / puppet / crit_storm / tier_high / skillful /
+  devour / lucky / potion / speed / frugal / clean / plain`
+- 每维 6 句，合计 180 句；招式名/怪名由真实数据填进 `{skill}` / `{foe}`，
+  嘲讽一律「怪名+动作：「…」」，赞叹一律无引号旁白。
+
+### 两个真实踩到的坑（都是探针先发现的，不是靠想象）
+1. **`near_win` 抢走用户点名的档**：`_res(win=False)` 默认 `foe_hp_end=1500`（剩 16.7%），
+   插入 `near_win` 后它排在 `no_mp`/`skill_short`/`skill_cap` 前面，
+   于是「没斗气多炼药」「哪门火候不够」全变成「就差一口气」。
+   ⇒ 顺序改为「**能照着去改的失败点**在前，情绪性的「差一点」在后」。新增 M27 变异钉死。
+2. **空 res 缺 `seed` 键**：`analyze` 在「无出手记录」时提前 return，种子计算在后面，
+   播报无条件读 `out["seed"]` → `KeyError`，整条战报生成失败。
+   ⇒ 种子移到提前返回之前。
+
+### 随机但可复现
+`random.Random((seed ^ 0x9E3779B9) & 0x7FFFFFFF).randrange(len(pool))`。
+种子混进 `rounds/my_dmg/foe_dmg/log长度/暴击数/嗑药数/招式名长度/foe_hp_end/lv/敌人数/击杀数`。
+同场同句（回看与回执必须对得上），不同场次换句；`seed % len` 会让 `s*6` 这种等间隔种子全落同一句，
+已用「跨池长种子仍会换句」断言 + M25 变异钉死。
+
+### 守门
+- `tests/test_battle_text_rich.py` **45**（新增端到端：反伤 / 没气 / 对面残血三种输法，末句必须分别落各自池）
+- `tests/test_doupo_battle_flavor.py` **110**（新增 30 维逐个判 + 每档 120 种子抽满 6 句 +
+  跨池长换句 + 同场一致 + 说话人 + 优先级；脚本式，手机无 pytest 也能跑）
+- `tools/check_battle_text_mutations.py` **29/29 全红**（新增 M22~M27）；
+  变异脚本现在同时跑 pytest 与脚本式守门——只跑 pytest 的话 `battle_verdict.py` 的变异根本没人拦；
+  末尾自带 `git status --porcelain` 核对源码恢复。
+- 回归 `test_commands` 141 / `test_core` 35 / `test_offline_cap` 6；
+  全量 63 文件 **708 passed / 20 failed**，20 条与既有基线逐条同名 ⇒ 零新增红。
+- 🚨 裸跑脚本式测试会 import core → 包内建 `puppet_data.sqlite`，测试文件开头必须先
+  `os.environ.setdefault("DOUPO_DATA_PATH", <ROOT>/tmp/_probe_data/doupo.json)`。

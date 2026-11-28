@@ -32,6 +32,7 @@ if not getattr(nonebot, "_already_inited", False):
         pass
 
 from src.plugins.doupo import commands, config as cfg, core  # noqa: E402
+from src.plugins.doupo import battle_verdict as vd  # noqa: E402
 from src.plugins.doupo import doupo_text as txt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -460,6 +461,39 @@ def test_defeat_has_mock_then_encourage():
     assert "🥀" not in "\n".join(l), "旧的通用嘲讽行还在"
     rally = [i for i, x in enumerate(l) if x.startswith("🩹")]
     assert len(rally) == 1 and rally[0] < len(l) - 1, "鼓励行不在嘲讽之前：%s" % l
+def test_taunt_switches_with_real_failure_point():
+    """用户「从各个维度去评判」：三种真实输法，末句嘲讽必须分别落到对应档。
+
+    守的是端到端：res → analyze → 战报最后一行。只验内部 case 名不算——
+    诊断对了但没接进播报，玩家照样看不到。
+    """
+    def _one(log, **kw):
+        r = _res(n=1, win=False, rounds=6)
+        r["foe_hp_max"] = 1000
+        r["foe_hp_end"] = 1000
+        r["detail"][0]["log"] = log
+        r.update(kw)
+        return r
+
+    cases = (
+        ("reflect", _one([{"kind": "反伤", "move": "反伤", "dmg": 900,
+                          "taken": True, "reflect": True}])),
+        ("no_mp", _one([{"kind": "拳脚", "move": "普攻", "dmg": 100, "skill": False}
+                        for _ in range(5)], mp_end=0, exhausted=True)),
+        ("near_win", _one([{"kind": "拳脚", "move": "普攻", "dmg": 200,
+                            "skill": False}], foe_hp_end=100, mp_end=60,
+                          exhausted=False)),
+    )
+    tails = []
+    for case, res in cases:
+        out = _render(res)
+        tail = [x.strip() for x in out.split("\n") if x.strip()][-1]
+        allowed = {vd.taunt(case, s, foe="怪0") for s in range(200)}
+        assert tail in allowed, "失败点[%s]的嘲讽跑偏了：%s" % (case, tail)
+        tails.append(tail)
+    assert len(set(tails)) == len(cases), "三种输法说了同一句：%s" % tails
+
+
 def test_quote_only_from_verified_pool():
     """点睛台词必须是 CHAPTER_QUOTE 里的原文，或回落无引号的旁白——不许现编。"""
     allowed = {pair[0] for pool in txt.CHAPTER_QUOTE.values() for pair in pool}

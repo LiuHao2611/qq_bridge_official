@@ -40,12 +40,20 @@ def _stub_nonebot():
 
 _stub_nonebot()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 裸跑本脚本会 import core → cfg.DB_PATH 默认落「包内 data/」，在手机上会建出
+# puppet_data.sqlite 让 phone_deploy 预检 FAIL。先钉到 tmp/，绝不污染生产包。
+_PROBE_DATA = os.path.join(ROOT, "tmp", "_probe_data")
+os.makedirs(_PROBE_DATA, exist_ok=True)
+os.environ.setdefault("DOUPO_DATA_PATH", os.path.join(_PROBE_DATA, "doupo.json"))
+os.environ.setdefault("XIUXIAN_DATA_PATH", os.path.join(_PROBE_DATA, "xiuxian.json"))
 for _p in (ROOT, os.path.join(ROOT, "src", "plugins")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 from doupo import battle_flavor as bf  # noqa: E402
+from doupo import battle_verdict as vd  # noqa: E402
 from doupo import config as cfg  # noqa: E402
+from doupo import core  # noqa: E402
 
 _RES: list[tuple[str, bool, str]] = []
 EVIL = {"桀桀桀。", "猖狂。", "此子断不可留，否则日后必成大患！",
@@ -159,6 +167,147 @@ all_flavors = {
     "别急，我在卡点。", "无奈地摇了摇头。", "斗宗强者，恐怖如斯。", "半圣之下，皆为蝼蚁。",
 }
 check("落地句池>=15句(用户嫌少后的扩充)", len(all_flavors) >= 15, str(len(all_flavors)))
+
+
+# ---- 10. 对局诊断：15 个败因 + 15 个胜因，全部由真实 log 判出 ----
+# 用户 2026-11-28 二次纠正：「你怎么只把我说到的纬度加上了，你要从各个维度去评判啊，
+# 各种语句一定要多，随机」。这里守的是玩家感受得到的两件事：
+#   ① 一场战斗的输入变了，怪/旁白说出的失败点必须跟着变（不是通用句）；
+#   ② 同档多句、且不同场次会换句（不是每次一句复读）。
+
+def _hit(**kw):
+    e = {"dmg": 100, "kind": "拳脚", "move": "拳脚", "skill": False,
+         "tier": "普通", "crit": False}
+    e.update(kw)
+    return e
+
+
+def _foe(**kw):
+    e = {"dmg": 100, "kind": "兽击", "move": "兽击", "taken": True}
+    e.update(kw)
+    return e
+
+
+def _diag(win=False, ratio=0.8, hp_max=10000, **kw):
+    p = core.create_player("vd-probe", "诊断探针", "g1")
+    p["lv"] = int(kw.pop("hero_lv", 29))
+    p["skills"] = dict(kw.pop("player_skills", None) or {})
+    pup = kw.pop("pup", None)
+    extra = kw.pop("extra", None)
+    rounds = int(kw.pop("rounds", 6))
+    foe_hp = int(kw.pop("foe_hp", 1000))
+    foe_end = int(kw.pop("foe_end", 1000))
+    hp_end = int(kw.pop("hp_end", 1000))
+    mp_end = int(kw.pop("mp", 60))
+    taken = int(kw.pop("taken", 100))
+    foe_lv = int(kw.pop("lv", 29))
+    atk = kw.pop("atk", None) or []
+    foes = kw.pop("foes", None) or []
+    log = list(atk) + list(foes) + ([_hit(puppet=True, dmg=5000, move="傀儡击")]
+                                    if pup else [])
+    res = {"win": win, "rounds": rounds, "taken": taken,
+           "foe_hp_max": foe_hp, "foe_hp_end": foe_end,
+           "hp_end": hp_end, "mp_end": mp_end, "exhausted": mp_end <= 0,
+           "enemy_count": 1,
+           "detail": [{"index": 0, "name": "岩蛇", "kind": "魔兽", "lv": foe_lv,
+                       "win": win, "rounds": rounds, "taken": taken, "log": log}]}
+    if "pills" in kw:
+        res["auto_pills"] = kw.pop("pills")
+    if extra:
+        res.update(extra)
+    return vd.analyze(res, p, lv=p["lv"], hp_ratio=ratio, hp_max=hp_max)
+
+
+DEFEAT_DIMS = (
+    ("反伤自毙", "reflect", dict(atk=[_hit(dmg=300)],
+                                foes=[_foe(dmg=900, kind="反伤", reflect=True)])),
+    ("毒磨致死", "dot_death", dict(atk=[_hit()],
+                                foes=[_foe(dmg=900, kind="中毒", dot=True)])),
+    ("被控到死", "controlled", dict(atk=[_hit()],
+                                foes=[_foe(), {"kind": "被控", "dmg": 0},
+                                      {"kind": "被控", "dmg": 0}])),
+    ("打不中", "dodged", dict(atk=[_hit(evaded=True) for _ in range(4)])),
+    ("对面残血", "near_win", dict(atk=[_hit(dmg=200)], foe_end=100)),
+    ("药白吃了", "potion_futile", dict(atk=[_hit()], pills={"hp": 2, "mp": 0})),
+    ("斗气枯竭", "no_mp", dict(atk=[_hit() for _ in range(5)], mp=0)),
+    ("斗技没满级", "skill_short", dict(
+        atk=[_hit(dmg=120, skill=True, move="碎石掌", tier="黄阶低级") for _ in range(4)],
+        player_skills={"碎石掌": 3})),
+    ("满级阶位低", "skill_cap", dict(
+        atk=[_hit(dmg=120, skill=True, move="碎石掌", tier="黄阶低级") for _ in range(4)],
+        player_skills={"碎石掌": 5})),
+    # 这两档用「不在斗技图鉴里」的招名：否则 _skill_cap 必然查到上限，
+    # skill_short 会先命中（那也是对的，只是本例要单独验「一招到底/只会低阶」）。
+    ("一招到底", "one_trick", dict(
+        atk=[_hit(skill=True, move="乱击", tier="黄阶低级") for _ in range(4)])),
+    ("只会低阶", "tier_low", dict(atk=[
+        _hit(skill=True, move="乱击", tier="黄阶低级"),
+        _hit(skill=True, move="乱斩", tier="玄阶低级"),
+        _hit(skill=True, move="乱击", tier="黄阶低级")])),
+    ("零暴击", "crit_dry", dict(atk=[_hit(dmg=400) for _ in range(5)])),
+    ("身板太脆", "squishy", dict(atk=[_hit()], foes=[_foe(dmg=13000)])),
+    ("速败", "fast_loss", dict(atk=[_hit()], rounds=2)),
+    ("硬实力差", "overmatched", dict(atk=[_hit(dmg=100)], rounds=8)),
+)
+
+WIN_DIMS = (
+    ("残血翻盘", "clutch", dict(ratio=0.1, atk=[_hit()])),
+    ("中途跌落再翻", "comeback", dict(atk=[_hit(hp_after=200), _hit(hp_after=9000)])),
+    ("越级斩", "crush", dict(lv=33, atk=[_hit()])),
+    ("一击定局", "burst", dict(atk=[_hit(dmg=600)])),
+    ("傀儡带飞", "puppet", dict(atk=[_hit(dmg=100)], pup=True)),
+    ("暴击串", "crit_storm", dict(atk=[_hit(crit=True) for _ in range(3)])),
+    ("高阶压场", "tier_high", dict(
+        atk=[_hit(skill=True, move="劈山掌", tier="地阶低级") for _ in range(3)])),
+    ("多招轮转", "skillful", dict(atk=[
+        _hit(skill=True, move="碎石掌", tier="黄阶低级"),
+        _hit(skill=True, move="裂山拳", tier="玄阶低级"),
+        _hit(skill=True, move="崩山击", tier="黄阶中级")])),
+    ("吞噬得手", "devour", dict(atk=[_hit()], extra={"devour": True})),
+    ("气运加身", "lucky", dict(atk=[_hit()], extra={"fortune": True})),
+    ("丹药续航", "potion", dict(atk=[_hit()], pills={"hp": 2, "mp": 0})),
+    ("速胜", "speed", dict(rounds=3, atk=[_hit()])),
+    ("省气取胜", "frugal", dict(
+        atk=[_hit(skill=True, move="碎石掌", tier="黄阶低级", mp_cost=10)], mp=9000)),
+    ("无伤", "clean", dict(taken=0, foes=[], atk=[_hit()])),
+    ("平胜", "plain", dict(rounds=8, taken=2, atk=[_hit(dmg=100)])),
+)
+
+for label, want, kw in DEFEAT_DIMS:
+    got = _diag(win=False, **kw)["case"]
+    check("败因诊断[%s]" % label, got == want, "want=%s got=%s" % (want, got))
+for label, want, kw in WIN_DIMS:
+    got = _diag(win=True, **kw)["case"]
+    check("胜因诊断[%s]" % label, got == want, "want=%s got=%s" % (want, got))
+
+# 台词池：玩家感受得到的是「连打好几场不重样」，用 120 个不同种子实际抽，
+# 不去读内部常量——池子缩水/轮换退化都会让这里变红。
+for label, want, _kw in DEFEAT_DIMS:
+    seen = {vd.taunt(want, s, foe="岩蛇", skill="碎石掌") for s in range(120)}
+    check("句池>=6且轮换[败·%s]" % label, len(seen) >= 6, "distinct=%d" % len(seen))
+for label, want, _kw in WIN_DIMS:
+    seen = {vd.praise(want, s) for s in range(120)}
+    check("句池>=6且轮换[胜·%s]" % label, len(seen) >= 6, "distinct=%d" % len(seen))
+
+# 「seed % len(pool)」会让 s*6 这种等间隔种子全落同一句；真随机不会。
+check("跨池长种子仍会换句(防取模退化)",
+      len({vd.praise("plain", s * 6) for s in range(10)}) >= 4)
+# 优先级：用户点名的「没气 / 招式没练够」是能照着改的点，「差一口气」只是情绪。
+check("可操作失败点优先于差一口气",
+      _diag(win=False, atk=[_hit() for _ in range(5)], mp=0, foe_end=100)["case"] == "no_mp")
+check("同一场两根同一句(回看一致)",
+      vd.taunt("skill_short", 42, foe="岩蛇", skill="碎石掌") ==
+      vd.taunt("skill_short", 42, foe="岩蛇", skill="碎石掌"))
+check("不同场次会换句",
+      len({vd.praise("clutch", s) for s in range(20)}) >= 5)
+check("嘲讽必须带说话人", vd.taunt("overmatched", 3, foe="") == "")
+check("败局句全部带引号+说话人", all(
+    vd.taunt(want, s, foe="岩蛇", skill="碎石掌").startswith("岩蛇")
+    and "「" in vd.taunt(want, s, foe="岩蛇", skill="碎石掌")
+    for _label, want, _kw in DEFEAT_DIMS for s in (0, 7, 31)))
+check("胜局赞叹不带引号(不冒充角色)", all(
+    "「" not in vd.praise(c, s) for c in ("clutch", "crush", "plain")
+    for s in range(20)))
 
 
 def main():
