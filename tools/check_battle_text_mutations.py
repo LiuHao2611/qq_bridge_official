@@ -171,7 +171,8 @@ MUTATIONS = [
     dict(
         mid="M17 败局没有嘲讽",
         path=CMD,
-        old=['        _taunt = _verdict.taunt(_vd["case"], _vd["seed"], foe=_vd["foe"], skill=_vd["skill"])'],
+        old=['        _taunt = _verdict.taunt(_vd["case"], _vd["seed"], foe=_vd["foe"],',
+             '                                skill=_vd["skill"], beast=_vd["foe_beast"])'],
         new=['        _taunt = ""'],
         why="败局只有鼓励没有嘲讽，情绪只扬不抑（2026-11-28 起嘲讽由活着的怪开口）",
     ),
@@ -256,8 +257,8 @@ MUTATIONS = [
     dict(
         mid="M26 嘲讽冒认说话人",
         path=VERDICT,
-        old=['    return tpl.replace("{foe}", foe).replace("{skill}", str(skill or ""))'],
-        new=['    return tpl.replace("{foe}", "它").replace("{skill}", str(skill or ""))'],
+        old=['    return f"{foe}{action}：「{spoken}」"'],
+        new=['    return f"它{action}：「{spoken}」"'],
         why="怪名被替换成「它」，最后一行变成无主旁白",
     ),
     dict(
@@ -266,6 +267,28 @@ MUTATIONS = [
         old=['        elif plain_ratio >= _PLAIN_RATIO_DRY and low_mp:'],
         new=['        elif False:'],
         why="「没斗气多炼药」被泛化的「就差一点」顶掉，玩家不知道该改什么",
+    ),
+    # ---- 第四轮：小说口吻（2026-11-28 用户「太 AI 了，没有厮杀的氛围」）----
+    dict(
+        mid="M28 骂阵塞回战后点评",
+        path=VERDICT,
+        old=['        "你那手{skill}，火候还差得远！",'],
+        new=['        "练满是好事，可惜练的是一门天生的下风招。",'],
+        why="用户点名「完全不能用」的点评味台词回到敌人嘴里",
+    ),
+    dict(
+        mid="M29 旁白退回战报评语",
+        path=VERDICT,
+        old=['        "血顺着指尖往下滴，人却没退。",'],
+        new=['        "他不像只会一招的人——每一手都有后手。",'],
+        why="判词后的赞叹变成旁观者总结，不是厮杀现场的画面",
+    ),
+    dict(
+        mid="M30 魔兽套人型口吻",
+        path=VERDICT,
+        old=['    "龇牙低吼", "喉咙里滚出一声闷哼", "吐着信子", "甩了甩尾巴",'],
+        new=['    "桀桀怪笑", "喉咙里滚出一声闷哼", "吐着信子", "甩了甩尾巴",'],
+        why="让岩蛇桀桀怪笑——魔兽不会像魂殿那样说话，破坏原著感",
     ),
 ]
 

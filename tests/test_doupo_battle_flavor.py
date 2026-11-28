@@ -310,6 +310,43 @@ check("胜局赞叹不带引号(不冒充角色)", all(
     for s in range(20)))
 
 
+# ---- 11. 小说口吻闸（2026-11-28 用户「太 AI 了，完全没有厮杀的氛围」）----
+# 用户的批评针对的是**战后点评式**：「练满是好事，可惜练的是一门下风招」
+# 「这是真本事」「每一手都有后手」。小说里敌人当场骂阵是「桀桀，我魂殿可有的是
+# 手段收拾你」「我就不信，你这乌龟壳还真的打不烂！」——短、狠、带杀气。
+# 真源：boss_taunts.py / config.BREAK_BOSSES / doupo_text.CHAPTER_QUOTE。
+_AI_SMELL = (
+    "下风招", "练满是好事", "真本事", "应验了", "格局", "也不是不努力",
+    "上限就在那儿", "这道理", "根基", "还没到的那个境界", "不值钱",
+    "几斤几两", "重修了", "使不出来", "每一手都有后手", "一板一眼",
+    "天花乱坠", "省着用也能赢", "这才是", "说到底", "场面从一开始",
+)
+_all_praise = set()
+_all_speech = set()
+for _c, _s in list(vd._PRAISE.items()) + list(vd._SPEECH.items()):
+    for _line in _s:
+        (_all_praise if _c in vd._PRAISE else _all_speech).add(_line)
+
+check("台词池无战后点评味(旁白)",
+      not [x for x in _all_praise for w in _AI_SMELL if w in x],
+      str([x for x in _all_praise for w in _AI_SMELL if w in x][:2]))
+check("台词池无战后点评味(骂阵)",
+      not [x for x in _all_speech for w in _AI_SMELL if w in x],
+      str([x for x in _all_speech for w in _AI_SMELL if w in x][:2]))
+check("骂阵是短句(<=24字)", max(len(x) for x in _all_speech) <= 24,
+      "max=%d" % max(len(x) for x in _all_speech))
+check("旁白是画面不是长评语(<=28字)", max(len(x) for x in _all_praise) <= 28,
+      "max=%d" % max(len(x) for x in _all_praise))
+check("魔兽不桀桀/负手/抽刀", all(
+    not any(w in vd.taunt("overmatched", s, foe="岩蛇", beast=True)
+            for w in ("桀桀", "负手", "抽刀", "冷笑"))
+    for s in range(120)))
+check("人型不龇牙/吐信/獠牙", all(
+    not any(w in vd.taunt("overmatched", s, foe="魂殿摘星老鬼", beast=False)
+            for w in ("龇牙", "吐着信子", "獠牙", "竖瞳"))
+    for s in range(120)))
+
+
 def main():
     for name, ok, detail in _RES:
         print(("PASS " if ok else "FAIL ") + name + ("  " + detail if detail else ""))

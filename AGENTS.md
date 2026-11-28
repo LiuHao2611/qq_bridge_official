@@ -123,6 +123,7 @@
 | **玩法细则卡 / 成傀卡必须气泡包裹，不许纯文本行平铺**（用户 2026-11-22「纯文本较多、信息密集的卡片按当前思路优化」）。盘点 13 张斗破模板：8 张已气泡/分层（人物/技能/宗门/名录/战斗/遗迹/丹方/傀儡）、`doupo_style` 是公共模块、menu/list 已结构分层（口令大字/右侧状态/等级条，不属纯文本墙）——真正纯文本平铺的只有 2 张，已改：① `doupo_help.py` 每【】组一个圆角气泡（组名靛紫粗体+竖条+分割线，组内要点折行），`_layout` 按组聚合算气泡高，2074→2474px；② `doupo_craft.py` 旧版 `return _battle.build()` 因 data 缺 rich 字段落进 **legacy 纯文本骨架**（隐藏技术债），改独立分组气泡+序号圆标+subtitle 强调条。两张都走 `_pal()` 吃新配色、boxes 自检 0 | `tmp/check_help_boxes.py`（11 组 62 盒 800×2474 PROBLEMS 0）、`tmp/check_craft_boxes.py`（3 组 18 盒 800×664 PROBLEMS 0）+ 真出图肉眼核对；`tests/test_doupo_puppet_craft_card.py::test_manifest` 静态断言改验独立气泡骨架（`def _plan`/`c.ellipse`/`_pal(t)`，反证退回 `_battle.build` 即红）；craft `TOTAL FAILED=0`；全量 40 测试文件 0 失败。`雷淬纯度 0%` 后的 `□□□□` 是 `puppet_core.dye_bar` 的 `■□`(U+25A0/25A1) 空心态，字体有真字形，非豆腐框 |
 | **每个玩家可见回包携带的按钮，唯一目的是「让玩家立刻能做下一步」，禁止默认塞主菜单、禁止挂与本次结果无关的按钮**（用户 2026-11-28 立永久纪律原话：「每个反馈给玩家可见的信息携带的按钮目的都是方便玩家操作，明白了吗」）：判据三条——① 点它能推进当前状态（入塔 → 结算 → 出塔），不是复述播报里刚做完的事；② 该结果不该出现的按钮一律不挂（塔中不挂「战斗」、塔外不挂「出塔」，没火能时「修炼」点了也只会再失败一次）；③ 按钮文字必须与播报里出现的口令逐字一致（播报写「发「修炼」结算」按钮就得是「修炼」，不许换成「查看」「继续」）。实现红线：`doupo_buttons.CARD_ACTIONS[card_key]` 是唯一真源，**同一口令的不同结果必须走状态化按钮组**——`commands.cmd_furnace_enter_state` 返回 `(播报文本, state_key)`，`button_dispatch` 用 `send_key = state_key or card_key` 发键，禁止一个口令只挂一组死按钮、禁止在 handler 里临时拼按钮数组。现行塔类五组：`cult_text`(修炼/出塔/火能) · `tower_blocked`(战斗/火能) · `tower_settle_up`(突破/修炼/出塔) · `tower_out_text`(修炼/火能/战斗) · `tower_energy_text`(修炼/换卡/战斗) | `tests/test_doupo_buttons.py` 31 项（按钮族基线 + 禁主菜单/禁自身 + dispatch plan 一致 + 入站首词派生一致 + 卡片集合一致）；`doupo/test_tower_cultivate.py` 第⑤节用 `ast` 直接读 `CARD_ACTIONS` 字面量做**第二套独立基准**（不走运行时 import，避免同一份真源自证），变异 3 组全红：按钮回退旧组 / 没火能挂错组 / 修为满不给突破组 |
 | **战斗台词必须由「对局诊断」驱动、位置写死、**每维多句且确定性随机**（用户 2026-11-28 二次纠正原话：「你怎么只把我说到的纬度加上了，你要从各个维度去评判啊，各种语句一定要多，随机，懂吗」）：判据全部取自真实 log，**败局 15 维** `reflect > dot_death > controlled > dodged > potion_futile > no_mp > skill_short > skill_cap > one_trick > tier_low > near_win > crit_dry > squishy > fast_loss > overmatched`，**胜局 15 维** `clutch > comeback > crush > burst > puppet > crit_storm > tier_high > skillful > devour > lucky > potion > speed > frugal > clean > plain`。🚨 **可操作的失败点（没气 / 招式没满级 / 满级阶位低 / 一招到底 / 只会低阶）必须排在 `near_win`（就差一口气）之前**——探针实测顺序反了会把用户点名的「多去炼药」顶掉；`skill_short` 必须先于 `skill_cap`（「没练够」vs「练满也就这样」语义相反）。每档 **6 句**，种子混进伤害/暴击/回合/嗑药/出手条数，用 `random.Random(...).randrange()` 取一条；**禁止 `seed % len(pool)`**（等间隔种子会复读），同时保留同场同句（回看/回执一致）。🚨 `analyze` 的 `out["seed"]` 必须在「无出手记录」提前返回**之前**算好，否则空 res 让整条战报 KeyError。位置纪律不变：胜局赞叹紧跟判词行，败局嘲讽只做最后一行、活着的怪开口。| `tests/test_battle_text_rich.py` **45 项**（位置钉死 + 三种真实输法端到端末句落到对应档）；`tests/test_doupo_battle_flavor.py` **110 项**（15+15 维逐个判、每档 120 种子抽满 6 句、跨池长种子仍换句、同场同句、说话人齐全、可操作点优先于「差一口气」）；`tools/check_battle_text_mutations.py` **29/29 全红**（M22 维度被顶 / M23 暴击串消失 / M24 句池缩一句 / M25 退化取模 / M26 冒认说话人 / M27 优先级反转，+ 既有 M1~M21）；脚本跑完自带 `git status --porcelain` 核对源码已恢复 |
+| **战斗台词必须是小说里「当场说的话」，绝不是战后点评**（用户 2026-11-28 第三次纠正原话：「你这个台词太 AI 了，完全没有厮杀的氛围，你去学学小说里怎么说的吧，这个完全不能用」）。风格真源 = 项目里已逐字核对的 `boss_taunts.py` / `config.BREAK_BOSSES` / `doupo_text.CHAPTER_QUOTE` / `docs/战斗BOSS体系重做_原著考据_2026-11-20.md`：「桀桀，我魂殿可有的是手段收拾你」「我就不信，你这乌龟壳还真的打不烂！」「在绝对的实力面前，这些都没有用」——**短句、当场、带杀气、带身份**。🚨 禁写「练满是好事，可惜练的是一门下风招」「他不像只会一招的人——每一手都有后手」「这就是真本事」「不是你不努力，是这招上限就在那儿」这类旁观者评语，那不是对白，是战报总结。硬约束：骂阵 ≤24 字，旁白 ≤28 字且只写画面/反应不写道理；魔兽用龇牙低吼/眯起竖瞳/鼻翼翕动，人型才用桀桀怪笑/负手/抽刀——**岩蛇绝不许「负手而立」**。台词池结构：`_SPEECH[case]` 只存话，动作按 `analyze()["foe_beast"]` 从 `_BEAST_ACTIONS`/`_HUMAN_ACTIONS` 取，再由 `taunt()` 拼成「怪名+动作：「话」」。 | `tests/test_doupo_battle_flavor.py` **116 项**含风格闸：禁战后点评短语表命中即红、骂阵 ≤24 字、旁白 ≤28 字、魔兽不桀桀/负手/抽刀、人型不龇牙/吐信；`tools/check_battle_text_mutations.py` **32/32 全红**，其中 M28 骂阵塞回「下风招」、M29 旁白退回「每一手都有后手」、M30 岩蛇套「桀桀怪笑」，三条必须全部变红才算守住 |
 | **跑变异/注错类脚本后必须立刻 `git status --porcelain` 核对源码干净，不能只看 `MUTATION_TOTAL`**（2026-11-28 真实事故：`tools/check_battle_text_mutations.py` 在 M17 锚点命中 0 次时提前 `return 2`，绕过 `finally` 恢复，把 `doupo_text.py` 的 `_quote` 永久改成「我命由我不由天」，导致后续 BASELINE 集体误报「池外台词」、还差点被当成新 bug 去查） | 脚本自身：每处替换走 `try/finally` 恢复 + 运行结束打印 `git status --porcelain`；**人工判据**：`MUTATION_TOTAL == CAUGHT` **且** `git status` 只剩本轮预期改动文件，两条都满足才算通过；一旦发现源码被改坏，用 `git checkout -- <file>` 还原，禁止手工「改回去」（手改容易留半截） |
 
 ---
@@ -3770,3 +3771,55 @@ M17 撤掉败局嘲讽（`_taunt = ""`）→ 红1 · M20 胜局不赞叹（`if F
   全量 63 文件 **708 passed / 20 failed**，20 条与既有基线逐条同名 ⇒ 零新增红。
 - 🚨 裸跑脚本式测试会 import core → 包内建 `puppet_data.sqlite`，测试文件开头必须先
   `os.environ.setdefault("DOUPO_DATA_PATH", <ROOT>/tmp/_probe_data/doupo.json)`。
+
+
+---
+
+## 变更记录 · 2026-11-28　战斗台词改小说口吻（用户「太 AI 了，完全没有厮杀的氛围」）
+
+### 错在哪（用户第三次纠正）
+前一轮我把 30 维诊断和 180 句都做出来了，但写的是**战后点评**：
+「练满是好事，可惜练的是一门天生的下风招」「他不像只会一招的人——每一手都有后手」
+「阶位压人，这话今天应验了」「会炼丹的人，连命都比别人多几条」。
+这是旁观者写战报，不是敌人在厮杀现场骂阵。更荒唐的是让**岩蛇负手而立**——项目里
+`boss_taunts.py` 早就写明「魔兽不会开口，负手而立是人的动作，硬编破坏原著感」，
+我照着 AI 通用写法把它覆盖了。
+
+### 风格真源（不是我自己感觉到）
+项目已有逐字核对过的原著语料，直接拿来对口吻：
+- `boss_taunts.py`（SUPPLEMENTAL 每条带章节出处）
+- `config.BREAK_BOSSES[].quotes` / `intro`
+- `doupo_text.CHAPTER_QUOTE`
+- `docs/战斗BOSS体系重做_原著考据_2026-11-20.md`
+
+原著里人物说话是：「桀桀，我魂殿可有的是手段收拾你」「在绝对的实力面前，这些都没有用」
+「我就不信，你这乌龟壳还真的打不烂！」「既然你们找死，那本王就成全你们，一群蝼蚁！」
+「你才是大鱼」「生死，各安天命」「这笔账，不得不算」。
+共同点：**短、当场、带杀气、说话人带着自己的身份**，没有一句是战后总结。
+
+### 改法
+- 台词池拆成 `_SPEECH[case]`（只存说的话）+ 动作池：
+  `_BEAST_ACTIONS`（龇牙低吼/喉咙里滚出一声闷哼/吐着信子/甩了甩尾巴/眯起竖瞳/咧开獠牙…）、
+  `_HUMAN_ACTIONS`（冷笑一声/桀桀怪笑/嗤笑/阴恻恻地笑/冷哼/缓缓抽刀/负手而立…）。
+  `analyze()` 按对手 kind + 名字查 `config.MONSTERS` 得出 `foe_beast`，`taunt()` 据此选动作。
+- 胜局旁白改成**画面/反应**：「四下里的呼吸声都停了。」「那一拳砸实，事情就结束了。」
+  「对面连他的衣角都没沾到。」——不写道理、不写「这才是真本事」。
+- 硬约束：骂阵 ≤24 字、旁白 ≤28 字。
+- 30 维诊断、位置纪律（赞叹紧跟判词 / 嘲讽末行怪开口）、确定性随机全部不变。
+
+### 真回包对比
+```
+败局·没气     岩蛇猛地扑前半步：「就这点家底，回去多炼几炉丹！」
+败局·火候不够  岩蛇喉咙里滚出一声闷哼：「你把碎石掌当试探，我没把你当对手！」
+败局·满级     岩蛇喉咙里滚出一声闷哼：「老子就吃你这一招，有何稀奇？」
+败局·毒磨     岩蛇眯起竖瞳：「毒替我拿了你的命！」
+败局·速败     岩蛇鼻翼翕动：「这就倒了？老子还没热身！」
+```
+
+### 守门
+- `tests/test_doupo_battle_flavor.py` **116 项**：新增风格闸——禁战后点评短语表、
+  骂阵/旁白字数上限、兽类不桀桀/负手/抽刀、人型不龇牙/吐信。
+- `tools/check_battle_text_mutations.py` **32/32 全红**：新增 M28 塞回「下风招」、
+  M29 退回「每一手都有后手」、M30 岩蛇套「桀桀怪笑」，三条都变红。
+- 全量 63 文件 **708 passed / 20 failed**，20 红逐条同名 ⇒ 零新增红；
+  `test_commands` 141 / `test_core` 35 / `test_offline_cap` 6。
