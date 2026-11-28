@@ -279,7 +279,7 @@ MUTATIONS = [
     dict(
         mid="M29 旁白退回战报评语",
         path=VERDICT,
-        old=['        "血顺着指尖往下滴，人却没退。",'],
+        old=['        "血染红了衣襟，他还在笑。",'],
         new=['        "他不像只会一招的人——每一手都有后手。",'],
         why="判词后的赞叹变成旁观者总结，不是厮杀现场的画面",
     ),
@@ -289,6 +289,33 @@ MUTATIONS = [
         old=['    "龇牙低吼", "喉咙里滚出一声闷哼", "吐着信子", "甩了甩尾巴",'],
         new=['    "桀桀怪笑", "喉咙里滚出一声闷哼", "吐着信子", "甩了甩尾巴",'],
         why="让岩蛇桀桀怪笑——魔兽不会像魂殿那样说话，破坏原著感",
+    ),
+    # ---- 第五轮：天蚕土豆文风正向覆盖（用户「好好去学学习文笔风格」）----
+    dict(
+        mid="M31 人型反派丢掉身份称呼",
+        path=VERDICT,
+        old=['    who = "你" if beast else "小子"'],
+        new=['    who = "你"'],
+        why="鹜护法那种「小子，乖乖的……本护法……」的身份感没了，人人一个口吻",
+    ),
+    dict(
+        mid="M32 旁白丢掉微表情白描",
+        path=VERDICT,
+        old=['        "他嘴角溢血，脚下却没退半步。",',
+             '        "四周的呼吸声，齐齐一滞。",'],
+        new=['        "他没有退。",',
+             '        "大家都愣住了。",'],
+        why="土豆式「嘴角溢血」「呼吸一滞」的画面换成抽象叙述，文风退回 AI 总结",
+    ),
+    dict(
+        mid="M33 人型反派按名字误判成兽",
+        path=VERDICT,
+        old=['            foe_kind = str((same or {}).get("kind") or "")',
+             '        foe_beast = foe_kind == "魔兽"'],
+        new=['            foe_kind = str((same or {}).get("kind") or "")',
+             '        foe_beast = foe_kind == "魔兽" or any(',
+             '            str(m.get("name") or "") == _foe_name(res) for m in _cfg.MONSTERS)'],
+        why="魂殿鹜护法也在 MONSTERS 表里，只按名字匹配会让它「吐着信子」",
     ),
 ]
 

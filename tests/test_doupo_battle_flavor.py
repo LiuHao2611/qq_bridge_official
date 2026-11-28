@@ -347,6 +347,47 @@ check("人型不龇牙/吐信/獠牙", all(
     for s in range(120)))
 
 
+# ---- 12. 土豆文风正向覆盖（用户「好好去学学习天蚕土豆的文笔风格」）----
+# 光禁掉 AI 味不够——还得验「学到的东西真的在句子里」。原文依据见
+# AGENTS.md 变更记录：鹜护法「不自量力，滚开!」「小子，乖乖的……本护法……」、
+# 魂天帝「成王败寇」「死吧!」、旁白「眼瞳一缩」「嘴角掀起一抹冷笑」。
+_POTATO_FIGHT_WORDS = (
+    "哼", "桀桀", "不自量力", "找死", "蝼蚁", "滚", "送死", "如何",
+    "可笑", "不过如此", "不堪一击", "可惜", "捅", "陪葬", "看穿",
+)
+_POTATO_NARRATION_WORDS = (
+    "眼瞳", "面色", "嘴角", "冷笑", "一抹", "惊", "骇然", "血花",
+    "残影", "呼吸", "衣襟", "尘土", "如湖水", "失声",
+)
+check("骂阵有土豆式狠话覆盖",
+      sum(1 for x in _all_speech if any(w in x for w in _POTATO_FIGHT_WORDS)) >= 30,
+      "hits=%d" % sum(1 for x in _all_speech
+                      if any(w in x for w in _POTATO_FIGHT_WORDS)))
+check("旁白有微表情白描覆盖",
+      sum(1 for x in _all_praise if any(w in x for w in _POTATO_NARRATION_WORDS)) >= 18,
+      "hits=%d" % sum(1 for x in _all_praise
+                      if any(w in x for w in _POTATO_NARRATION_WORDS)))
+def _beast_of(name, kind):
+    r = {"win": False, "rounds": 6, "taken": 100,
+         "foe_hp_max": 1000, "foe_hp_end": 1000,
+         "detail": [{"name": name, "kind": kind, "lv": 30, "log": [
+             {"kind": "拳脚", "move": "普攻", "dmg": 100, "skill": False}]}]}
+    return vd.analyze(r, {}, lv=29, hp_ratio=0.8, hp_max=10000)["foe_beast"]
+
+
+# 🚨 魂殿鹜护法这类人型反派也在 MONSTERS 表里，只按名字匹配会判成兽类，
+#    让它「吐着信子」说话。必须先看 detail 的 kind。
+check("魂殿护法不判成魔兽", _beast_of("魂殿鹜护法", "魂殿") is False)
+check("岩蛇仍判成魔兽", _beast_of("岩蛇", "魔兽") is True)
+
+check("人型反派喊「小子」不是「你」",
+      any("小子" in vd.taunt("skill_short", s, foe="魂殿鹜护法", beast=False)
+          for s in range(120)))
+check("兽类不喊「小子」", all(
+    "小子" not in vd.taunt("skill_short", s, foe="岩蛇", beast=True)
+    for s in range(120)))
+
+
 def main():
     for name, ok, detail in _RES:
         print(("PASS " if ok else "FAIL ") + name + ("  " + detail if detail else ""))
