@@ -39,4 +39,5 @@
 - **修炼=入塔**（11-28 第二次纠正）：`cult` handler（修炼/静修/打坐）+ `button_dispatch`「修炼」都调 `cmd_furnace_enter` 直接进天焚炼气塔；🚨 `cmd_cultivate` 函数体**保留**（offline_cap/四项修复 D 守门 inspect 它+离线封顶/分档靠它）。进塔照规矩，没火能走 no_energy 提示不回落静修。守门 `tools/check_cultivate_tower_and_milestone_20261128.py`。
 - **异火卡里程碑**（11-28）：`card.build_flames_data` 顶部 head 行显示「等级总和·全属性+N%·当前档/下一档差距」，数值走 `flame_milestone` 真源，只显示当前+下一档不铺全部（用户「知道进度就行」）。守门同上。
 - **文风 skill**（11-28）：用户级 `D:/WorkBuddyData/skills/tiancan-tudou-voice/`（宿主把 `~/.workbuddy/skills` 重定向到此），写斗破战斗台词/骂阵/旁白时自动加载；禁战后点评、人兽动作分流、身份感+反问狠话+微表情白描。守门 `scripts/check_tudou_voice.py --demo/--from-project <root>`（ast 静态提取，不 import 项目模块）。分发包在 `tmp/tiancan-tudou-voice.zip`，skill 属本地配置不进 git。
+- **三项回执补全**（11-28）：「我的斗技」卡顶 `item/item_count`=焚血散持有量、每行 chip=`core.skill_up_cost/skill_max` 真源（满级「已满」）；`_roster_row` 保留 5 段条，`lv_real` 另存真等级。连服丹 `receipts[]` 逐枚回执（≤8 枚），别退回 `last_msg`；自动爬塔结算必须同时展开「层数奖励」+「宝箱开出」，无加成补偿炎星石单列防重复。守门 `tests/test_three_player_visible_fixes_20261128.py` 7/7（M1~M3 变异全红）。
 - 游戏侧模块红线见 `MEMORY_REDLINES.md`；运维六类故障剧本/危险操作黑名单见 `docs/生产环境说明_手机服务器_2026-11-21.md`(13章唯一权威)。当日细节见 `YYYY-MM-DD.md`。
