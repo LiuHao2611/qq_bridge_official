@@ -75,6 +75,20 @@ ICON_PADIN = 5              # 框线到图的留白
 #: 图可用边长 = 88 - 2*2 - 2*5 = 74
 ICON_BOX = ICON_HERO - ICON_BORDER * 2 - ICON_PADIN * 2
 
+
+def _hero_of(data: dict) -> tuple[int, int]:
+    """头像格外框边长与图可用边长。
+
+    默认 88（丹药详情）；火焰详情传 ``icon_hero=160`` 放大火图（2026-11-28
+    用户「火焰的图要大一点」）。测高与绘制两处都调本函数，尺寸永不漂。
+    """
+    try:
+        hero = int(data.get("icon_hero") or ICON_HERO)
+    except (TypeError, ValueError):
+        hero = ICON_HERO
+    hero = max(ICON_HERO, min(hero, 320))
+    return hero, hero - ICON_BORDER * 2 - ICON_PADIN * 2
+
 _DEMO = {
     "title": "青灵丹",
     "subtitle": "丹药 · 四品 · 背包 ×3",
@@ -118,18 +132,20 @@ def _plan(data: dict, content_w: int) -> tuple[list[dict], int]:
 
 def _art_of(data: dict):
     """物品图图层（无图/坏图返回 None）。**测高与绘制同源**：两处都调它。"""
-    return item_icons.icon_layer(str(data.get("image") or ""), ICON_BOX, ICON_BOX)
+    _hero, box = _hero_of(data)
+    return item_icons.icon_layer(str(data.get("image") or ""), box, box)
 
 
 def _height(data: dict, blocks_h: int) -> int:
+    hero, _box = _hero_of(data)
     sub_h = (FS_SUB + 12) if str(data.get("subtitle") or "") else 0
-    icon_h = (ICON_GAP_T + ICON_HERO + ICON_GAP_B) if _art_of(data) else 0
+    icon_h = (ICON_GAP_T + hero + ICON_GAP_B) if _art_of(data) else 0
     frame_h = FRAME_PAD_T + blocks_h + FRAME_PAD_B
     return (UI.TITLE_H + sub_h + icon_h + frame_h
             + TIP_GAP + TIP_LEAD + FS_BODY + PAD_B)
 
 
-def _draw_hero_icon(c: Canvas, g: dict, layer, width: int, y: int) -> int:
+def _draw_hero_icon(c: Canvas, g: dict, layer, width: int, y: int, hero: int = ICON_HERO) -> int:
     """居中的物品头像格；返回信息框上沿 y。
 
     帧语言与信息框一致（硬边直角 + 2px 玫红外线 + 1px 亮线内衬，**不用圆角**）。
@@ -138,17 +154,17 @@ def _draw_hero_icon(c: Canvas, g: dict, layer, width: int, y: int) -> int:
     """
     cx = int(width) // 2
     sy = int(y + ICON_GAP_T)
-    sx = cx - ICON_HERO // 2
+    sx = cx - hero // 2
     d = ImageDraw.Draw(UI.img_of(c))
-    d.rectangle((sx, sy, sx + ICON_HERO, sy + ICON_HERO),
+    d.rectangle((sx, sy, sx + hero, sy + hero),
                 fill=UI.rgb(g["plaq_bot"]) + (255,))
-    d.rectangle((sx, sy, sx + ICON_HERO, sy + ICON_HERO),
+    d.rectangle((sx, sy, sx + hero, sy + hero),
                 outline=UI.rgb(g["fret"]) + (255,), width=ICON_BORDER)
-    d.rectangle((sx + 4, sy + 4, sx + ICON_HERO - 4, sy + ICON_HERO - 4),
+    d.rectangle((sx + 4, sy + 4, sx + hero - 4, sy + hero - 4),
                 outline=UI.rgb(g["fret_hi"]) + (255,), width=1)
     w, h = layer.size
-    c.paste_alpha(layer, (cx - w // 2, sy + ICON_HERO // 2 - h // 2))
-    return sy + ICON_HERO + ICON_GAP_B
+    c.paste_alpha(layer, (cx - w // 2, sy + hero // 2 - h // 2))
+    return sy + hero + ICON_GAP_B
 
 
 def build(t: Theme, data: dict | None = None, width: int | None = None,
@@ -191,13 +207,14 @@ def build(t: Theme, data: dict | None = None, width: int | None = None,
 
     # ---- 居中物品头像行（2026-11-27 接图；无图则整段不占位）----------------
     art = _art_of(data)
+    hero, _box = _hero_of(data)
     if art is not None:
-        yy = _draw_hero_icon(c, g, art, width, y)
+        yy = _draw_hero_icon(c, g, art, width, y, hero=hero)
         if boxes is not None:
             cx_ = width // 2
             top_ = int(y + ICON_GAP_T)
-            boxes.append(("icon", cx_ - ICON_HERO // 2, top_,
-                          cx_ + ICON_HERO // 2, top_ + ICON_HERO))
+            boxes.append(("icon", cx_ - hero // 2, top_,
+                          cx_ + hero // 2, top_ + hero))
         y = yy
 
     # ---- 解包游戏展示框：硬边直角 + 双线 + 左上回纹角 ----------------------

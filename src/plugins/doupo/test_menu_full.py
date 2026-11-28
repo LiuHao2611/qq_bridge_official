@@ -307,7 +307,7 @@ def _p_feed(p):
 
 
 def _p_flames(p):
-    # 异火「出图」用例必须在有传承宗门上验证（2026-11-16：无传承只出纯文本）。
+    # 2026-11-28 起异火任何宗门都出图；这里保留设萧家只为用例稳定一致。
     p["faction"] = "xiaojia"
     p["faction_name"] = fac.FACTIONS["xiaojia"]["name"]
 
@@ -398,7 +398,7 @@ CASES = [
     dict(id="09_skills", text="斗技", img="png", must=[], ban=[]),
     dict(id="10_skillup", text="升级 龙吟碎", img=None, must=["升至"],
          ban=["不足", "已至"], prep="skillup"),
-    # 异火出图只在有传承宗门验证（prep 设萧家）；无传承宗门改用 31_flames_none 验纯文本
+    # 异火 2026-11-28 起任何宗门都出图；31_flames_none 验证无传承宗门同样出图
     dict(id="11_flames", text="异火", img="png", must=[], ban=[], prep="flames"),
     dict(id="12_feed", text="养火 青莲地心火", img=None, must=["晋为", "投入"],
          ban=["没有药渣"], prep="feed"),
@@ -437,10 +437,9 @@ CASES = [
     dict(id="28_sect", text="宗门", img="png", must=[], ban=[]),
     dict(id="29_switch", text="转宗 云岚宗", img=None,
          must=["已转投", "你已在", "没有这个宗门", "尚无"], ban=[]),
-    # 31：2026-11-16 硬要求——29 转宗到云岚宗（无传承）后，异火只回纯文本一句，
-    # 无图无按钮。img=None + ban 图片由 runner 通用判据保证「纯文本口令夹带图片段」即 FAIL。
-    dict(id="31_flames_none", text="异火", img=None, must=["本宗无传承异火"],
-         ban=["可自行收服", "青莲地心火"]),
+    # 31：2026-11-28 反转——29 转宗到云岚宗（无传承）后，异火也照常出图
+    # （异火已不走宗门传承，已有异火不能因宗门不让看）。
+    dict(id="31_flames_none", text="异火", img="png", must=[], ban=["本宗无传承异火"]),
     # 32/33/34：2026-11-16 无惩罚切磋（仅本群 / 两段式 / 只记荣誉战绩）。
     # 发起用 A @B；应战/拒战必须由 B 本人发言，故用例带 uid=B，
     # 并在 prepare 里给 B 注入一条待应挑战。
@@ -593,9 +592,9 @@ async def static_checks():
     # 菜单唯一源 = MENU_GROUPS（当前 37 条），每条口令都要出现在纯文本菜单里（格式无缺失）
     menu_txt = cmds.menu_text()
     total = cmds.menu_total()
-    # 用例数可多于菜单条数：同一口令按状态分流会有多条用例（如异火「有传承出图」+
-    # 「无传承纯文本」= 11_flames / 31_flames_none）。但每条菜单口令必须有用例覆盖，
-    # 由下方 missing 检查守门，故此处只要求 cases >= menu_total。
+    # 用例数可多于菜单条数：同一口令按状态分流的用例（如异火 11_flames /
+    # 31_flames_none 都出图）。但每条菜单口令必须有用例覆盖，由下方 missing 检查
+    # 守门，故此处只要求 cases >= menu_total。
     ok = len(CASES) >= total
     record("STATIC 验收用例数 >= 菜单条数", ok, f"menu_total={total} cases={len(CASES)}")
     fe = check_text(menu_txt)

@@ -305,6 +305,44 @@ def test_danwen_tier_table_shape():
     check("B03 给分钟差", "分钟" in t3 and "二纹" in t3, t3)
 
 
+def test_flame_detail_card():
+    """2026-11-28：查看火焰出图卡（不是纯文字），火图放大到 icon_hero=160，
+    33 朵全集都能渲染，非火名返回 None（不拿占位卡糊人）。"""
+    c = _card()
+    p = _fresh()
+    fview = commands._fview
+    names = fview.all_flame_names()
+    check("火焰全集 33 朵", len(names) == 33, str(len(names)))
+    # 数据层：火名带图、放大档 160、三段（主动/被动/获取途径）齐
+    d = c.build_flame_detail_data(p, "陨落心炎")
+    check("火焰详情 data 存在", bool(d), "")
+    check("火图 image=火名", d and d.get("image") == "陨落心炎", d and d.get("image"))
+    check("火图放大 icon_hero=160", d and int(d.get("icon_hero") or 0) == 160,
+          d and d.get("icon_hero"))
+    gnames = [str(g.get("name")) for g in (d or {}).get("groups", [])]
+    check("三段齐（主动/被动/获取途径）",
+          gnames == ["主动", "被动", "获取途径"], str(gnames))
+    check("非火名返回 None", c.build_flame_detail_data(p, "不存在的火") is None)
+    # 真出图：PNG 魔数 + 宽度 > 500；高度足够容纳 160 图
+    png = asyncio.run(c.render_flame_detail(p, "陨落心炎"))
+    check("火焰详情真出图（PNG 魔数）",
+          bool(png) and png[:8] == b"\x89PNG\r\n\x1a\n", (png or b"")[:8])
+    w = int.from_bytes((png or b"\0" * 20)[16:20], "big")
+    h = int.from_bytes((png or b"\0" * 24)[20:24], "big")
+    check("火焰详情宽度 >500", w > 500, str(w))
+    check("火焰详情高度容纳大图（>600）", h > 600, str(h))
+    # 33 朵都能出图（火图缺失的火也靠模板降级为无图段，不能崩）
+    bad = []
+    for n in names:
+        try:
+            one = asyncio.run(c.render_flame_detail(p, n))
+            if not one or one[:8] != b"\x89PNG\r\n\x1a\n":
+                bad.append(n)
+        except Exception as e:  # noqa: BLE001
+            bad.append("%s:%s" % (n, type(e).__name__))
+    check("33 朵全部可出图", not bad, ",".join(bad[:5]))
+
+
 def _run():
     fns = [(k, v) for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

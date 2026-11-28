@@ -687,18 +687,16 @@ async def _(event: Event):
     await _need_group(event, flames)
     qq = str(event.user_id)
     p = await store.get_player(qq)
-    # 2026-11-16 用户硬要求：本宗无传承异火 → 纯文本一句提示，
-    # 绝不渲染卡片 / 挂按钮（避免本宗没异火却发一张异火图 + 分离的按钮条）。
-    if not p or not commands.has_tradition_flame(p):
-        await flames.finish(await commands.cmd_flames(store, qq))
-        return
-    # 有传承：先渲染卡片；渲染失败才降级纯文本（与纯文本同源）
+    # 2026-11-28 用户反转：「我已经有异火，但在没有异火的宗门就不让我看，不合理；
+    # 直接展示异火就行」。异火已不走宗门传承，任何宗门都一律出异火卡（只列已收服），
+    # 不再因本宗无传承而挡成一句纯文本。渲染失败才降级纯文本（与纯文本同源）。
     msg = await commands.cmd_flames(store, qq)
     png = None
-    try:
-        png = await card.render_flames(p)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("斗破异火卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
+    if p:
+        try:
+            png = await card.render_flames(p)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("斗破异火卡渲染异常，降级纯文本：%s: %s", type(e).__name__, e)
     if png:
         await finish_card(flames, event, png, "flames", "doupo_flames.png")
         return
@@ -881,19 +879,28 @@ async def _(event: Event):
     name = commands.item_lookup(arg) if arg else ""
     txt = await commands.cmd_view(store, qq, arg)
     png = None
-    if name:
-        try:
-            p = await store.get_player(qq)
-            if p:
-                png = await card.render_item_detail(p, name)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("斗破物品详情卡渲染异常，降级纯文本：%s: %s",
-                           type(e).__name__, e)
+    card_key = "item"
+    # 2026-11-28 用户「火焰查看怎么能是纯文字？丹药查看有图，火图要大一点」：
+    # 火焰名不在物品表，item_lookup 会落空。落空后查 33 朵火焰全集，命中即走
+    # 火焰详情卡 doupo_item（icon_hero=160 放大火图），与丹药详情卡同一套版式。
+    flame_name = ""
+    if not name and arg:
+        flame_name = next((n for n in commands._fview.all_flame_names()
+                           if arg in n or n in arg), "")
+    try:
+        p = await store.get_player(qq)
+        if p and name:
+            png = await card.render_item_detail(p, name)
+            card_key = "item:%s" % name
+        elif p and flame_name:
+            png = await card.render_flame_detail(p, flame_name)
+            if png:
+                card_key = "flame:%s" % flame_name
+    except Exception as e:  # noqa: BLE001
+        logger.warning("斗破详情卡渲染异常，降级纯文本：%s: %s",
+                       type(e).__name__, e)
     if png:
-        # 2026-11-25 晚：丹药详情卡带动态按钮（炼制此丹 / 买主材料）；
-        # 非丹药（name 无配方）由派生层自动回落通用按钮。
-        await finish_card(view_cmd, event, png, "item:%s" % name if name else "item",
-                          "doupo_item.png")
+        await finish_card(view_cmd, event, png, card_key, "doupo_item.png")
         return
     await view_cmd.finish(txt)
 

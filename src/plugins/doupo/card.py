@@ -37,6 +37,7 @@ from . import realm_lore
 from . import skill_effects as fx
 from . import skill_rank as rank_mod
 from . import danwen as dw
+from . import flame_view as fview
 
 log = logging.getLogger("qq_bridge.doupo.card")
 
@@ -855,27 +856,17 @@ def build_flames_data(p: dict) -> dict:
 
     用户「现在看着很乱，没获得的就不要显示出来了」。旧版把 11 朵没到手的火连同
     「未收服」状态、获取提示、三个分类标题全铺在卡上，玩家真正拥有的火被挤到
-    看不见的位置。现在只保留两块：
+    看不见的位置。现在只列 **已收服**（只列 lv>0 的火，按 招式异火 → 数值异火 →
+    兽火/新生 排序）；一朵都没有时给一条「尚未收服」+ 获取路径，不铺 11 行「未收服」。
 
-      ① **本宗传承**（一行，师门背景，不算持有——「异火」口令本就只在本宗有传承
-         时才出卡，见 ``commands.has_tradition_flame``）；
-      ② **已收服**（只列 lv>0 的火，按 招式异火 → 数值异火 → 兽火/新生 排序）；
-         一朵都没有时给一条「尚未收服」+ 获取路径，不铺 11 行「未收服」。
-
+    🚨 2026-11-28 反转：异火不走宗门传承，**任何宗门都出卡**，卡面不再有
+    【本宗传承】行（用户「异火都不走宗门传承了就不要展示传承，容易误导玩家」）。
     数值口径仍只做展示，加成聚合唯一源是 :mod:`flame_bonus`，这里不重算数值。
     """
     fl = p.get("flames") or {}
     dross = core.count_item(p, "药渣")
-    fid = str(p.get("faction") or "")
-    fdef = fac.FACTIONS.get(fid, {})
-    fname = str(p.get("faction_name") or fdef.get("name") or "本宗")
-    trad = [str(t) for t in (fdef.get("flames", []) or [])]
 
     rows: list[dict] = []
-    if trad:
-        rows.append({"title": f"{fname}·本宗传承", "right": "", "head": True,
-                     "sub": "、".join(trad), "note": ""})
-
     owned: list[dict] = []
 
     def _lv_right(lv: int) -> str:
@@ -1774,6 +1765,60 @@ async def render_item_detail(p: dict, name: str) -> bytes | None:
     if not data:
         return None
     return await _render_list("doupo_item", data, CARD_ITEM_NAME, qq=p.get("qq"))
+
+
+CARD_FLAME_NAME = "斗破异火详情"
+
+
+def build_flame_detail_data(p: dict, name: str) -> dict | None:
+    """「查看 <火名>」详情卡参数（2026-11-28 用户「火焰查看怎么能是纯文字，有图的，图要大点」）。
+
+    与丹药详情卡共用 ``doupo_item`` 模板（同一套分段/头像格语言），差异只有三点：
+      ① groups 走 flame_view 的主动/被动/获取途径（唯一真源，不重写）；
+      ② ``image=火名`` 接 doupo_item_icons 里的真火图；
+      ③ ``icon_hero=160`` 把火图放大（普通物品默认 88）。
+    火名必须在 33 朵全集中，否则返回 None（调用方回文本引导），绝不拿占位图糊。
+    """
+    fn = name.strip()
+    if fn not in set(fview.all_flame_names()):
+        return None
+    active, passive = fview._effect_of(fn)
+    tier = (getattr(cfg, "FLAME_TIER", {}) or {}).get(fn, "")
+    ident = "兽火" if fn in getattr(cfg, "BEAST_FLAME_NAMES", []) else "异火"
+    fl = p.get("flames") or {}
+    lv = int(fl.get(fn, 0) or 0)
+    diyan = bool(p.get("diyan")) if fn == cfg.FLAME_DIYAN else False
+    owned = diyan if fn == cfg.FLAME_DIYAN else lv > 0
+    if fn == cfg.FLAME_DIYAN:
+        state = "已得" if diyan else "未得（成就斗帝自燃）"
+    elif lv >= cfg.FLAME_MAX_LV:
+        state = "%d 级（圆满）" % lv
+    elif lv > 0:
+        state = "%d/%d 级" % (lv, cfg.FLAME_MAX_LV)
+    else:
+        state = "未收服"
+    sub = "%s · %s%s · %s" % (
+        ident, (tier + " 线 · " if tier else ""), state,
+        ("已拥有" if owned else "尚未拥有"))
+    return {
+        "title": fn, "subtitle": sub,
+        "image": fn, "icon_hero": 160,
+        "groups": [
+            {"name": "主动", "rows": [active]},
+            {"name": "被动", "rows": [passive]},
+            {"name": "获取途径", "rows": [fview.how_of(fn)]},
+        ],
+        "tip": ("发「异火」看火种总览 · 发「养火 %s」喂养升阶" % fn) if owned
+               else ("发「收服 %s」认主后即可喂养" % fn),
+    }
+
+
+async def render_flame_detail(p: dict, name: str) -> bytes | None:
+    """「查看 <火名>」出图入口；非火焰或渲染失败返回 None（调用方给文本引导）。"""
+    data = build_flame_detail_data(p, name)
+    if not data:
+        return None
+    return await _render_list("doupo_item", data, CARD_FLAME_NAME, qq=p.get("qq"))
 
 
 async def render_craft_for(report: dict | None, qq: str | None = None) -> bytes | None:

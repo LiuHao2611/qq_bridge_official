@@ -363,49 +363,38 @@ def test_learn_named_gates():
 
 
 def test_flames_shows_faction_tradition():
-    # 云岚宗：无传承异火 → 纯文本一句提示，无图无按钮、无养成列表
-    # （2026-11-16 用户硬要求：没异火传承的宗门不要展示任何异火）
+    """2026-11-28 反转：异火不走宗门传承，任何宗门都直接展示异火面板，
+    且卡面/文本都不再印【本宗传承】块（用户「容易误导玩家」）。"""
+    # 云岚宗：本宗无传承异火，但已有异火照样能看完整养成列表（不再纯文本挡回）
     p = core.create_player("flame-none", "云", "g1")
     p["faction"] = "yunlanzong"
     p["faction_name"] = fac.FACTIONS["yunlanzong"]["name"]
-    check("无传承判定为 False", commands.has_tradition_flame(p) is False, str(p.get("faction")))
     out = asyncio.run(commands.cmd_flames(MemStore(p), "x"))
-    check("本宗无传承异火提示", "本宗无传承异火" in out, out[:100])
-    check("无传承不列养成列表（纯文本一句）", "须先收服才可喂养" not in out and "青莲地心火" not in out,
-          out[:160])
-    check("无传承提示不含按钮/图片引导", "上阵" not in out and "斗技详情" not in out, out[:160])
+    check("无传承宗门也列养成列表（不再挡纯文本）", "须先收服才可喂养" in out, out[:160])
+    check("无传承宗门不再提示『本宗无传承异火』", "本宗无传承异火" not in out, out[:160])
+    check("卡面不印【本宗传承】块", "本宗传承" not in out, out[:160])
 
-    # 萧家：有传承异火 → 列出来（完整养成面板）
+    # 萧家：同样不印传承块，只列已收服/可收服列表
     p2 = core.create_player("flame-has", "萧", "g1")
     p2["faction"] = "xiaojia"
     p2["faction_name"] = fac.FACTIONS["xiaojia"]["name"]
-    # create_player 的入道随机宗门可能会顺手发一朵本宗异火（A 方案），
-    # 这里要的是「一朵都没有的萧家」，清空才对得上断言（否则随机 flaky）。
     p2["flames"] = {}
-    check("有传承判定为 True", commands.has_tradition_flame(p2) is True, str(p2.get("faction")))
     out2 = asyncio.run(commands.cmd_flames(MemStore(p2), "x"))
-    check("本宗有传承异火列出", "萧玄" in out2 and "本宗传承" in out2, out2[:120])
-    # 2026-11-18 A 方案：段标题从「可自行收服的异火」改为「须先收服才可喂养」；
-    # 未收服的火只标「未收服」，不再显示 0/N 级与下级药渣需求（避免误导成可直接养）。
-    check("有传承仍列养成列表", "须先收服才可喂养" in out2, out2[:160])
+    check("有传承宗门也不印【本宗传承】块", "本宗传承" not in out2, out2[:120])
+    check("仍列养成列表", "须先收服才可喂养" in out2, out2[:160])
     check("未收服的火标未收服且不给下级需求",
           "未收服" in out2 and "下级需" not in out2, out2[:200])
 
 
 def test_flames_handler_no_card_without_tradition():
-    """守门：异火 handler 必须先判 has_tradition_flame，无传承直接纯文本 finish，
-    绝不走 render_flames/finish_card（2026-11-16「没传承不要展示任何异火/无图无按钮」）。
-
-    用 AST 检查，防止有人把『无传承也出图』的旧逻辑接回来。
-    """
+    """守门（2026-11-28 反转）：异火 handler 不再按 has_tradition_flame 挡回，
+    任何宗门一律尝试 render_flames 出图。用 AST 防止旧的『无传承纯文本早退』接回来。"""
     import ast as _ast
     from pathlib import Path as _Path
 
     init_py = _Path(__file__).with_name("__init__.py").read_text(encoding="utf-8")
     tree = _ast.parse(init_py)
     flames_fn = None
-    # flames handler 是注册在 flames matcher 上的装饰器函数体：找含
-    # has_tradition_flame 调用的那个 async 函数
     for node in _ast.walk(tree):
         if isinstance(node, _ast.AsyncFunctionDef):
             blob = _ast.unparse(node)
@@ -416,17 +405,8 @@ def test_flames_handler_no_card_without_tradition():
     if flames_fn is None:
         return
     blob = _ast.unparse(flames_fn)
-    check("handler 调用 has_tradition_flame", "has_tradition_flame" in blob, blob[:200])
-    # 关键：render_flames 必须在 has_tradition_flame 的『有传承』分支之后，
-    # 即 handler 里存在 if not ...has_tradition_flame ... finish / return 的早退守卫。
-    early_return = any(
-        isinstance(n, _ast.If)
-        and "has_tradition_flame" in _ast.unparse(n.test)
-        and "return" in _ast.unparse(n)
-        for n in _ast.walk(flames_fn)
-    )
-    check("无传承早退守卫（不渲染卡片）", early_return,
-          "handler 缺『无传承→纯文本早退』守卫，可能又发异火图+按钮")
+    check("handler 不再调用 has_tradition_flame", "has_tradition_flame" not in blob, blob[:200])
+    check("handler 一律调 render_flames", "render_flames" in blob, blob[:200])
 
 
 def _run():

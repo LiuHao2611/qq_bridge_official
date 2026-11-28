@@ -142,8 +142,8 @@ async def _finalize_battle(p: dict, qq, res: dict, kind: str,
     """战斗结束唯一漏斗：先同步落回看，再写回傀儡战损（P1-1）。
 
     写回与「这场战斗真的打完了」绑定：凡是调 ``record_last_battle`` 的入口都
-    改调本函数，就不会漏写回。突破战走自己的渲染、不落回看，单独调
-    ``_writeback_damage`` —— 两者共用同一个写回口径，不复制逻辑。
+    改调本函数，就不会漏写回。突破战也落回看（2026-11-28 反转），但它单独写
+    last_battle + _writeback_damage 而不走本漏斗（它有自己的四段式渲染与掉火结算）。
     """
     core.record_last_battle(p, kind, res, opponent=opponent, extra=extra)
     await _writeback_damage(qq, res, puppet)
@@ -772,8 +772,14 @@ async def cmd_break(store, qq, rng=None) -> str:
         br = core.nine_star_breakthrough(p, rng=rng or random.random, locked=locked,
                                         puppet=_pu, formation_n=_pu_n,
                                         puppet_flame_mult=_pu_fm)
+        # 2026-11-28 用户：「还是无法战斗回看突破境界的那一场战斗」。旧版注释写
+        # 「突破战不落回看」是设计决定，现反转：九星 BOSS 战也是一场真打完的仗，
+        # 一样落 last_battle，玩家发「战斗回看」就能逐招回看这一场。
+        # 🚨 只写回看，不重复 _writeback_damage（下面单独调了一次，避免护甲战损写两遍）。
+        core.record_last_battle(p, "突破", br, opponent=br.get("boss_name") or "强敌",
+                                extra={"boss_title": br.get("boss_title") or ""})
         await store.put_player(p)
-        # P1-1：突破战不落回看（走自己的四段式渲染），但护甲打空同样要写回战损。
+        # 护甲打空同样要写回战损（与回看写入分开，口径共用 _writeback_damage）。
         await _writeback_damage(qq, br, _pu)
         _ch = br.get("character") or {}
         _name = br.get("boss_name") or "强敌"
@@ -1689,17 +1695,11 @@ async def cmd_flames(store, qq) -> str:
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
-    # 2026-11-16 用户硬要求：无传承异火 → 纯文本一句，不出图不挂按钮。
-    if not has_tradition_flame(p):
-        return no_tradition_flame_msg(p)
+    # 2026-11-28 用户反转：异火不走宗门传承，任何宗门一律直接展示异火——
+    # 不再因「本宗无传承」挡成一句纯文本，也不再印【本宗传承】块（误导玩家以为
+    # 异火靠师门，实际全靠突破掉落/隐藏支线/收服）。只列已收服，与卡片同源。
     fl = p.get("flames") or {}
-    fid = str(p.get("faction") or "")
-    trad = list(fac.FACTIONS.get(fid, {}).get("flames", []) or [])
-    fname = str(p.get("faction_name") or fac.FACTIONS.get(fid, {}).get("name") or "本宗")
     out = [f"🔥 异火　药渣 ×{core.count_item(p, '药渣')}"]
-    out.append(f"　【{fname}·本宗传承】")
-    for t in trad:
-        out.append(f"　　{t}")
     out.append("　以下异火须先收服才可喂养（未收服不可养）：")
     for f in cfg.FLAMES:
         name = f["name"]

@@ -201,6 +201,15 @@ async def main():
     check("跨境界 用境界突破措辞", "境界突破" in r, r[:120])
     p = await store.get_player(A)
     check("跨境界 等级 =28", int(p["lv"]) == 28, f"lv={p['lv']}")
+    # 2026-11-28 用户「还是无法战斗回看突破境界的那一场战斗」：
+    # 九星 BOSS 战胜利后必须落 last_battle（kind=突破 / 有逐招 log / 对手=云棱），
+    # 玩家发「战斗回看」才看得到这一场，而不是上一次野外遭遇。
+    _lb = p.get("last_battle") or {}
+    check("突破战写入回看 last_battle", bool(_lb) and _lb.get("kind") == "突破",
+          str(_lb.get("kind")))
+    check("突破回看有逐招 log", bool(_lb.get("log")), str(len(_lb.get("log") or [])))
+    check("突破回看对手=BOSS名", "云棱" in str(_lb.get("opponent")), str(_lb.get("opponent")))
+    check("突破回看胜利标记", bool(_lb.get("win")))
     # 境界内晋升：三星斗师(12) → 四星斗师(13)，这才是用户要的顺序
     p["lv"] = 21
     p["exp"] = cfg.exp_need(21) + 10
