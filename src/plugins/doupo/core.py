@@ -759,8 +759,7 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
         return res
 
     minutes = min(minutes, can_min)
-    # 火能是整数「块」：1 点 = TOWER_MINUTES_PER_ENERGY 分钟。只结算整块，
-    # 零头时间**留在时间戳里**（否则 3 分钟的短修会被白送修为却不扣火能）。
+    # 火能是整数块（1 点 = TOWER_MINUTES_PER_ENERGY 分）：只结算整块，零头留时间戳。
     per = max(1, per)
     blocks = minutes // per
     if blocks <= 0:
@@ -773,16 +772,15 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
         res["need_min"] = per - int(minutes) % per
         return res
     billable = blocks * per
-    # 2026-11-28 塔修与静修同源分档（旧版写死 6/分，lv29 只有静修的 16%）。
+    # 塔修速率与静修同源分档（旧版写死 6/分 = lv29 只有静修的 16%）。
     gain = int(billable * _cult.cultivate_rate(lv) * tower_mult(tier, magma)
                * flame_exp_mult(p))
     p["exp"] = int(p.get("exp", 0)) + gain
-    # 塔中时间不算静修时间（同一段时间不能被「修炼」再领一次）
-    p["last_settle"] = now
+    p["last_settle"] = now    # 塔中时间不算静修，同一段不许领两次
 
     st["fire_energy"] = max(0, energy - blocks)
-    poison_add = int(billable * tower_poison_rate(tier, lv, magma))
-    st["fire_poison"] = int(st.get("fire_poison", 0)) + poison_add
+    st["fire_poison"] = int(st.get("fire_poison", 0)) + int(
+        billable * tower_poison_rate(tier, lv, magma))
     capped = int(st["fire_poison"]) >= int(cfg.TOWER_POISON_CAP)
     if capped:
         st["fire_poison"] = int(cfg.TOWER_POISON_CAP)
@@ -797,7 +795,9 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
         "mode": "settle" if not capped else "capped",
         "minutes": billable, "gain": gain, "energy_spent": blocks,
         "energy": int(st.get("fire_energy", 0)),
-        "poison": int(st.get("fire_poison", 0)), "poison_add": poison_add,
+        "poison": int(st.get("fire_poison", 0)),
+        # 真实增量：触顶时按截断后的实际值报，不拿名义值糊弄玩家
+        "poison_add": int(st["fire_poison"]) - int(res["poison"]),
         "capped": capped, "in_tower": bool(st.get("in_tower")),
         "leftover_min": max(0, int(elapsed_min) - billable),
     })

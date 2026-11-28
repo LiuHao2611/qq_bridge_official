@@ -193,6 +193,40 @@ def test_no_energy_exits_instead_of_silently_burning_time():
     assert not int(st["in_tower"]), "火能耗尽还把玩家挂在塔里"
 
 
+def test_zero_energy_cannot_even_enter():
+    """火能 0 时连塔门都不许进：进去了只会空耗，等下一次按才说没火能玩家必然看不懂。"""
+    text, key = _state_key(0, 0, energy=0)
+    assert "进不去塔" in text, "火能 0 还是让玩家进塔了：\n%s" % text
+    assert "已入塔" not in text, "火能 0 却回了「已入塔」：\n%s" % text
+    assert key == "tower_blocked", "进不去塔却给了 %s（该去战斗/看状态）" % key
+
+
+def test_poison_add_reports_real_delta_not_nominal():
+    """火毒 98 时名义 +24 但实际只到 100：播报必须报真实 +2，否则玩家算不平。"""
+    p = _player(29)
+    st = _st(energy=100, poison=98)
+    r = core.alchemy_settle(p, st, now_ts=T0 + 20 * 60, entering=True)
+    assert r["capped"], "98 + 24 没触顶？"
+    assert int(st["fire_poison"]) == int(cfg.TOWER_POISON_CAP)
+    assert r["poison_add"] == 2, "报了名义增量 %s 而不是真实 +2" % r["poison_add"]
+
+
+def test_energy_page_says_you_cannot_enter_when_zero():
+    """火能 0 时火能页不许写「约 0 小时」这种废话，要说清现在进不了塔。"""
+
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="doupo_tower_")
+        store = Store(os.path.join(tmp, "doupo.json"))
+        qq = "100001"
+        await store.put_player(_player(29, qq=qq))
+        await store.set_tower_state(qq, _st(energy=0, in_tower=0, last=0.0))
+        return await commands.cmd_furnace_status(store, qq)
+
+    text = asyncio.run(run())
+    assert "进不了塔" in text, "火能 0 的火能页没说清能不能进：\n%s" % text
+    assert "约 0 小时" not in text, "火能 0 还在算「约 0 小时」：\n%s" % text
+
+
 # ---------------------------------------------------------------------------
 # 4. 塔中时间只由塔修付款（2026-11-28 实测双发）
 # ---------------------------------------------------------------------------

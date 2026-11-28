@@ -3602,3 +3602,36 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
 🚪 已出塔（本次 20 分钟，修为 +180）
 　火能 182　火毒 24/100（每分钟 -2，约 12 分钟清完）
 ```
+
+### 追补：自查出的四处「播报与事实不符」（同一轮，用户「看不懂」的根因）
+
+1. **火毒 `poison_add` 报的是名义值**：火毒 98 时本次名义 +24，实际撞 100 只 +2，播报却说「本次 +24」，
+   玩家一算就对不上。`core.alchemy_settle` 改为 `int(st["fire_poison"]) - int(res["poison"])`
+   （`res["poison"]` 初始值就是结算前的火毒，不新增局部变量——core.py 贴 200KB 红线）。
+2. **火能 0 仍能「入塔」**：旧行为第一次按回「已入塔，本次不发修为」，第二次按才说「火能耗尽」，
+   等于让玩家白进一趟。`cmd_furnace_enter_state` 在 settle 之前加守卫
+   `if not in_tower and fire_energy <= 0` → 「⚠️ 火能耗尽，进不去塔。」+ `tower_blocked`。
+3. **出塔 0 分钟文案是废话**：「🚪 已出塔（本次 0 分钟，修为 +0）」→「🚪 已出塔（不到一块，本次不结算）」。
+4. **两处空头承诺**：火能页 0 火能写「约 0 小时」→「现在进不了塔」；
+   换卡成功写「可入第 1~N 层」，而 `tower_max_floor` 只被文案引用、层数门槛从未实装 →
+   只报真生效的心火倍率与火毒速率，不再承诺层数。
+
+### 三条过期断言必须反转（它们原本钉的是 bug 本身）
+- `tests/test_doupo_furnace.py::test_gain_matches_mult`：旧断言 `PER × CULTIVATE_PER_MIN(6) × 卡片倍率`
+  —— 正是「塔修写死 6/分」那个 bug 的钉子；改成 `PER × cultivate_balance.cultivate_rate(lv) × 卡片倍率`。
+  这条测试现在反过来钉住修复（变异 M4 回写死 → 红 1）。
+- `test_enter_then_settle_text`：`"踏入塔中"` → `"已入塔"` + 新增 `"不发修为"` 断言。
+- `test_exit_command_does_not_say_rest_when_poison_zero`：`"随时可再入塔"` → `"火毒已清"`（`"火毒未散" not in` 保留）。
+
+### 变异 20 组（全红 → 还原全绿）
+速率回写死→红3（+ furnace 红1） · need_min→红1 · 入塔文案→红1 · wait 文案→红1 · 去让位→红1 ·
+去缓存同步→红1 · 镜像落库→红1 · 按钮回退旧组→红1 · 没火能挂错组→红1 · 修为满不给突破组→红1 ·
+撤入口守卫→红1 · poison_add 回名义值→红1 · 火能页回「约 0 小时」→红1。
+
+### 回归与既有基线（防止把老红算到新改动头上）
+- 本轮：`test_tower_cultivate` **18/18**、`tests/test_doupo_buttons.py` + `tests/test_doupo_furnace.py` **57 passed**、
+  `test_commands` 141、`test_core` 35、`test_offline_cap` 6。
+- 全量 `tests/test_doupo_*.py`（除 `render_perf` / `battle_intro` 两个本机导入失败文件）：**20 条既有失败**。
+  用 `git worktree add` 拉 HEAD 干净副本跑同样 11 个文件，失败清单**逐条同名 20 条** ⇒ 与本次改动无关，
+  别再当成回归。其中 `test_doupo_choice_ttl` 报的 `commands.py:551`「30 分钟」是丹纹赐福文案，属既有问题。
+- 本机跑 `tests/` 整目录会被 `conftest` 的 nonebot 依赖打断（22 个 collection error），只能按文件清单跑。

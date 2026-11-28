@@ -142,11 +142,17 @@ def test_energy_block():
 
 
 def test_gain_matches_mult():
+    """2026-11-28 反转：塔修速率必须与静修同源分档。
+
+    旧断言钉的是「写死 CULTIVATE_PER_MIN=6/分」那个 bug（lv29 只有静修的 16%），
+    用户实测「烧火能涨火毒反而比挂机慢」——现在这条测试反过来钉住修复本身。
+    """
+    from doupo import cultivate_balance as _cult
     p = _p(40)
     now = 100000.0
     st = _state(card_tier=2, fire_energy=100, in_tower=1, last_ts=now - PER * 60)
     r = core.alchemy_settle(p, st, now_ts=now, entering=True)
-    expect = int(PER * float(cfg.CULTIVATE_PER_MIN) * float(cfg.FACTION_CARD_MULT[2])
+    expect = int(PER * _cult.cultivate_rate(int(p["lv"])) * float(cfg.FACTION_CARD_MULT[2])
                  * core.flame_exp_mult(p))
     assert r["gain"] == expect, (r["gain"], expect)
     assert int(p["exp"]) == expect
@@ -335,7 +341,8 @@ def test_enter_then_settle_text():
         asyncio.run(s.load())
         asyncio.run(s.put_player(_p(40)))
         first = asyncio.run(commands.cmd_furnace_enter(s, "QFURN"))
-        assert "踏入塔中" in first, first
+        assert "已入塔" in first, first
+        assert "不发修为" in first, "入塔没说清本次不给修为：%s" % first
         st = asyncio.run(s.tower_state("QFURN"))
         assert st["in_tower"] == 1 and st["fire_energy"] >= int(cfg.TOWER_FREE_ENERGY)
         st["last_ts"] = time.time() - PER * 60 * 2
@@ -401,7 +408,7 @@ def test_exit_command_does_not_say_rest_when_poison_zero():
                                                       last_ts=time.time() - 20)))
         txt = asyncio.run(commands.cmd_furnace_exit(s, "QFURN"))
         assert "火毒未散" not in txt, txt
-        assert "随时可再入塔" in txt, txt
+        assert "火毒已清" in txt, txt
         st = asyncio.run(s.tower_state("QFURN"))
         assert st["in_tower"] == 0, st
 
