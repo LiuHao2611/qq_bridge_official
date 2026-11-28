@@ -2399,15 +2399,18 @@ async def cmd_furnace_enter(store, qq) -> str:
     await store.put_player(p)
     head = _tower_head(st)
     daily = f"（今日免费火能 +{got}）" if got else ""
+    per = int(cfg.TOWER_MINUTES_PER_ENERGY)
     if res["mode"] == "enter":
         cool = f"，火毒消解 -{res['cooled']}" if res.get("cooled") else ""
         return (f"{head}\n🚪 你踏入塔中，心火扑面{cool}{daily}。\n"
                 f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}\n"
-                f"　再发一次「入塔」即可结算这段时间的修炼；发「出塔」离开。")
+                f"　本次只是入塔，不发修为；满 {per} 分钟后再发一次「修炼」"
+                f"才按整块结算（1 火能 = {per} 分钟），发「出塔」离开。")
     if res["mode"] == "wait":
         return (f"{head}\n🔥 你正在塔中，心火淬体。\n"
                 f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
-                f"{daily}\n　（不足 1 分钟，稍后再发「入塔」）")
+                f"{daily}\n　（本块还差 {res.get('need_min')} 分钟：1 火能 = {per} 分钟，"
+                f"满一块才结算）")
     if res["mode"] == "no_energy":
         return (f"{head}\n⚠️ 火能耗尽，心火渐弱 —— 你被请出塔外。\n"
                 f"　火能 0（战斗胜利可夺取火能，每日也有免费额度）"

@@ -594,7 +594,7 @@ def settle(p, now_ts=None) -> dict:
     capped = elapsed > cap_sec
     billable = min(elapsed, cap_sec)
     # 2026-11-28 修炼平衡：速率按境界分档（前中期快、后期慢），见 cultivate_balance。
-    # lv=1 精确等于 CULTIVATE_PER_MIN（既有测试锚点不变），塔修炼仍走固定基线。
+    # lv=1 精确等于 CULTIVATE_PER_MIN（既有测试锚点不变）；塔修同源，乘心火倍率。
     rate = _cult.cultivate_rate(int(p.get("lv", 1)))
     gain = int(billable / 60.0 * rate * flame_exp_mult(p))
     if gain > 0:
@@ -747,6 +747,7 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
             return _exit_tower_clean(st, res, now)
         res["mode"] = "wait"
         res["in_tower"] = True
+        res["need_min"] = per - int(minutes) % per
         return res
     if can_min <= 0:
         # 火能耗尽：留在塔里只会空耗时间，直接按出塔处理（不静默吞时间）
@@ -768,9 +769,11 @@ def alchemy_settle(p, st: dict, now_ts=None, entering: bool = True) -> dict:
         res["in_tower"] = True
         res["energy"] = energy
         res["poison"] = int(st.get("fire_poison", 0))
+        res["need_min"] = per - int(minutes) % per
         return res
     billable = blocks * per
-    gain = int(billable * float(cfg.CULTIVATE_PER_MIN) * tower_mult(tier, magma)
+    # 2026-11-28 塔修与静修同源分档（旧版写死 6/分，lv29 只有静修的 16%）。
+    gain = int(billable * _cult.cultivate_rate(lv) * tower_mult(tier, magma)
                * flame_exp_mult(p))
     p["exp"] = int(p.get("exp", 0)) + gain
     # 塔中时间不算静修时间（同一段时间不能被「修炼」再领一次）
