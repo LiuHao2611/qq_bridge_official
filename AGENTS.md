@@ -121,6 +121,7 @@
 | **斗破全卡统一「游戏本体 UI 风」深色皮肤，唯一装饰真源 = `templates/doupo_ui.py`；浅色 2026 流行配色方案已被用户否决，不许回退**（用户 2026-11-22 看了解包素材 `D://AI//doupo` 说「不行，没有游戏的效果」「别拿免费的简约图标糊弄我」「加深细节展示，比如云、特效、游戏中特有的字体」「注意各个元素的内外边距」，随后说「可以，开始优化斗破小游戏所有卡片，不要有遗漏」）。**视觉语言**：深蓝紫渐变底 + 暗红祥云带/龙鳞纹 + 斜纹 + 上下暗角 + 顶部天光；玫红回纹（云雷纹）角花双层外框 + 边中金菱钉；青蓝云纹牌匾 + 楷体白→金渐变标题（紫描边 + 紫辉光）；游戏面板（深底 + 玫红/暗金细边 + 面板内祥云水印）；异火火焰徽章。**结构铁律**：12 张卡都必须 `y = UI.card_shell(c, p, title, width=width)` 一笔画外壳（模板**不许**再自画卡片圆角底），标题区 = `UI.TITLE_H`(112)；正文用 `UI.panel/ord_badge/chip/bar/divider/kai_text`。**内边距铁律**：左右 `UI.PAD_X`=36（距外框内线 19px）、底部 `UI.PAD_B`=54（底部两角只有短 L 线，用 36 会贴框）—— 用户原话「有的字都和边框黏在一起了」，测高函数末尾必须是 `PAD_B` 不是 `PAD`。**层级铁律**：分类/段标题一律楷体金字（`UI.kai_text` + `gold_hi`），不许和条目正文同色同字号（异火卡 `doupo_list` 用数据层 `head=True` 显式标注）。**配色语义**：完成=金（`gold`）、当前焦点=玫红（`fret/fret_hi`）、未解锁=灰紫（`weak`）、负面=红（`red`）、掉落/冷却类=青（`cyan`）、完成态标签=绿（`green`）。换配色/皮肤时**测试断言读 `doupo.C_*` 或 `doupo_ui.G` 常量、禁止硬编码 hex**。 | `src/plugins/qq_bridge/pic/templates/doupo_ui.py`（`G`/`PAD_X`/`PAD_B`/`MIN_MARGIN`/`card_shell`/`panel`）+ `doupo.py::_pal()` 末尾把 `UI.G` 追加进调色板（避免两处定义漂移）；`tmp/render_all_doupo.py`（15 张卡全量出图，失败非 0 退出）；`tmp/check_all_doupo_boxes.py`（10 张接 boxes 协议的卡：溢出 0 / 重叠 0 / 最小边距 27~46px）；`tests/test_pic_templates.py::test_doupo_panel_png_and_layout`（高度 810 + `_measure` 一致）；`tests/test_battle_review.py`（229/229，含遗迹卡 boxes 无溢出无重叠）；`fonts.font_path("kai")` → `assets/doupo_fonts/doupo_kai.ttf`（simkai 子集 7445 字） |
 | **炼药丹雷：七品起成丹必引雷扣血、有出战傀儡 50% 全额免伤并淬炼（用户 2026-11-27 拍板三选）**。原著第920处「傀儡抗一两道五色丹雷还行、度过丹雷痴人说梦」「吸收雷霆之力的傀儡徐徐修复」是唯一依据；此前 `CRAFT_SUCCESS` 只有文案无机制=假机制，现已补真。常量/判定唯一源 `doupo/danlei.py`（`DANLEI_MIN_IDX=6`/`DAMAGE_RATE`/`GUARD_CHANCE=0.50`/`BATCH_CAP=3`），低阶 plan=None 逐字节零改动；异步落库 `danlei_cmd.py`（挡下→`puppet_core.temper` 淬炼，不额外扣雷淬石/金币）。🚨 地板 `apply_hp` 必须 `max(min(before,floor), before-hurt)`——只拦扣过头、绝不反向给残血加血；地板复用 `cfg.LOSE_HP_FLOOR` 禁另造 0.05。🚨 炼药命令组已迁 `commands_craft.py`（commands.py 破 200KB 红线），AST 结构守门扫新模块 | `tools/check_danlei.py --check`（契约全过）+ `--selftest`（8 类变异全抓）；`test_danlei.py` 9 行为测试；零回归 `test_core` 35、`test_commands` 137、`test_use_danwen` 85、`tests/test_doupo_craft_flame_aid.py` 15 |
 | **玩法细则卡 / 成傀卡必须气泡包裹，不许纯文本行平铺**（用户 2026-11-22「纯文本较多、信息密集的卡片按当前思路优化」）。盘点 13 张斗破模板：8 张已气泡/分层（人物/技能/宗门/名录/战斗/遗迹/丹方/傀儡）、`doupo_style` 是公共模块、menu/list 已结构分层（口令大字/右侧状态/等级条，不属纯文本墙）——真正纯文本平铺的只有 2 张，已改：① `doupo_help.py` 每【】组一个圆角气泡（组名靛紫粗体+竖条+分割线，组内要点折行），`_layout` 按组聚合算气泡高，2074→2474px；② `doupo_craft.py` 旧版 `return _battle.build()` 因 data 缺 rich 字段落进 **legacy 纯文本骨架**（隐藏技术债），改独立分组气泡+序号圆标+subtitle 强调条。两张都走 `_pal()` 吃新配色、boxes 自检 0 | `tmp/check_help_boxes.py`（11 组 62 盒 800×2474 PROBLEMS 0）、`tmp/check_craft_boxes.py`（3 组 18 盒 800×664 PROBLEMS 0）+ 真出图肉眼核对；`tests/test_doupo_puppet_craft_card.py::test_manifest` 静态断言改验独立气泡骨架（`def _plan`/`c.ellipse`/`_pal(t)`，反证退回 `_battle.build` 即红）；craft `TOTAL FAILED=0`；全量 40 测试文件 0 失败。`雷淬纯度 0%` 后的 `□□□□` 是 `puppet_core.dye_bar` 的 `■□`(U+25A0/25A1) 空心态，字体有真字形，非豆腐框 |
+| **每个玩家可见回包携带的按钮，唯一目的是「让玩家立刻能做下一步」，禁止默认塞主菜单、禁止挂与本次结果无关的按钮**（用户 2026-11-28 立永久纪律原话：「每个反馈给玩家可见的信息携带的按钮目的都是方便玩家操作，明白了吗」）：判据三条——① 点它能推进当前状态（入塔 → 结算 → 出塔），不是复述播报里刚做完的事；② 该结果不该出现的按钮一律不挂（塔中不挂「战斗」、塔外不挂「出塔」，没火能时「修炼」点了也只会再失败一次）；③ 按钮文字必须与播报里出现的口令逐字一致（播报写「发「修炼」结算」按钮就得是「修炼」，不许换成「查看」「继续」）。实现红线：`doupo_buttons.CARD_ACTIONS[card_key]` 是唯一真源，**同一口令的不同结果必须走状态化按钮组**——`commands.cmd_furnace_enter_state` 返回 `(播报文本, state_key)`，`button_dispatch` 用 `send_key = state_key or card_key` 发键，禁止一个口令只挂一组死按钮、禁止在 handler 里临时拼按钮数组。现行塔类五组：`cult_text`(修炼/出塔/火能) · `tower_blocked`(战斗/火能) · `tower_settle_up`(突破/修炼/出塔) · `tower_out_text`(修炼/火能/战斗) · `tower_energy_text`(修炼/换卡/战斗) | `tests/test_doupo_buttons.py` 31 项（按钮族基线 + 禁主菜单/禁自身 + dispatch plan 一致 + 入站首词派生一致 + 卡片集合一致）；`doupo/test_tower_cultivate.py` 第⑤节用 `ast` 直接读 `CARD_ACTIONS` 字面量做**第二套独立基准**（不走运行时 import，避免同一份真源自证），变异 3 组全红：按钮回退旧组 / 没火能挂错组 / 修为满不给突破组 |
 
 ---
 
@@ -3547,3 +3548,57 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
 - **逐层分档掉落**（P-D 增强版）：`tower_data.floor_loot(n)` 确定性（不掷骰，同层恒定）按层数分档（0/51/151/301→tier1~4）+ 怪种定品级（normal-1/elite 0/boss+1，钳1~4），tier 封顶后数量随层数递增（无限层「以此类推」）。材料名取 `NOVEL_MATERIALS` tier1~4，丹药取既有配方，**不新增物品**。`_LOOT_MATERIAL_POOL` 是零依赖镜像，守门逐 tier 比对真源防漂移。
 - 🔑 **掉落跟随 `tower_paid_floor` 水位线**（`incremental_loot(to,paid)`）：电梯重打旧层不再刷材料/丹药；分轮领==一口气领（确定性掉落才能做累计差，绝不能给逐层掉落加 rng）。`core.tower_settle` 入包并在回包 dict 带 `loot`；三处结算回包（cmd_tower_settle/超时自动/阵亡）全部展示。
 - 守门 `tests/test_doupo_tower_500.py` 12 例 + 4 变异（DIFF_QUAD 回 0.15 / ATK 回 0.18 / 怪种品级颠倒 / 忽略水位线）全绿全红；塔相关 36 passed。`test_doupo_tower.py::test_floor_kind_and_hard` 的 `d50>3.0` 旧断言已改新口径（低层平缓+500后变陡）。
+
+
+---
+
+## 变更记录 · 2026-11-28 塔修播报重写 + 按钮跟结果走（用户「这两个看不懂」）
+
+用户原话：「那这个出塔结算和修炼中播报有点看不懂，你修正一下和修炼相关的播报，还有底部携带的按钮，描述既不能繁琐多字也不能简单的看不懂，按钮也要符合播报内容当前需求或者下一步需求，别默认塞一堆不相关没用的按钮，你要永远记住，每个反馈给玩家可见的信息携带的按钮目的都是方便玩家操作，明白了吗」
+
+### 播报：一句话说清「做了什么 / 现在多少 / 下一步」
+- 唯一真源 `commands._tower_head()`（塔名 + 卡档 + 心火倍率）+ `commands._cool_minutes()`（火毒清完分钟数，向上取整）。
+- `cmd_furnace_enter_state` 拆成**返回 `(播报, 按钮组 key)`** 的状态机，三种结果各说各的话：
+  - `enter`：「🚪 已入塔，本次不发修为。」+ 火能/火毒 + 「10 分钟后发「修炼」结算；提前走发「出塔」。」
+  - `wait`：「⏳ 还差 N 分钟才够一块（1 火能 = 10 分钟）。」——**旧文案写死「不足 1 分钟」是假话**，真实门槛是 1 火能块。
+  - `no_energy`：「⚠️ 火能耗尽，你被送出塔外。」+ 两条真实来源（打怪「怪等级 ÷ 5」/ 每日免费 20）。
+  - `ok`：「🧘 修炼 N 分钟，修为 +X（心火 ×M，耗火能 K）」+ 火毒增量 + 零头留塔说明。
+- `cmd_furnace_exit`：`🚪 已出塔（本次 N 分钟，修为 +X）` + 火毒「每分钟 -2，约 N 分钟清完」；**已在塔外不再假装结算**。
+- `cmd_furnace_status`（火能页）去掉岩浆三选一的长篇解释，改一行「约 N 小时」换算；火毒满时直接给冷却分钟数。
+- 净效果：`commands.py` 194981 → 194479 B（**减 502 B**，长文案换成短句反而更省）。
+
+### 按钮：跟这次的真实结果走，不跟口令走
+- 新增 5 组：`tower_blocked` / `tower_settle_up` / `tower_out_text` / `tower_energy_text` / `break_text`；
+  `cult_text` 由 `(战斗,突破,人物)` 改为 `(修炼,出塔,火能)`——旧组在塔里挂「战斗」等于诱导玩家白跑一趟。
+- `button_dispatch` 新增 `state_key` 机制：`cmd_furnace_enter_state` 的第二个返回值决定按钮组，
+  同一句「修炼」按结果分别落到 3 个不同按钮组。
+- 补齐登记：`出塔` / `火能` / `换卡` 三条按钮口令进 `_PLAN`（`入塔` 不登记——它不在任何 `CARD_ACTIONS` 里，
+  `tests/test_doupo_buttons.py` 的「dispatch plan 混入非按钮口令」会拦）。
+
+### 守门与变异
+- 新建 `src/plugins/doupo/test_tower_cultivate.py` **15/15**：① 速率同源 ② 整块门槛与文案（含 `need_min`）
+  ③ 代价（火毒触顶/没火能）④ 塔中静修让位（`__tower_in` 镜像不落库）⑤ 按钮跟结果走（AST 读字面量做第二套基准）。
+- `tests/test_doupo_buttons.py` **31 PASS / 0 FAIL**（补 `_SPECIAL_CARD_KEYS_FALLBACK`、按钮族基线、`REPLY_CARD_KEY` 三处）。
+- 变异 13 组全红：速率回写死→红3 · `need_min`→红1 · 入塔文案→红1 · wait 文案→红1 · 去让位→红1 ·
+  去缓存同步→红1 · 镜像落库→红1 · 按钮回退→红1 · 没火能挂错组→红1 · 修为满不给突破组→红1。
+- 回归：`test_commands` 141 / `test_core` 35 / `test_offline_cap` 6 / `test_doupo_custom_buttons` 19 /
+  `test_doupo_craft_buy_buttons` 43 全绿。
+
+### 真回包（本地实跑 8 种，与手机逐字符一致）
+```text
+🔥 天焚炼气塔 · 黑火晶卡　心火 ×1.5
+🚪 已入塔，本次不发修为。
+　火能 184　火毒 0/100
+　10 分钟后发「修炼」结算；提前走发「出塔」。
+
+⏳ 还差 9 分钟才够一块（1 火能 = 10 分钟）。
+　火能 184　火毒 0/100
+
+🧘 修炼 20 分钟，修为 +1692（心火 ×1.5，耗火能 2）
+　火能 182　火毒 24/100（本次 +24）
+　零头 5 分钟留在塔里，下次接着算。
+　修为已满，可发「突破」晋升。
+
+🚪 已出塔（本次 20 分钟，修为 +180）
+　火能 182　火毒 24/100（每分钟 -2，约 12 分钟清完）
+```

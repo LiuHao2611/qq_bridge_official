@@ -298,7 +298,8 @@ async def _(event: Event):
     # 2026-11-28 用户第二次纠正：「我发修炼怎么还是没入塔，非要多此一举」。
     # 「修炼 / 静修 / 打坐」直接进天焚炼气塔（=「入塔」），不再走静修+一句入塔提示。
     # 照塔的规矩来：没火能就提示去领/战斗获取，不回落静修（用户拍板）。
-    await cult.finish(await commands.cmd_furnace_enter(store, str(event.user_id)))
+    msg, key = await commands.cmd_furnace_enter_state(store, str(event.user_id))
+    await finish_text(cult, event, msg, card_key=key)
 
 
 brk = on_regex(_pat(r"(?:突破|晋升|升星)"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -1221,7 +1222,8 @@ tower_in = on_regex(_pat(r"入塔"), priority=PRI, block=True, rule=_mode_is("do
 async def _(event: Event):
     event = view(event)
     await _need_group(event, tower_in)
-    await tower_in.finish(await commands.cmd_furnace_enter(store, str(event.user_id)))
+    msg, key = await commands.cmd_furnace_enter_state(store, str(event.user_id))
+    await finish_text(tower_in, event, msg, card_key=key)
 
 
 tower_out = on_regex(_pat(r"出塔"), priority=PRI, block=True, rule=_mode_is("doupo"))
@@ -1231,7 +1233,9 @@ tower_out = on_regex(_pat(r"出塔"), priority=PRI, block=True, rule=_mode_is("d
 async def _(event: Event):
     event = view(event)
     await _need_group(event, tower_out)
-    await tower_out.finish(await commands.cmd_furnace_exit(store, str(event.user_id)))
+    await finish_text(tower_out, event,
+                      await commands.cmd_furnace_exit(store, str(event.user_id)),
+                      card_key="tower_out_text")
 
 
 tower_fire = on_regex(_pat(r"(?:火能|聚火壶)"), priority=PRI, block=True,
@@ -1242,7 +1246,9 @@ tower_fire = on_regex(_pat(r"(?:火能|聚火壶)"), priority=PRI, block=True,
 async def _(event: Event):
     event = view(event)
     await _need_group(event, tower_fire)
-    await tower_fire.finish(await commands.cmd_furnace_status(store, str(event.user_id)))
+    await finish_text(tower_fire, event,
+                      await commands.cmd_furnace_status(store, str(event.user_id)),
+                      card_key="tower_energy_text")
 
 
 tower_card = on_regex(_pat(r"换卡"), priority=PRI, block=True, rule=_mode_is("doupo"))

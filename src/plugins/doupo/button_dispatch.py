@@ -40,7 +40,11 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     "入道": ("cmd_enter", "enter", "enter_text"),  # 已在群中→返回提示；不重复建号
     "人物": ("cmd_panel", "qq", "panel"),
     "修炼": ("cmd_furnace_enter", "qq", "cult_text"),  # 2026-11-28 修炼=入塔，不再静修+提示
-    "突破": ("cmd_break", "qq", "cult_text"),
+    # 2026-11-28 塔类按钮补登记：不登记 = 点了没反应（守门⑤会拦）。
+    "出塔": ("cmd_furnace_exit", "qq", "tower_out_text"),
+    "火能": ("cmd_furnace_status", "qq", "tower_energy_text"),
+    "换卡": ("cmd_furnace_upgrade", "qq", "tower_energy_text"),
+    "突破": ("cmd_break", "qq", "break_text"),
     "战斗": ("cmd_fight", "qq", "fight_text"),
     "战斗评价": ("cmd_battle_comment", "qq", "battle_text"),
     # 2026-11-25：战斗回执的按钮族里加了「战斗回看」，但这里漏登记 →
@@ -334,6 +338,9 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
     # 必须在调用之前初始化，否则会被下面的卡片分支重置成 None。
     ruin_report = None
     fn = getattr(cmd_mod, fn_name)
+    # 2026-11-28：塔类回执的按钮组要按**这次结果**选（入塔/还差几分钟/结算/触顶/没火能），
+    # 写死一个 key 必然给玩家挂上此刻用不上的按钮。
+    state_key = ""
     # 2026-11-26：「炼制傀儡」按钮要与手打口令出**同一张成傀卡**，而成傀卡需要
     # 命令把战果写进 report（``cmd_craft_puppet(..., report=rep)``）。这里提前把
     # report 传进去，渲染段据此出卡；失败/资格不足仍然是文本（与口令一致）。
@@ -353,6 +360,8 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
             # 战况写进 ruin_report，随卡一起发；不再另发一条文字战报。
             ruin_report = {}
             msg = await fn(store, openid, None, report=ruin_report)
+        elif fn_name == "cmd_furnace_enter":
+            msg, state_key = await cmd_mod.cmd_furnace_enter_state(store, openid)
         elif shape == "qq_str":
             msg = await fn(store, openid, (arg_override or "").strip())
         else:  # "qq"
@@ -366,7 +375,7 @@ async def dispatch_button(bot: Any, full_ctx: dict, cmd: str,
     # 出卡口令：card.render_* + 带按钮再下发；渲染失败降级为纯文本
     # 2026-11-26：`send_key` 允许把「视图」和「按钮族」分开（查看丹药卡就是这样：
     # 卡片走 item:<丹名> 的逐丹按钮，回执本身不是 use_text）。
-    send_key = card_key
+    send_key = state_key or card_key
     if card_key:
         png = None
         try:

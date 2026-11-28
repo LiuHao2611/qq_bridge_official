@@ -54,6 +54,9 @@ _SPECIAL_CARD_KEYS_FALLBACK = frozenset({
     "task_panel", "main_submit", "task_submit",
     "tower_text", "weekly_text",
     "cult_text", "equip_text", "skill_text", "flame_text",
+    # 2026-11-28 塔类按结果分组 + 突破独立
+    "tower_blocked", "tower_settle_up", "tower_out_text", "tower_energy_text",
+    "break_text",
     "buy_text", "craft_text", "use_text", "shop_text",
     "enter_text", "puppet_text", "duel_text",
     "setup_text",
@@ -266,7 +269,13 @@ def test_each_card_buttons_are_relevant_family():
         "tower_text": {"塔层", "塔结算", "自动爬塔", "战斗"},
         "duel_text": {"战斗", "人物"},
         "weekly_text": {"周本状态", "战斗", "人物"},
-        "cult_text": {"战斗", "突破", "人物"},
+        # 2026-11-28 用户「按钮要符合播报当前/下一步需求，别默认塞一堆」
+        "cult_text": {"修炼", "出塔", "火能"},
+        "tower_blocked": {"战斗", "火能"},
+        "tower_settle_up": {"突破", "修炼", "出塔"},
+        "tower_out_text": {"修炼", "火能", "战斗"},
+        "tower_energy_text": {"修炼", "换卡", "战斗"},
+        "break_text": {"人物", "修炼"},
         "equip_text": {"强化", "人物", "战斗"},
         "skill_text": {"斗技", "上阵", "人物"},
         "flame_text": {"养火", "异火", "人物"},
@@ -501,7 +510,8 @@ def test_reply_card_key_for_inbound_mapping():
         "战斗评价": "battle_text", "战斗回看": "review_text",
         "爬塔": "tower_text", "塔层": "tower_text", "塔结算": "tower_text",
         "周副本": "weekly_text", "周本状态": "weekly_text",
-        "修炼": "cult_text", "突破": "cult_text",
+        "修炼": "cult_text", "突破": "break_text",
+        "出塔": "tower_out_text", "火能": "tower_energy_text",
         "上阵": "skill_text", "学斗技": "skill_text",
         "服丹": "use_text", "锁定": "use_text", "解锁": "use_text",
         "买": "buy_text", "炼制": "craft_text", "入道": "enter_text", "主题": "enter_text",
@@ -510,7 +520,7 @@ def test_reply_card_key_for_inbound_mapping():
         "战斗": "fight_text", "斗破菜单": "menu", "人物": "panel", "帮助": "help",
         "斗技": "skills", "宗门斗技": "faction", "宗门": "faction", "转宗": "skill_text",
         "异火": "flames", "宝库": "shop", "炼药": "recipes", "查看": "use_text",
-        "背包": "bag", "排行": "rank", "抢": "rank", "送": "bag", "换卡": "cult_text",
+        "背包": "bag", "排行": "rank", "抢": "rank", "送": "bag", "换卡": "tower_energy_text",
         "切磋": "duel_text", "应战": "duel_text", "拒战": "duel_text",
     }
     for inbound, want in cases.items():

@@ -2339,13 +2339,18 @@ async def cmd_lock(store, qq, name, on: bool = True) -> str:
 # ---------------------------------------------------------------------------
 def _tower_head(st: dict) -> str:
     tier = core.tower_tier(st.get("card_tier", 0))
-    name = cfg.FACTION_CARD_NAMES[tier]
-    return (f"🔥 天焚炼气塔 · {name}"
-            f"（可入第 1~{core.tower_max_floor(tier)} 层）"
+    return (f"🔥 天焚炼气塔 · {cfg.FACTION_CARD_NAMES[tier]}"
             f"　心火 ×{core.tower_mult(tier, bool(st.get('magma'))):.1f}")
 
 
+def _cool_minutes(poison: int) -> int:
+    """火毒清零还要几分钟（向上取整）。"""
+    rate = float(cfg.TOWER_POISON_COOL_PER_MIN)
+    return int((int(poison) + rate - 0.01) // rate) if poison > 0 else 0
+
+
 async def cmd_furnace_status(store, qq) -> str:
+    """聚火壶状态：火能 / 火毒 / 卡档 / 今日免费 / 换卡门槛（只答「我在什么状况」）。"""
     p = await _player(store, qq)
     if not p:
         return NOT_ENTERED
@@ -2356,80 +2361,83 @@ async def cmd_furnace_status(store, qq) -> str:
         core.alchemy_settle(p, st, entering=False)
     await store.set_tower_state(str(qq), st)
     tier = core.tower_tier(st.get("card_tier", 0))
-    lv = int(p.get("lv", 1))
-    cap = int(cfg.TOWER_POISON_CAP)
-    poison = int(st.get("fire_poison", 0))
-    magma = bool(st.get("magma"))
-    lines = [_tower_head(st), ""]
-    lines.append(f"　火能 {int(st.get('fire_energy', 0))}"
-                 f"（1 点 = {int(cfg.TOWER_MINUTES_PER_ENERGY)} 分钟塔修）")
-    lines.append(f"　火毒 {poison}/{cap}（每分钟 +{core.tower_poison_rate(tier, lv, magma):.1f}"
-                 f"；离塔每分钟 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}）")
+    cap, per = int(cfg.TOWER_POISON_CAP), int(cfg.TOWER_MINUTES_PER_ENERGY)
+    energy, poison = int(st.get("fire_energy", 0)), int(st.get("fire_poison", 0))
+    in_tower = bool(int(st.get("in_tower") or 0))
+    lines = [_tower_head(st),
+             f"　火能 {energy} 点（1 点 = {per} 分钟，约 {energy * per // 60} 小时）",
+             f"　火毒 {poison}/{cap}（塔内 +{core.tower_poison_rate(tier, int(p.get('lv', 1))):.1f}/分"
+             f"，塔外 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.0f}/分）",
+             "　" + ("状态：塔中修炼中" if in_tower else "状态：塔外")]
     if poison >= cap:
-        lines.append("　⚠️ 火毒已满，经脉如焚 —— 必须先离塔冷却，硬练会废掉根基。")
-    lines.append("　状态：" + ("塔中修炼中" if int(st.get("in_tower") or 0) else "塔外"))
-    lines.append(f"　今日免费火能：{'已领 +%d' % got if got else '已领过'}"
-                 f"　｜　累计入塔 {int(st.get('enters', 0))} 次")
+        lines.append(f"　⚠️ 火毒已满，约 {_cool_minutes(poison)} 分钟才清得完，硬练废根基。")
+    lines.append("　今日免费火能：" + ("已领 +%d" % got if got else "已领过"))
     nxt = tier + 1
     if nxt < len(cfg.FACTION_CARD_NAMES):
-        lines.append(f"　换卡：{cfg.FACTION_CARD_NAMES[tier]} → "
-                     f"{cfg.FACTION_CARD_NAMES[nxt]} 需 "
-                     f"{int(cfg.FACTION_CARD_UPGRADE_COST[tier])} 火能（发「换卡」）")
+        lines.append(f"　换卡：{cfg.FACTION_CARD_NAMES[tier]} → {cfg.FACTION_CARD_NAMES[nxt]}"
+                     f" 需 {int(cfg.FACTION_CARD_UPGRADE_COST[tier])} 火能")
     else:
         lines.append("　已持紫火晶卡，再无可换。")
     if core.tower_magma_open(p, tier):
-        lines.append("　🌋 塔底岩浆世界已开启：心火 ×%.1f，火毒也 ×%.1f（自动生效）"
+        lines.append("　🌋 岩浆世界：心火 ×%.1f，火毒也 ×%.1f"
                      % (float(cfg.TOWER_MAGMA_MULT), float(cfg.TOWER_MAGMA_POISON_MULT)))
-    elif tier >= len(cfg.FACTION_CARD_MULT) - 1:
-        lines.append(f"　🌋 岩浆世界需斗灵（lv{int(cfg.TOWER_DOU_LING_LV)}）才扛得住。")
-    else:
-        lines.append("　🌋 塔底岩浆世界：紫火晶卡 + 斗灵方可入。")
     return "\n".join(lines)
 
 
-async def cmd_furnace_enter(store, qq) -> str:
+async def cmd_furnace_enter_state(store, qq) -> tuple[str, str]:
+    """「修炼」/「入塔」的唯一实现，返回 **(播报文本, 按钮组 key)**。
+
+    按钮组按**这次的真实结果**选，不是按口令选：入塔后给「修炼/出塔/火能」，
+    火能耗尽给「战斗/火能」，火毒触顶给「火能/战斗」。每一个按钮都对应玩家
+    此刻真能用得上的下一步，不许挂主菜单凑数（用户 2026-11-28 拍板）。
+    """
     p = await _player(store, qq)
     if not p:
-        return NOT_ENTERED
+        return NOT_ENTERED, "enter_text"
     st = await store.tower_state(str(qq))
     got = core.tower_daily_energy(st, date.today().isoformat())
-    was_in = bool(int(st.get("in_tower") or 0))
     res = core.alchemy_settle(p, st, entering=True)
     await store.set_tower_state(str(qq), st)
     await store.put_player(p)
     head = _tower_head(st)
+    cap, per = int(cfg.TOWER_POISON_CAP), int(cfg.TOWER_MINUTES_PER_ENERGY)
     daily = f"（今日免费火能 +{got}）" if got else ""
-    per = int(cfg.TOWER_MINUTES_PER_ENERGY)
-    if res["mode"] == "enter":
-        cool = f"，火毒消解 -{res['cooled']}" if res.get("cooled") else ""
-        return (f"{head}\n🚪 你踏入塔中，心火扑面{cool}{daily}。\n"
-                f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}\n"
-                f"　本次只是入塔，不发修为；满 {per} 分钟后再发一次「修炼」"
-                f"才按整块结算（1 火能 = {per} 分钟），发「出塔」离开。")
-    if res["mode"] == "wait":
-        return (f"{head}\n🔥 你正在塔中，心火淬体。\n"
-                f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
-                f"{daily}\n　（本块还差 {res.get('need_min')} 分钟：1 火能 = {per} 分钟，"
-                f"满一块才结算）")
-    if res["mode"] == "no_energy":
-        return (f"{head}\n⚠️ 火能耗尽，心火渐弱 —— 你被请出塔外。\n"
-                f"　火能 0（战斗胜利可夺取火能，每日也有免费额度）"
-                f"{daily}\n　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}")
-    # settle / capped
+    mode = res["mode"]
+
+    if mode == "enter":
+        return (f"{head}\n🚪 已入塔，本次不发修为。\n"
+                f"　火能 {res['energy']}　火毒 {res['poison']}/{cap}{daily}\n"
+                f"　{per} 分钟后发「修炼」结算；提前走发「出塔」。"), "cult_text"
+
+    if mode == "wait":
+        return (f"{head}\n⏳ 还差 {res.get('need_min')} 分钟才够一块"
+                f"（1 火能 = {per} 分钟）。\n"
+                f"　火能 {res['energy']}　火毒 {res['poison']}/{cap}{daily}"), "cult_text"
+
+    if mode == "no_energy":
+        return (f"{head}\n⚠️ 火能耗尽，你被送出塔外。\n"
+                f"　火能 0　火毒 {res['poison']}/{cap}{daily}\n"
+                f"　打怪胜利可夺火能（怪等级 ÷ {int(cfg.TOWER_ENERGY_PER_LV)}），"
+                f"每天另有 {int(cfg.TOWER_FREE_ENERGY)} 点免费。"), "tower_blocked"
+
     lines = [head,
-             f"🧘 塔中修炼 {res['minutes']} 分钟，修为 +{res['gain']}"
-             f"（心火 ×{res['mult']:.1f}）" + (f"，消耗火能 {res['energy_spent']}" if res["energy_spent"] else ""),
-             f"　火能 {res['energy']}　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
-             f"（本次 +{res['poison_add']}）"]
+             f"🧘 修炼 {res['minutes']} 分钟，修为 +{res['gain']}"
+             f"（心火 ×{res['mult']:.1f}，耗火能 {res['energy_spent']}）",
+             f"　火能 {res['energy']}　火毒 {res['poison']}/{cap}（本次 +{res['poison_add']}）"]
     if res.get("leftover_min"):
-        lines.append(f"　火能不足，剩余 {res['leftover_min']} 分钟未能化开心火。")
+        lines.append(f"　零头 {res['leftover_min']} 分钟留在塔里，下次接着算。")
     if res["capped"]:
-        lines.append("　⚠️ 火毒触顶，你被强行送出塔外 —— 必须冷却后才能再入"
-                     f"（每分钟 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}）。")
-    lv = int(p.get("lv", 1))
+        lines.append(f"　⚠️ 火毒触顶被送出塔外，约 {_cool_minutes(res['poison'])} 分钟后才值得再进。")
+        return "\n".join(lines), "tower_blocked"
     if core.can_level(p):
-        lines.append("修为已满，可发「突破」晋升。")
-    return "\n".join(lines)
+        lines.append("　修为已满，可发「突破」晋升。")
+        return "\n".join(lines), "tower_settle_up"
+    return "\n".join(lines), "cult_text"
+
+
+async def cmd_furnace_enter(store, qq) -> str:
+    """「修炼」/「入塔」回执（只要文本的旧接口，按钮 key 由 state 版提供）。"""
+    return (await cmd_furnace_enter_state(store, qq))[0]
 
 
 async def cmd_furnace_exit(store, qq) -> str:
@@ -2437,29 +2445,20 @@ async def cmd_furnace_exit(store, qq) -> str:
     if not p:
         return NOT_ENTERED
     st = await store.tower_state(str(qq))
-    if not int(st.get("in_tower") or 0):
-        # 已在塔外：冷却按时间自然进行，这里只做一次如实结算并展示
-        res = core.alchemy_settle(p, st, entering=False)
-        await store.set_tower_state(str(qq), st)
-        await store.put_player(p)
-        cool = f"，火毒消解 -{res['cooled']}" if res.get("cooled") else ""
-        return (f"{_tower_head(st)}\n你已在塔外{cool}。\n"
-                f"　火毒 {res['poison']}/{int(cfg.TOWER_POISON_CAP)}"
-                f"　火能 {res['energy']}")
+    was_in = bool(int(st.get("in_tower") or 0))
     res = core.alchemy_settle(p, st, entering=False)
     await store.set_tower_state(str(qq), st)
     await store.put_player(p)
-    poison = int(res["poison"])
-    # 2026-11-26 第二玩家黑盒 N1：出塔时火毒已归零就不能再说「火毒未散，须歇一夜」
-    # ——玩家刚出门却被劝"歇一夜"，与火毒 0/100 自相矛盾。
-    cool_tail = ("火毒未散，须歇一夜。" if poison > 0
-                 else "火毒已清，随时可再入塔。")
-    lines = [_tower_head(st),
-             f"🚪 你退出天焚炼气塔（本次 {res['minutes']} 分钟，修为 +{res['gain']}）",
-             f"　火能 {res['energy']}　火毒 {poison}/{int(cfg.TOWER_POISON_CAP)}"
-             f"（本次修炼 +{res['poison_add']}）",
-             f"　离开后每分钟火毒 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.1f}，"
-             f"{cool_tail}"]
+    cap = int(cfg.TOWER_POISON_CAP)
+    poison, energy = int(res["poison"]), int(res["energy"])
+    lines = [_tower_head(st)]
+    if not was_in:
+        lines.append("你已在塔外。")
+    else:
+        lines.append(f"🚪 已出塔（本次 {res['minutes']} 分钟，修为 +{res['gain']}）")
+    tail = (f"约 {_cool_minutes(poison)} 分钟清完" if poison > 0 else "火毒已清")
+    lines.append(f"　火能 {energy}　火毒 {poison}/{cap}"
+                 f"（每分钟 -{float(cfg.TOWER_POISON_COOL_PER_MIN):.0f}，{tail}）")
     return "\n".join(lines)
 
 

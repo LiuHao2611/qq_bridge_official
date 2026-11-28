@@ -279,7 +279,14 @@ CARD_ACTIONS = {
     "review_text": ("战斗评价", "战斗", "任务"),                # 战斗回看纯文字
     "tower_text": ("塔层", "塔结算", "自动爬塔", "战斗"),        # 爬塔回执
     "weekly_text": ("周本状态", "战斗", "人物"),                # 周副本回执
-    "cult_text": ("战斗", "突破", "人物"),                      # 修炼/突破回执
+    # 2026-11-28 用户「按钮要符合播报内容当前需求或下一步需求，别默认塞一堆不相关」：
+    # 塔类回执按**这次的真实结果**分组，每组只放玩家此刻真会点的键。
+    "cult_text": ("修炼", "出塔", "火能"),     # 入塔 / 还差几分钟 / 结算：等下一块·走人·看状态
+    "tower_blocked": ("战斗", "火能"),          # 塔暂时去不了（没火能 / 火毒触顶）：去打怪 / 看状态
+    "tower_settle_up": ("突破", "修炼", "出塔"),  # 修为已满：先突破，再决定续修还是走
+    "tower_out_text": ("修炼", "火能", "战斗"),   # 出塔回执：回塔 / 看火毒清到哪 / 去打怪
+    "tower_energy_text": ("修炼", "换卡", "战斗"),  # 火能页：进塔 / 升卡 / 打怪攒火能
+    "break_text": ("人物", "修炼"),            # 突破回执：看新面板 / 回塔续修
     "equip_text": ("强化", "人物", "战斗"),                     # 装备/强化回执
     "skill_text": ("斗技", "上阵", "人物"),                     # 学斗技/升级/上阵回执
     "flame_text": ("养火", "异火", "人物"),                      # 收服/养火回执
@@ -343,8 +350,8 @@ REPLY_CARD_KEY: dict[str, str] = {
     # 2026-11-26 隐藏样例口令：不出图，只挂「三种 action.type」的样例键盘。
     "按钮样例": "btn_sample", "按钮测试": "btn_sample",
     "周副本": "weekly_text", "周本状态": "weekly_text",
-    "修炼": "cult_text", "突破": "cult_text", "入塔": "cult_text",
-    "出塔": "cult_text", "火能": "cult_text",
+    "修炼": "cult_text", "突破": "break_text", "入塔": "cult_text",
+    "出塔": "tower_out_text", "火能": "tower_energy_text",
     "装备": "equip_text", "强化": "equip_text",
     "学斗技": "skill_text", "学习": "skill_text", "升级": "skill_text",
     "上阵": "skill_text", "斗技详情": "skill_text",
@@ -366,7 +373,7 @@ REPLY_CARD_KEY: dict[str, str] = {
     "宝库": "shop", "炼药": "recipes", "查看": "use_text", "背包": "bag",
     "排行": "rank", "抢": "rank",
     "切磋": "duel_text", "应战": "duel_text", "拒战": "duel_text",
-    "送": "bag", "换卡": "cult_text",
+    "送": "bag", "换卡": "tower_energy_text",
     "自动爬塔": "auto_tower_prompt",
     # 按钮设置（隐藏口令，不进菜单）——回执也要有自己的按钮组，
     # 否则又是一排「入道/人物/修炼/战斗/宝库」。
@@ -444,6 +451,9 @@ CARD_SELF = {
     "task_panel": "任务面板", "main_submit": "主线结算",
     "task_submit": "支线结算", "battle_text": "战斗评语", "review_text": "回看文本",
     "tower_text": "爬塔回执", "weekly_text": "周本回执", "cult_text": "修炼回执",
+    "tower_blocked": "塔暂时去不了",
+    "tower_settle_up": "修为已满", "tower_out_text": "出塔回执",
+    "tower_energy_text": "火能回执", "break_text": "突破回执",
     "equip_text": "装备回执", "skill_text": "斗技回执", "flame_text": "异火回执",
     "buy_text": "购买回执", "sell_text": "卖出回执", "craft_text": "炼丹回执", "use_text": "服丹回执",
     "shop_text": "商店回执", "enter_text": "入道回执", "puppet_text": "傀儡回执",
@@ -489,6 +499,9 @@ TEXT_CARD_KEYS = frozenset({
     "task_panel", "main_submit", "task_submit",              # 任务族回执
     "tower_text", "weekly_text",                             # 塔 / 周本回执
     "cult_text", "equip_text", "skill_text", "flame_text",   # 修炼 / 装备 / 斗技 / 异火
+    "tower_blocked", "tower_settle_up",                      # 塔类按结果分的组
+    "tower_out_text", "tower_energy_text",                   # 出塔 / 火能页回执
+    "break_text",                                            # 突破回执
     "buy_text", "sell_text", "craft_text", "use_text", "shop_text",  # 买 / 卖 / 炼 / 服 / 商店
     "enter_text", "puppet_text", "duel_text",                # 入道 / 傀儡 / 切磋
     "setup_text",                                            # 按钮设置回执

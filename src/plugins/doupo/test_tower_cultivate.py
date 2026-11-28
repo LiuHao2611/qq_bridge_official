@@ -18,11 +18,14 @@ r"""天焚炼气塔 · 修炼守门（2026-11-28，用户「这个天焚炼气�
 from __future__ import annotations
 
 import asyncio
+import ast
+import io
 import os
 import sys
 import tempfile
 import time
 import types
+from datetime import date
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGINS = os.path.dirname(_HERE)
@@ -70,7 +73,9 @@ def _player(lv=29, tier=0, qq="tower-probe"):
 
 def _st(lv=29, tier=0, energy=100, poison=0, in_tower=1, last=T0):
     return {"card_tier": tier, "fire_energy": energy, "fire_poison": poison,
-            "in_tower": in_tower, "last_ts": last, "enters": 1}
+            "in_tower": in_tower, "last_ts": last, "enters": 1,
+            # 今日免费火能已领：免得 energy=0 的用例被 +20 掩盖掉 no_energy
+            "free_day": date.today().isoformat()}
 
 
 def _settle(lv=29, minutes=10.0, tier=0, energy=100, poison=0):
@@ -147,7 +152,7 @@ def test_wait_reply_says_real_gap_not_one_minute():
 
 def test_enter_reply_says_it_pays_nothing():
     src = _await_reply(seconds=None)
-    assert "只是入塔" in src and "不发修为" in src, (
+    assert "已入塔" in src and "不发修为" in src, (
         "第一次「修炼」零修为却不说，玩家会以为机制坏了：\n%s" % src)
 
 
@@ -235,6 +240,76 @@ def test_store_marks_tower_state_and_never_persists_mirror():
         assert "__tower_in" not in raw, "内部镜像键被写进存档了"
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# 5. 按钮必须跟着这次结果走（用户 2026-11-28：别默认塞一堆不相关的）
+# ---------------------------------------------------------------------------
+def _state_key(in_tower, seconds, energy=100, poison=0, lv=29, exp=0):
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="doupo_tower_")
+        store = Store(os.path.join(tmp, "doupo.json"))
+        qq = "100001"
+        p = _player(lv, qq=qq)
+        p["exp"] = exp
+        await store.put_player(p)
+        last = 0.0 if not in_tower else time.time() - seconds
+        await store.set_tower_state(qq, _st(energy=energy, poison=poison,
+                                           in_tower=in_tower, last=last))
+        return await commands.cmd_furnace_enter_state(store, qq)
+    return asyncio.run(run())
+
+
+def test_buttons_follow_the_actual_result():
+    from doupo import commands  # noqa: F401  (保持显式依赖)
+    text, key = _state_key(0, 0)                       # 塔外首按 = 入塔
+    assert key == "cult_text", "入塔回执挂错按钮组：%s\n%s" % (key, text)
+    text, key = _state_key(1, 60)                      # 塔中 1 分钟 = 还差一块
+    assert key == "cult_text", "wait 回执挂错按钮组：%s" % key
+    text, key = _state_key(1, 11 * 60, energy=0)       # 没火能
+    assert key == "tower_blocked", "没火能却给了 %s（该去战斗/看状态）" % key
+    text, key = _state_key(1, 11 * 60)                 # 正常结算
+    assert key == "cult_text", "结算回执挂错按钮组：%s" % key
+    text, key = _state_key(1, 120 * 60, poison=90)     # 火毒触顶
+    assert key == "tower_blocked", "火毒触顶却给了 %s" % key
+    text, key = _state_key(1, 11 * 60, exp=cfg.exp_need(29) - 1)   # 修为满
+    assert key == "tower_settle_up", "修为满了却没给「突破」：%s" % key
+
+
+def test_buttons_never_contain_main_menu_or_unrelated():
+    """塔类按钮组里不许出现主菜单/入道这类「跟当前一步无关」的键。
+
+    这里**不 import** doupo_buttons（它依赖 httpx，本机测试环境没有），直接
+    AST 读源码里的 CARD_ACTIONS 字面量 —— 与守门脚本同一口径。
+    """
+    src = io.open(os.path.join(_HERE, "..", "qq_bridge", "channel", "doupo_buttons.py"),
+                  encoding="utf-8").read()
+    table = None
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "CARD_ACTIONS" for t in node.targets):
+            table = ast.literal_eval(node.value)
+    assert table, "没解析出 CARD_ACTIONS"
+    banned = {"斗破菜单", "斗破口令", "修仙菜单", "帮助", "入道"}
+    allowed = {c for acts in table.values() for c in acts}
+    # 第二套独立基准：每组到底该是哪几个键，写死在这里（不是从实现算出来的）。
+    expect = {
+        "cult_text": {"修炼", "出塔", "火能"},
+        "tower_blocked": {"战斗", "火能"},
+        "tower_settle_up": {"突破", "修炼", "出塔"},
+        "tower_out_text": {"修炼", "火能", "战斗"},
+        "tower_energy_text": {"修炼", "换卡", "战斗"},
+    }
+    combos = set()
+    for key, want in expect.items():
+        acts = tuple(table[key])
+        assert set(acts) == want, "%s 按钮变成 %s（应为 %s）" % (key, set(acts), want)
+        assert not (set(acts) & banned), "%s 混入无关键：%s" % (key, set(acts) & banned)
+        for cmd in acts:
+            assert cmd in allowed or cmd in {"按钮样例"}, "%s 的「%s」不许点" % (key, cmd)
+        assert frozenset(acts) not in combos, "%s 与别的组按钮组合重复" % key
+        combos.add(frozenset(acts))
+
 
 
 if __name__ == "__main__":
