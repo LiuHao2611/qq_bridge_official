@@ -581,8 +581,12 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
     if kind and kind != rank:
         parts.append(kind)
     parts.append(f"斗气 {frac}%")
+    # 2026-11-28：合并卡保留 Lv 文本供纯文本兜底；真实等级按阶位上限，
+    # 条图仍画 5 段（模板既有契约），升级消耗走 core.skill_up_cost 真源。
+    lv_bar = max(1, min(5, int(sk.get(name, 1))))
+    lv_real = max(1, min(core.skill_max(e), int(sk.get(name, 1))))
     if show_lv:
-        parts.append("Lv%d" % max(1, min(5, int(sk.get(name, 1)))))
+        parts.append("Lv%d" % lv_bar)
     if not unlocked:
         parts.append("lv%s 解锁" % e.get("unlock", "?"))
     meta = " · ".join(x for x in parts if x)
@@ -596,13 +600,22 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
         # 与 core.damage_schedule / _player_hit 同源，避免只有倍率没有实数。
         chips.append({"label": "当前", "value": str(int(dmg_now))})
     chips += fx.effect_chips(e.get("effects") or [])
+    # 2026-11-28 玩家可见反馈：「斗技卡要看到焚血散和升这门要多少」。
+    # 与 build_skills_data / cmd_skill_up 共用 core.skill_up_cost + skill_max，
+    # 卡面不再出现「升级时才发现材料不够」。满级直说已满，不给假消耗。
+    up_max = core.skill_max(e)
+    up_cost = 0 if lv_real >= up_max else core.skill_up_cost(lv_real, e)
+    if show_lv:
+        chips.append({"label": cfg.SKILL_UP_ITEM,
+                      "value": ("已满" if lv_real >= up_max
+                                else f"升{lv_real + 1} ×{up_cost}")})
 
     # 2026-11-15 用户纠正：「不要写原著多少章这种描述，你见过哪个游戏的
     # 技能描述这样写的？」——来源只取 skill_book.source（谁所使 / 怎么得到），
     # 由 desc_with_source 用逗号并进描述第一句，像游戏技能说明而不是小说注脚；
     # novel 章节引文只用于离线核验，绝不进卡片。有来源就加、没有就不加。
     phrase = fx.source_phrase(e)
-    lv = max(1, min(5, int(sk.get(name, 1))))
+    lv = lv_bar
     #: 2026-11-25 用户「等级展示改成解包游戏里发光/不发光的小元素」：
     #: 合并卡模板把 meta 末尾的 ``LvN`` 换成 5 段等级条（亮 N 段 + 暗 5-N 段）。
     #: 结构化字段给模板和测试用；纯文本兜底仍保留 ``LvN`` 字样。
@@ -639,6 +652,13 @@ def _roster_row(e: dict, no, sk: dict, state: str, state_kind: str,
         "gate": str(e.get("gate") or ""),
         # 技能等级（仅 show_lv=True 的合并卡有意义；宗门池卡恒 None 不画条）
         "lv": lv if show_lv else None,
+        # 升技材料（2026-11-28）：真等级/真上限/真消耗全部来自 core，
+        # 卡面 chip 和纯文本兜底都读这里，避免两处各算一遍后数字打架。
+        "lv_real": lv_real if show_lv else None,
+        "lv_max": up_max if show_lv else None,
+        "maxed": (lv_real >= up_max) if show_lv else None,
+        "up_item": cfg.SKILL_UP_ITEM if show_lv else None,
+        "up_cost": up_cost if show_lv else None,
         # ---- 兼容通用列表卡 / 既有测试的扁平字段 ----
         "title": name,
         "right": state,
@@ -779,10 +799,16 @@ def build_learned_data(p: dict) -> dict:
     n_ben = sum(1 for e in learned if e.get("origin") == "本宗")
     n_other = sum(1 for e in learned if e.get("origin") == "他宗")
     n_common = sum(1 for e in learned if e.get("origin") == "通用")
+    # 2026-11-28 玩家反馈：合并卡看不到升技材料。持有量放卡顶，单门消耗放
+    # 每行 chip（见 _roster_row），两处都用 config.SKILL_UP_ITEM + core 真源。
+    up_item = cfg.SKILL_UP_ITEM
+    have = core.count_item(p, up_item)
     return {
         "icon": "bolt", "title": "我的斗技",
-        "subtitle": (f"已上阵 {len(on_rows)}/{cfg.LOADOUT_SIZE} · 已领悟 {len(learned)} 门"
-                     f"（本宗 {n_ben} / 他宗 {n_other} / 通用 {n_common}）"),
+        "subtitle": (f"上阵 {len(on_rows)}/{cfg.LOADOUT_SIZE} · 已领悟 {len(learned)}"
+                     f"（本{n_ben}/他{n_other}/通{n_common}） · {up_item} ×{have}"),
+        "item": up_item,
+        "item_count": have,
         "groups": groups,
         "rows": rows,
         "tip": "序号即上阵编号：发「上阵 1 3 5 7」按号选技 ｜ 斗技详情 <技名> 看招式来历",

@@ -2526,6 +2526,10 @@ async def cmd_use(store, qq, name) -> str:
     return out
 
 
+#: 连服回执最多逐枚列几条（防 99 枚刷屏；超出只报仍有几枚生效）。
+PILL_RECEIPT_DISPLAY_CAP = 8
+
+
 async def _use_one(store, qq, p, name: str, count: int) -> str:
     """单种丹药连服 ``count`` 枚（混吃时每段走一次本函数，口径零分叉）。"""
     count = max(1, min(int(count), cfg.PILL_USE_BATCH_CAP))  # 硬顶仅防手抖刷屏
@@ -2552,6 +2556,9 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
     # 提前停的条件：没货了(none) / 满血满气(full) / 非口服(notuse/need_puppet)——
     # 这些 core 都**拦在扣物之前**，停了不浪费；抗性(resisted)丹已扣则继续下一枚。
     succeeded = 0
+    # 2026-11-28 用户实机反馈「服丹 气修丹 3 只提示一枚效果，实际生效三枚」：
+    # 旧版只用 last_msg 保留最后一枚，这里改为**逐枚收集真实回执**。
+    receipts: list[str] = []
     last_msg = ""
     stop_reason = ""
     for _ in range(count):
@@ -2565,10 +2572,16 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
                 stop_reason = reason
                 break
             # resisted / 其它：药已扣、有回执文案，记下后继续（连服抗性丹会连扣）
-            last_msg = res.get("msg") or last_msg
+            _msg = str(res.get("msg") or "")
+            if _msg:
+                receipts.append(_msg)
+                last_msg = _msg
             continue
         succeeded += 1
-        last_msg = res.get("msg") or last_msg
+        _msg = str(res.get("msg") or "")
+        if _msg:
+            receipts.append(_msg)
+            last_msg = _msg
     await store.put_player(p)
 
     # 一枚都没成功：按最后那次失败原因给出明确去向（与单枚版口径一致）。
@@ -2597,18 +2610,26 @@ async def _use_one(store, qq, p, name: str, count: int) -> str:
     # 丹纹赐福的限时增益不累加由底层 temp_buff.add 保证（同名同源刷新取最长，
     # 不乘枚数）；连服多枚不会把增益时长叠起来——见 tests/test_doupo_temp_buff。
     head = f"💊 连服【{hit}】{succeeded} 枚" if succeeded > 1 else f"💊 服下【{hit}】"
-    body = last_msg
+    if succeeded <= 1:
+        body = last_msg
+    else:
+        shown = receipts[:PILL_RECEIPT_DISPLAY_CAP]
+        body = "\n".join(f"　{i}. {m}" for i, m in enumerate(shown, 1)) or last_msg
+        if len(receipts) > len(shown):
+            body += f"\n　……其余 {len(receipts) - len(shown)} 枚同样生效（合计 {succeeded} 枚）"
     if succeeded > 1 and count > succeeded:
         # 想多吃但没货/满了，说清楚实际只吃了几枚
         body += f"\n　（本想吃 {count} 枚，只服下 {succeeded} 枚）"
     guzzle = txt.pill_guzzle(succeeded)
     if guzzle:
         body += "\n　" + guzzle
+    # 2026-11-28：多枚回执已经逐枚编号，头行别再用逗号黏住第 1 枚。
+    sep = "\n" if succeeded > 1 else "，"
     # 2026-11-26：服完最顺手的下一步是「再服一枚 / 看这味丹的详情 / 回包裹」。
     _arm_use_buttons(hit)
     if hit in cfg.MATERIAL_BY_NAME:
-        return f"✨ 炼化 {succeeded} 份【{hit}】，{body}{note}"
-    return f"{head}，{body}{note}"
+        return f"✨ 炼化 {succeeded} 份【{hit}】{sep}{body}{note}"
+    return f"{head}{sep}{body}{note}"
 
 
 def _arm_use_buttons(hit: str) -> None:
@@ -3074,6 +3095,11 @@ async def cmd_gift(store, qq, target, item, n=1, pstore=None) -> str:
 # ---------------------------------------------------------------------------
 # 爬塔副本（2026-11-17）—— 无限层冲榜 / 武器宝箱掉落 / 三选一
 # ---------------------------------------------------------------------------
+def _loot_text(loot: dict) -> str:
+    """战利品字典 →「名称×数量」串；结算/超时/自动爬塔三处同一口径。"""
+    return "、".join(f"{nm}×{qty}" for nm, qty in (loot or {}).items())
+
+
 def _expired_settle_line(p, qq) -> str:
     """把「闲置超时」的上一轮补结算，返回提示行（没有则空串）。
 
@@ -3086,8 +3112,7 @@ def _expired_settle_line(p, qq) -> str:
     res = core.tower_settle(p, stale)
     if not res.get("ok"):
         return ""
-    _loot = res.get("loot") or {}
-    _loot_txt = ("、".join(f"{nm}×{qty}" for nm, qty in _loot.items())) if _loot else ""
+    _loot_txt = _loot_text(res.get("loot"))
     return ("⏰ 上一轮闲置超时（%d 小时），已自动结算："
             "+%d 金币、+%d 修为，已通第 %d 层%s%s"
             % (ts.DEFAULT_TTL // 3600, res["gold"], res["exp"], res["floors"],
@@ -3381,8 +3406,8 @@ async def cmd_tower_settle(store, qq) -> str:
     res = core.tower_settle(p, st)
     ts.STORE.clear(qq)
     await store.put_player(p)
-    loot = res.get("loot") or {}
-    loot_txt = ("\n　🎁 掉落：" + "、".join(f"{nm}×{qty}" for nm, qty in loot.items())) if loot else ""
+    _loot_txt = _loot_text(res.get("loot"))
+    loot_txt = ("\n　🎁 掉落：" + _loot_txt) if _loot_txt else ""
     return (f"🗼 收手结算：通过 {res['floors']} 层，+{res['gold']} 金币、+{res['exp']} 修为"
             + loot_txt
             + ("　🏆 新纪录！" if res["new_record"] else f"（最高 {res['best']} 层）"))
@@ -3484,6 +3509,19 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
     else:
         hit_cap = True  # 打满上限仍未力竭
 
+    # 2026-11-28 玩家反馈「结算只有一堆箱子，战利品没展示完整」：
+    # 宝箱记录此前只数次数 + 报神兵，普通材料被吞；这里按名称汇总，
+    # 无加成补偿炎星石单独一行（comp），不重复计到本汇总里。
+    chest_items: dict[str, int] = {}
+    for c in st.get("chests") or []:
+        if c.get("type") == "weapon" or c.get("comp"):
+            continue
+        nm = str(c.get("name") or "")
+        if not nm:
+            continue
+        qty = max(1, int(c.get("n") or 1))
+        chest_items[nm] = chest_items.get(nm, 0) + qty
+
     # 收手结算（自动模式无论力竭/到顶都结算一次，避免层数与奖励白丢）
     res = core.tower_settle(p, st)
     ts.STORE.clear(qq)
@@ -3505,9 +3543,15 @@ async def cmd_auto_tower(store, qq, mode: str) -> str:
         lines.append(f"　气血 {p['hp']}/{core.stats(p)['体力']}　先「服丹」或「调息」再战。")
     lines.append(f"　结算：+{res['gold']} 金币、+{res['exp']} 修为"
                  + ("　🏆 新纪录！" if res["new_record"] else f"（最远已通 {res['best']} 层）"))
+    settle_loot = _loot_text(res.get("loot"))
+    if settle_loot:
+        lines.append("　🎁 层数奖励：" + settle_loot)
     if chests:
-        lines.append(f"　🎁 宝箱 {chests} 次"
-                     + ("，开出神兵：" + "、".join(weapons) if weapons else ""))
+        lines.append(f"　🎁 宝箱 {chests} 次")
+        if chest_items:
+            lines.append("　🎁 宝箱开出：" + _loot_text(chest_items))
+        if weapons:
+            lines.append("　🎁 宝箱开出神兵：" + "、".join(weapons))
     if comp_stone:
         # D4：Boss 层补偿以炎星石兑现。
         lines.append(f"　🎁 无加成补偿：炎星石×{comp_stone}")
