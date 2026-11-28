@@ -11,7 +11,7 @@
   2. 斗技品阶真的进 💥 行，普通/高阶/特殊/普攻四档措辞互不相同；
   3. 傀儡真的单独露脸，且伤害归因不串到玩家身上；
   4. 胜/败两套判词必须不同（不是同一句换两个字）；
-  5. 败局比胜局只多一行，胜局不许出现败局句；
+  5. 胜局赞叹紧跟判词、败局最后一句是活着的怪开口嘲讽，两者互斥；
   6. 加料之后 200 字骨架闸与「1 敌 vs 5 敌不膨胀」仍成立。
 
 另含 prove-it 反证：把每类检测的坏样本喂进去，判据必须报错。
@@ -270,25 +270,25 @@ def test_exhausted_overrides_tail():
     assert "枯竭" in out, "没提示斗气枯竭：%s" % out
 
 
-def test_lose_adds_exactly_two_lines():
-    """败局比胜局多两行：🩹 鼓励 + 🗣 险战插话（第 1 章白名单里有药老）。
+def test_praise_sits_right_after_verdict():
+    """胜局赞叹必须**紧跟判词**（用户 2026-11-28 指定位置）。
 
-    判词行/战果行换词不算多出来的行；胜局是 great 档（有伤但血量足）不插话。
+    「二星大斗师·斗晶映体，N 回合大捷」之后一句赞叹，下一行直接是高光——中间
+    不许再插别的东西；败局同位置**不许**有赞叹（有嘲讽就够）。
+    旧版把赞叹放在战报末尾（代价/台词都读完了才冒出「恐怖如斯」），已废。
     """
-    w = _render(_res(win=True), ch=1)
-    l = _render(_res(win=False), ch=1)
-    wl = [x for x in w.split("\n") if x.strip()]
-    ll = [x for x in l.split("\n") if x.strip()]
-    assert len(ll) == len(wl) + 2, "败局行数异常：胜 %d 行 / 败 %d 行\n%s" % (
-        len(wl), len(ll), l)
-    hooks = [x for x in ll if x.startswith("🩹")]
-    npcs = [x for x in ll if x.startswith("🗣")]
-    assert len(hooks) == 1, "败局收场行不是恰好一条：%s" % hooks
-    assert len(npcs) == 1, "败局 NPC 插话不是恰好一条：%s" % npcs
-    assert hooks[0] in l and "🩹" not in w, "胜局出现了败局收场句"
-    assert "🗣" not in w, "顺风局（great）也插了 NPC 话：\n%s" % w
-    # 判词行必须真的换词（不是同一句只差数字）
-    assert "大捷" in w and "力竭" in l, "胜败判词没分叉"
+    w = [x for x in _render(_res(win=True)).split("\n") if x.strip()]
+    hi = [i for i, x in enumerate(w) if "回合" in x and ("大捷" in x or "惨胜" in x
+                                                        or "险胜" in x)]
+    assert hi, "胜局找不到判词行：\n%s" % "\n".join(w)
+    i = hi[0]
+    assert i + 2 < len(w), "判词后没有赞叹行：\n%s" % "\n".join(w)
+    assert w[i + 1].startswith("\u3000"), "判词下一行不是赞叹（缩进缺失）：%s" % w[i + 1]
+    assert "💥" in w[i + 2], "赞叹与判词之间插了别的行：%s / %s" % (w[i + 1], w[i + 2])
+
+    l = [x for x in _render(_res(win=False)).split("\n") if x.strip()]
+    li = [i for i, x in enumerate(l) if "力竭" in x][0]
+    assert "💥" in l[li + 1], "败局判词后不该有赞叹行：%s" % l[li + 1]
 
 
 def test_lose_does_not_say_zhanhuo():
@@ -412,13 +412,15 @@ def test_scene_sits_before_encounter():
 
 
 def test_win_glory_and_lose_mock_are_exclusive():
-    """胜局是吹捧（🏅）、败局是嘲讽（🥀），必须互斥——不能赢了还被笑。"""
+    """胜局是吹捧（🏅 + 判词后赞叹）、败局是嘲讽（末尾怪开口），必须互斥。
+
+    2026-11-28：败局那条 🥀 换成怪的原话，但「赢了不许被笑、输了不许被吹」不变。
+    """
     w = _render(_res(win=True))
     l = _render(_res(win=False))
     assert w.count("🏅") == 1 and "🥀" not in w, "胜局的目光行不对：\n%s" % w
-    assert l.count("🥀") == 1 and "🏅" not in l, "败局的目光行不对：\n%s" % l
-
-
+    assert "🏅" not in l and "🥀" not in l, "败局的目光行不对：\n%s" % l
+    assert "🏅" not in w.split("\n")[-1], "🩸 之后又冒出一句吹捧：%s" % w.split("\n")[-1]
 def test_trash_drop_is_hyped_not_dismissed():
     """用户点名：只掉一个垃圾材料也要吹。最便宜的药材必须走 trash 池。"""
     cheap = min(cfg.HERBS, key=lambda h: int(h["price"]))["name"]
@@ -444,15 +446,20 @@ def test_rare_drop_uses_rare_pool():
 
 
 def test_defeat_has_mock_then_encourage():
-    """败局必须「先被笑、再自己站起来」，且鼓励行在嘲讽行之后。"""
-    out = _render(_res(win=False))
-    mock = [ln for ln in out.split("\n") if ln.startswith("🥀")]
-    rally = [ln for ln in out.split("\n") if ln.startswith("🩹")]
-    assert len(mock) == 1 and len(rally) == 1, "败局的目光/鼓励行数量不对：%s %s" % (
-        mock, rally)
-    assert out.index(mock[0]) < out.index(rally[0]), "鼓励排到嘲讽前面了（情绪顺序反了）"
+    """败局最后一句必须是**活着的怪开口**嘲讽（用户 2026-11-28：「放在结尾让活着
+    的怪讲出」），且排在自己的不甘之后。
 
-
+    2026-11-28 反转：旧版是一条无主旁白 🥀（无奈地摇了摇头）夹在中段，既没说话人
+    也不针对失败点——用户原话「别搞那些莫名其妙的台词硬插入」。现在嘲讽由对局
+    诊断点名失败点，只放在战报最末一行。
+    """
+    l = [x for x in _render(_res(win=False)).split("\n") if x.strip()]
+    last = l[-1]
+    assert "「" in last and "」" in last, "败局最后一句不是带引号的角色台词：%s" % last
+    assert "怪" in last, "败局最后一句没有说话人（怪名）：%s" % last
+    assert "🥀" not in "\n".join(l), "旧的通用嘲讽行还在"
+    rally = [i for i, x in enumerate(l) if x.startswith("🩹")]
+    assert len(rally) == 1 and rally[0] < len(l) - 1, "鼓励行不在嘲讽之前：%s" % l
 def test_quote_only_from_verified_pool():
     """点睛台词必须是 CHAPTER_QUOTE 里的原文，或回落无引号的旁白——不许现编。"""
     allowed = {pair[0] for pool in txt.CHAPTER_QUOTE.values() for pair in pool}

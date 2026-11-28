@@ -33,6 +33,7 @@ from . import danwen as dw
 from . import duel_challenge as dc
 from . import factions as fac
 from . import battle_flavor as _flavor
+from . import battle_verdict as _verdict
 from . import flame_drop as _fdrop
 from . import flame_skills as fs
 from . import flame_view as _fview
@@ -975,6 +976,23 @@ async def cmd_fight(store, qq) -> str:
                            hp_ratio=_hp_ratio,
                            exhausted=bool(res.get("exhausted"))),
     ]
+    # 2026-11-28 对局诊断（用户「后台要有一个对局情况分析，准确判断出失败原因或者
+    # 成功原因」）：一次算清本场到底怎么赢/怎么输，后面两句台词都只认这一个结论。
+    _vd = _verdict.analyze(res, p, lv=lv, hp_ratio=_hp_ratio, hp_max=_hp_max)
+    # 胜局赞叹只放判词行之后（用户 2026-11-28 指定：「应该加到二星大斗师斗晶映体
+    # 这一句的后面，刚刚好」）。旧版把它塞在战报最末尾，读者已经看完代价和台词才
+    # 冒出「恐怖如斯」——这就是用户说的「莫名其妙」。败局不出赞叹（有嘲讽就够）。
+    # 顺序：**具体事实的梗**（本场真打出焰分噬浪尺 / 真越级 / 有傀儡 / 斗宗以上）
+    # 优先，没有具体事实才由对局分析出吹捧句——这样出圈台词留着且不会乱插。
+    if res.get("win"):
+        _praise = _flavor.closing_line({
+            "win": True, "tier": _wt, "realm_idx": cfg.realm_index(lv),
+            "foe_kind": "", "move": str(high.get("move") or ""),
+            "has_puppet": bool(pup_hits), "rounds": int(res.get("rounds") or 0),
+            "seed": _seed,
+        }) or _verdict.praise(_vd["case"], _seed)
+        if _praise:
+            lines.append("　" + _praise)
     # 2026-11-24 限时增益：药力还有余就得在战报里露一行，否则玩家以为丹白吃了。
     _bl = tb.battle_line(p)
     if _bl:
@@ -1017,15 +1035,15 @@ async def cmd_fight(store, qq) -> str:
     _drop_txt = "、".join(f"{n}×{c}" for n, c in drops[:3])
     lines.append(txt.battle_gain(foes, _fmt(res["exp"]), _fmt(res["gold"]), _drop_txt,
                                  win=bool(res.get("win"))))
-    # 2026-11-25 第二轮：同一个位置放「别人的目光」——赢是吹捧，输是嘲讽，互斥。
-    # 赢的场次优先吹战利（用户点名「只掉一个垃圾材料也要吹到天上」）；
-    # 没有掉落才退回吹战况，避免出现「空手还能吹半句」的干瘪感。
+    # 2026-11-25 第二轮：胜局在这里「被吹捧」——优先吹战利（用户点名「只掉一个垃圾
+    # 材料也要吹到天上」），没有掉落才退回吹战况，避免「空手还能吹半句」的干瘪感。
+    # 🚨 2026-11-28：败局不再在这里塞通用嘲讽（🥀），改由战报最后一行让活着的怪
+    # 开口（见下方 _taunt）。旧写法把「无奈地摇了摇头」放在中段，嘲讽跟失败原因
+    # 毫无关系，正是用户说的「莫名其妙」。
     if res.get("win"):
         _gl = txt.drop_glory_line([n for n, _c in drops], _seed) \
             or txt.glory_line(_wt, _seed)
         lines.append(_gl)
-    else:
-        lines.append(txt.mock_line(_seed))
     # 2026-11-24 魂殿邪修：吞噬修为单独一行（已写 p["exp"]/p["pill_exp"]，此处仅反馈）。
     if int(res.get("devour") or 0) > 0:
         lines.append(f"🕯️ 吞噬炼化：斩精英/BOSS 吞噬修为 +{_fmt(res['devour'])}"
@@ -1054,35 +1072,24 @@ async def cmd_fight(store, qq) -> str:
     # 台词只在苦战/败局必出（那才是喊得出口的时候），其余场次按种子轮换。
     lines.append(txt.quote_line(_ch, _seed,
                                 special=(not res.get("win")) or _hp_ratio < 0.5))
-    # 2026-11-26 情境化梗味旁白（用户「插入的语句一定要符合玩家当前实际情况」）：
-    # 每一句梗绑真实字段门控（敌人阵营 / 本场招式 / 战况档 / 玩家境界），
-    # 条件不满足就不出句，绝不硬塞——见 battle_flavor.py。所有字段都取自本场真实数据：
-    # 代表敌人取等级最高那位（与 foes 同源），招式/品阶取最强一击（与 💥 行同源）。
-    _foe_kind = str(max(detail, key=lambda x: int(x.get("lv") or 0)).get("kind") or "") \
-        if detail else ""
-    # 2026-11-26 黑盒 P6：斗之气阶段（realm_idx=0）是纯新手期，出「别急我在卡点/
-    # 神清气爽」这类老油条梗很违和。整段跳过梗句；升到斗者及以上才启用。
-    # 只在这里挡，battle_flavor 的纯门控与其测试保持逐字不变。
-    _realm_idx = cfg.realm_index(lv)
-    if _realm_idx > 0:
-        for _flavor_line in _flavor.flavor_lines({
-                "win": bool(res.get("win")),
-                "tier": _wt,
-                "realm_idx": _realm_idx,
-                "foe_kind": _foe_kind,
-                "move": str(high.get("move") or ""),
-                "move_tier": str(high.get("tier") or ""),
-                "has_puppet": bool(pup_hits),
-                "rounds": int(res.get("rounds") or 0),
-                "seed": _seed,
-        }):
-            lines.append("　" + _flavor_line)
+    # 2026-11-26 情境化梗味旁白：**只保留诞生口吻的兜底**。2026-11-28 起生产链路把
+    # 结算梗并进了判词行后那一槽（见上方 _praise），尾部不再追加无主旁白——旧版在这里
+    # 补一句「这一场，赢得干净 / 无奈地摇了摇头」，位置在代价和台词之后，读者莫名其妙。
     # ③ 机缘（恒定排最后，触发才出现）
     if res.get("hero_aid"):
         lines.append(txt.battle_hero_aid())
     if core.can_level(p):
         lines.append(txt.battle_ready(cfg.full_realm(lv)))
     lines.extend(_chance_lines(chance, qq))
+    # 2026-11-28 败局收尾（用户「败局就放在结尾让活着的怪讲出，嘲讽语句」）：
+    # 由**真正打赢你的那只怪**开口，台词点名本场的失败点（没斗气 / 哪招没练够 /
+    # 练满了也就这样 / 打不中 / 皮薄），不再是无主的「无奈地摇了摇头」。
+    # 必须是最后一行——前面全是数据与自己的不甘，最后才轮到对手补一刀。
+    # 没有活着的怪（detail 为空 / 全灭）时 taunt 返回空串，绝不冒认谁在说话。
+    if not res.get("win"):
+        _taunt = _verdict.taunt(_vd["case"], _seed, foe=_vd["foe"], skill=_vd["skill"])
+        if _taunt:
+            lines.append("　" + _taunt)
     # 空行一律丢掉：铺垫等「可能不出句」的段落返回空串时，别让 QQ 里多一条空白。
     return "\n".join(x for x in lines if str(x).strip())
 

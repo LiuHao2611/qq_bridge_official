@@ -122,6 +122,8 @@
 | **炼药丹雷：七品起成丹必引雷扣血、有出战傀儡 50% 全额免伤并淬炼（用户 2026-11-27 拍板三选）**。原著第920处「傀儡抗一两道五色丹雷还行、度过丹雷痴人说梦」「吸收雷霆之力的傀儡徐徐修复」是唯一依据；此前 `CRAFT_SUCCESS` 只有文案无机制=假机制，现已补真。常量/判定唯一源 `doupo/danlei.py`（`DANLEI_MIN_IDX=6`/`DAMAGE_RATE`/`GUARD_CHANCE=0.50`/`BATCH_CAP=3`），低阶 plan=None 逐字节零改动；异步落库 `danlei_cmd.py`（挡下→`puppet_core.temper` 淬炼，不额外扣雷淬石/金币）。🚨 地板 `apply_hp` 必须 `max(min(before,floor), before-hurt)`——只拦扣过头、绝不反向给残血加血；地板复用 `cfg.LOSE_HP_FLOOR` 禁另造 0.05。🚨 炼药命令组已迁 `commands_craft.py`（commands.py 破 200KB 红线），AST 结构守门扫新模块 | `tools/check_danlei.py --check`（契约全过）+ `--selftest`（8 类变异全抓）；`test_danlei.py` 9 行为测试；零回归 `test_core` 35、`test_commands` 137、`test_use_danwen` 85、`tests/test_doupo_craft_flame_aid.py` 15 |
 | **玩法细则卡 / 成傀卡必须气泡包裹，不许纯文本行平铺**（用户 2026-11-22「纯文本较多、信息密集的卡片按当前思路优化」）。盘点 13 张斗破模板：8 张已气泡/分层（人物/技能/宗门/名录/战斗/遗迹/丹方/傀儡）、`doupo_style` 是公共模块、menu/list 已结构分层（口令大字/右侧状态/等级条，不属纯文本墙）——真正纯文本平铺的只有 2 张，已改：① `doupo_help.py` 每【】组一个圆角气泡（组名靛紫粗体+竖条+分割线，组内要点折行），`_layout` 按组聚合算气泡高，2074→2474px；② `doupo_craft.py` 旧版 `return _battle.build()` 因 data 缺 rich 字段落进 **legacy 纯文本骨架**（隐藏技术债），改独立分组气泡+序号圆标+subtitle 强调条。两张都走 `_pal()` 吃新配色、boxes 自检 0 | `tmp/check_help_boxes.py`（11 组 62 盒 800×2474 PROBLEMS 0）、`tmp/check_craft_boxes.py`（3 组 18 盒 800×664 PROBLEMS 0）+ 真出图肉眼核对；`tests/test_doupo_puppet_craft_card.py::test_manifest` 静态断言改验独立气泡骨架（`def _plan`/`c.ellipse`/`_pal(t)`，反证退回 `_battle.build` 即红）；craft `TOTAL FAILED=0`；全量 40 测试文件 0 失败。`雷淬纯度 0%` 后的 `□□□□` 是 `puppet_core.dye_bar` 的 `■□`(U+25A0/25A1) 空心态，字体有真字形，非豆腐框 |
 | **每个玩家可见回包携带的按钮，唯一目的是「让玩家立刻能做下一步」，禁止默认塞主菜单、禁止挂与本次结果无关的按钮**（用户 2026-11-28 立永久纪律原话：「每个反馈给玩家可见的信息携带的按钮目的都是方便玩家操作，明白了吗」）：判据三条——① 点它能推进当前状态（入塔 → 结算 → 出塔），不是复述播报里刚做完的事；② 该结果不该出现的按钮一律不挂（塔中不挂「战斗」、塔外不挂「出塔」，没火能时「修炼」点了也只会再失败一次）；③ 按钮文字必须与播报里出现的口令逐字一致（播报写「发「修炼」结算」按钮就得是「修炼」，不许换成「查看」「继续」）。实现红线：`doupo_buttons.CARD_ACTIONS[card_key]` 是唯一真源，**同一口令的不同结果必须走状态化按钮组**——`commands.cmd_furnace_enter_state` 返回 `(播报文本, state_key)`，`button_dispatch` 用 `send_key = state_key or card_key` 发键，禁止一个口令只挂一组死按钮、禁止在 handler 里临时拼按钮数组。现行塔类五组：`cult_text`(修炼/出塔/火能) · `tower_blocked`(战斗/火能) · `tower_settle_up`(突破/修炼/出塔) · `tower_out_text`(修炼/火能/战斗) · `tower_energy_text`(修炼/换卡/战斗) | `tests/test_doupo_buttons.py` 31 项（按钮族基线 + 禁主菜单/禁自身 + dispatch plan 一致 + 入站首词派生一致 + 卡片集合一致）；`doupo/test_tower_cultivate.py` 第⑤节用 `ast` 直接读 `CARD_ACTIONS` 字面量做**第二套独立基准**（不走运行时 import，避免同一份真源自证），变异 3 组全红：按钮回退旧组 / 没火能挂错组 / 修为满不给突破组 |
+| **战斗台词必须由「对局诊断」驱动、位置写死：胜局赞叹紧跟判词行，败局嘲讽在战报最后一行由活着的怪开口点名失败点**（用户 2026-11-28 原话：「战斗播报的结尾台词恐怖如斯有点莫名其妙……这种胜局赞叹的台词应该加到『二星大斗师斗晶映体』这一句的后面……败局就放在结尾让活着的怪讲出，嘲讽语句」「败局的嘲讽要嘲讽到失败点子上」「后台要有一个对局情况分析，准确判断出失败原因或者成功原因，针对性的嘲讽或者吹捧」「有的台词确实经典出圈，但也要插对地方」）。红线四条——① 胜局赞叹**只允许**出现在判词行（`XX·XX，N 回合大捷——斗气未散。`）正下方一行，`cmd_fight` 里紧跟 `encounter_head` 之后 `lines.append`，禁止再追加到战报末尾；② 败局嘲讽**只允许**是战报最后一行，格式 `　<怪名><动作>：「……」`，说话人必须是 `res["detail"][-1]["name"]`（活到最后那只），禁止无主语的旁白式 `🥀 无奈地摇了摇头。`；③ 台词必须由真实 log 判据选出 case（`battle_verdict.analyze`），禁止按「赢/输」两态随机抽；④ 出圈台词（恐怖如斯／三十年河东／我命由我不由天）只能挂「有具体事实」的槽位（境界≥斗宗、卡点回合数、傀儡输出更高），无具体事实时宁可说「赢了就是赢了」，禁止硬插。**实现红线**：`battle_verdict.py` 是唯一诊断真源（`_PRAISE`/`_TAUNT` 每 case 2~3 句按 seed 轮换）；`battle_flavor._closing` 只留「有具体事实」三档，`closing_line()` 供结算槽单取，**具体事实的梗优先、无事实才由对局分析出句**；`taunt()` 缺 `foe` 返回空串（绝不冒认说话人）；`_skill_cap` 查不到阶位上限时 `cap=0` 让调用方闭嘴。败因优先级 `reflect > no_mp > dodged > skill_short > skill_cap > controlled > squishy > overmatched`，**`skill_short`（没满级）必须先于 `skill_cap`（已满级）判定**，否则「练得不够火候」和「满级也就这样」两套嘲讽会串台 | `tests/test_battle_text_rich.py` 44 项（`test_praise_sits_right_after_verdict`：判词 +1 行是赞叹、+2 行必须是 💥；败局判词下一行必须直接是 💥、末行必须带「」且含「怪」、`🥀` 全局不许出现；胜局 `🏅` 恰好 1 且末行不许再吹）；`tests/test_doupo_battle_flavor.py` 43 项（惨胜/败局的结算槽必须返回 `[]`，通用梗回潮即红）；`tools/check_battle_text_mutations.py` 23 组变异全红（M17 撤掉嘲讽 / M20 胜局不赞叹 / M21 赞叹挪到战报最前 + 既有 M1~M19 池内长短、越级优先等）；`tmp/battle_report_probe.py` 造 8 种真实形状 res 出整段战报肉眼核对 |
+| **跑变异/注错类脚本后必须立刻 `git status --porcelain` 核对源码干净，不能只看 `MUTATION_TOTAL`**（2026-11-28 真实事故：`tools/check_battle_text_mutations.py` 在 M17 锚点命中 0 次时提前 `return 2`，绕过 `finally` 恢复，把 `doupo_text.py` 的 `_quote` 永久改成「我命由我不由天」，导致后续 BASELINE 集体误报「池外台词」、还差点被当成新 bug 去查） | 脚本自身：每处替换走 `try/finally` 恢复 + 运行结束打印 `git status --porcelain`；**人工判据**：`MUTATION_TOTAL == CAUGHT` **且** `git status` 只剩本轮预期改动文件，两条都满足才算通过；一旦发现源码被改坏，用 `git checkout -- <file>` 还原，禁止手工「改回去」（手改容易留半截） |
 
 ---
 
@@ -3635,3 +3637,90 @@ v0.1 只改除数不够：同为"未执行评审"，v0.2 覆盖写入 `docs/经�
   用 `git worktree add` 拉 HEAD 干净副本跑同样 11 个文件，失败清单**逐条同名 20 条** ⇒ 与本次改动无关，
   别再当成回归。其中 `test_doupo_choice_ttl` 报的 `commands.py:551`「30 分钟」是丹纹赐福文案，属既有问题。
 - 本机跑 `tests/` 整目录会被 `conftest` 的 nonebot 依赖打断（22 个 collection error），只能按文件清单跑。
+
+
+---
+
+## 变更记录 · 2026-11-28　战斗台词重排 + 对局诊断驱动嘲讽/吹捧（用户「恐怖如斯有点莫名其妙」）
+
+### 用户的四条要求（原话拆解）
+1. 「恐怖如斯」这种**胜局赞叹**应该加到 `二星大斗师斗晶映体` 这一句后面；
+2. **败局**放结尾、由**活着的怪**讲出嘲讽；
+3. 嘲讽要**嘲讽到失败点子上**（没斗气硬凿 → 嘲「就这点家底也敢叫嚣、回去多炼几炉丹」；斗技没满级打不动 → 嘲「哪门斗技练得不够火候」；斗技**已满级**还打不动 → 嘲「练到顶也就这样／阶位太低」）；
+4. 「后台要有一个对局情况分析，准确判断出失败原因或者成功原因」；出圈台词留着但**必须插对地方**。
+
+### 改前是什么样（根因，不是「看起来怪」而是真错位）
+- 「恐怖如斯」来自 `battle_flavor._closing` 第 8 档，判据只有 `win and tier in ("great","sweep")`——**跟境界毫无关系**，一星斗者大捷也会说「斗宗强者，恐怖如斯」；
+- 它被 `cmd_fight` 追加在**战报最末**（在掉血代价、`🩹` 提示、出圈 quote 之后），所以读完像凭空冒出来一句；
+- 败局嘲讽是 `doupo_text.mock_line` → `🥀 无奈地摇了摇头。`：**中段出现、没有主语、跟输在哪完全没有关系**，赢也那句输也那句。
+
+### 改后结构（`cmd_fight` 里的真实行序）
+```
+chapter_line → scene_line → ⚔️ 遭遇 + 判词行（二星大斗师·斗晶映体，6 回合大捷——斗气未散。）
+→ 【胜局赞叹】← 新增，紧贴判词
+→ temp_buff → 丹纹 → 💥 → climax → npc → 折叠 → 傀儡 → 收益 → 🏅 → 掉落 → 代价
+→ 🩹（仅败局）→ 出圈 quote → 机缘/突破/机遇
+→ 【败局嘲讽】← 新增，战报最后一行，怪开口
+```
+
+### 对局诊断（`battle_verdict.analyze`，唯一真源）
+判据**全部取自真实 log**，不猜、不按输赢两态随机。
+- 胜因 `clutch`(残血<20%) → `crush`(敌等级≥我+2) → `burst`(单击≥敌血50%) → `puppet`(傀儡伤害>本人) → `lucky`(hero_aid/fortune) → `potion`(嗑药≥2) → `clean`(taken≤0) → `plain`；
+- 败因优先级 `reflect`(反伤占敌伤≥35%) → `no_mp`(普攻占比≥40% 且斗气枯竭) → `dodged`(被闪≥3 或≥25%) → `skill_short`(主力技没满级) → `skill_cap`(主力技已满级) → `controlled`(被控≥2) → `squishy`(敌单次伤害≥1.2×我满血) → `overmatched`；
+- **`skill_short` 必须先于 `skill_cap`**：这两档的嘲讽语义相反（「没练够」vs「练满了也就这样」），顺序反了就会串台；
+- 无任何出手记录 → `case=""` 直接返回（宁可不说话，也不瞎猜）；
+- `_skill_cap` 查不到阶位上限时返回 `cap=0`，调用方据此闭嘴——不编造「你练得不够」这种可能不成立的指责。
+
+### 台词纪律
+- `_PRAISE` 8 档共 16 句，纯旁白**不加引号**；`_TAUNT` 8 档共 18 句，一律 `{foe}<动作>：「……」`，`{skill}` 填本场真实主力技名；
+- `taunt()` 缺 `foe` 直接返回空串——**绝不冒认谁在说话**；
+- 出圈台词优先级：具体事实的梗（傀儡/卡点/斗宗）> 对局分析出的吹捧。`battle_flavor._closing` 因此只保留「有具体事实」三档，通用句全删（`侥幸罢了`/`神清气爽`/`恐怖如斯` 的通杀档），`flavor_lines` 的尾部注入整段下线；
+- 直接效果：斗者大捷说「这一场，赢得干净」，一星斗宗大捷才说「斗宗强者，恐怖如斯」。
+
+### 真回包（`tmp/battle_report_probe.py`，8 种场景）
+```
+── 胜局 · 二星大斗师
+⚔️ 遭遇 2 敌——嗜血鼠等2名拦在去路上。
+　二星大斗师·斗晶映体，6 回合大捷——斗气未散。
+　这一场，赢得干净。
+💥 【高阶·劈山掌】气劲贯体，2600 点砸进——它眼里那点凶光，散了个干净。
+
+── 胜局 · 一星斗宗
+　一星斗宗·踏虚而立，6 回合大捷——斗气未散。
+　斗宗强者，恐怖如斯。
+
+── 败局 · 斗气枯竭硬凿
+　二星大斗师·斗晶映体，6 回合力竭·斩0/2——气机溃散。
+……　「三十年河东，三十年河西，莫欺少年穷！」
+　岩蛇抖了抖爪子：「拳头砸了半晌，挠痒呢？回去多炼几炉丹，先把气养足。」
+
+── 败局 · 斗技火候不够（碎石掌 3/5）
+　岩蛇嗤笑：「『碎石掌』这点火候也敢拿出来？再多喂几炉焚血散吧。」
+
+── 败局 · 满级也就这样（碎石掌 5/5）
+　岩蛇冷冷道：「招是好招，可惜阶位太低，压不住我。换本高阶的再来。」
+```
+出圈 quote（三十年河东）现在落在「代价之后、嘲讽之前」，读起来是玩家自己不服，接着被怪一句话堵回去——顺序才对。
+
+### 三条过期断言必须反转（它们原本钉的就是这次的 bug）
+| 用例 | 旧断言 | 新断言 |
+|---|---|---|
+| `test_lose_adds_exactly_two_lines` | 败局必须恰好 +2 行（`🥀` 一类的通用嘲讽） | 删除，换成 `test_praise_sits_right_after_verdict`：判词 +1 行是赞叹、+2 行必须是 💥；败局判词下一行必须是 💥 |
+| `test_defeat_has_mock_then_encourage` | `🥀` 必须出现、末行是鼓励 | 末行必须带 `「」` 且含「怪」，`🥀` 全局不许出现，`🩹` 只有一条且在嘲讽之前 |
+| `test_win_glory_and_lose_mock_are_exclusive` | 胜局末行可能是赞叹 | 胜局 `🏅` 恰好 1 且末行不许再吹 |
+
+反向也要钉：`tests/test_doupo_battle_flavor.py` 把「惨胜出惨胜梗」「败局结算槽出句」两条改成断言返回 `[]`——通用梗一旦回潮立刻红。
+
+### 变异 22 组（新增 3 组，全红 → 还原全绿）
+M17 撤掉败局嘲讽（`_taunt = ""`）→ 红1 · M20 胜局不赞叹（`if False:`）→ 红1 · M21 赞叹位置错（`lines.insert(0, ...)`）→ 红1，
+与既有 M1~M19（池内长短、越级优先、阈值翻转等）合计 **MUTATION_TOTAL=23 CAUGHT=23 MISSED=0**。
+
+### 事故与教训（已升级为规则表红线）
+本轮跑变异时脚本在 M17 锚点命中 0 次的路径上提前 `return 2`，绕过 `finally`，把 `doupo_text.py` 的 `_quote` 留成「我命由我不由天」。
+后果：下一次 BASELINE 集体报「第 1 章出现池外台词」，看起来像新 bug。用 `git diff` 才定位到是脚本残留。
+⇒ 规矩：**跑完变异脚本第一件事是 `git status --porcelain`**，`MUTATION_TOTAL == CAUGHT` 且工作区只剩本轮预期文件，两条都满足才算通过。
+
+### 回归与既有基线
+- `tests/test_battle_text_rich.py` **44 passed**、`tests/test_doupo_battle_flavor.py` **43 passed**；
+- `test_commands` **141/141**、`test_core` **35/35**、`test_offline_cap` **6/6**；
+- 全量 63 个文件 **707 passed / 20 failed / 2 skipped**，20 条与既有基线**逐条同名**（`alchemy_grade`3 `choice_ttl`1 `code_explain`2 `flame_beast`2 `item_card`2 `puppet_anchor`2 `puppet_guard`2 `sect_p0`1 `sect_p1`2 `skill_effects_land`2 `temp_buff`1）⇒ 零新增红。

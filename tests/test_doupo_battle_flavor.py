@@ -99,7 +99,10 @@ got = lines(win=False, tier="crush", realm_idx=3)
 check("败局即使tier=crush也不出越级梗", all(x not in CRUSH for x in got), str(got))
 
 # ---- 4. 惨胜门控 ----
-check("惨胜出惨胜梗池", lines(win=True, tier="narrow", realm_idx=3)[0] in NARROW)
+# 2026-11-28 反转：惨胜/大捷这类「只由战况档决定」的通用句停用，改由
+# battle_verdict 的对局分析出（更针对：越级/爆发/傀儡/嗑药/残血翻盘）。
+check("惨胜不再出通用梗（交给对局分析）",
+      lines(win=True, tier="narrow", realm_idx=3) == [])
 check("大捷不出惨胜梗", all(x not in NARROW
       for x in lines(win=True, tier="great", realm_idx=3)))
 
@@ -124,9 +127,10 @@ for lv in (1, 10, 55, 63):
           all(x not in REALM for x in got), str(got))
 
 # ---- 7. 败局 + 双槽 + 宁可不放 ----
-check("败局出轻蔑但不越级/不境界",
-      LOSE.intersection(lines(win=False, tier="lose", realm_idx=0))
-      and not CRUSH.intersection(lines(win=False, tier="lose", realm_idx=0)))
+# 2026-11-28 反转：败局的无主轻蔑已废，改由活着的怪开口（battle_verdict）；
+# 结算槽在败局一律不出句，更不许越级/境界梗乱入。
+check("败局结算槽不出句",
+      lines(win=False, tier="lose", realm_idx=0) == [])
 two = lines(foe_kind="魂殿", tier="crush", realm_idx=3, seed=0)
 check("双槽：魂殿登场+越级结算各一句", len(two) == 2 and two[0] in EVIL and two[1] in CRUSH,
       str(two))

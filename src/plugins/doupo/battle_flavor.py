@@ -46,7 +46,6 @@ _REALM_DOUZONG = 7
 _REALM_BANSHENG = 10
 
 _TIER_CRUSH = "crush"
-_TIER_NARROW = "narrow"
 
 
 def _ctx_int(ctx: dict, key: str) -> int:
@@ -99,9 +98,10 @@ def _closing(ctx: dict) -> str:
         return _pick(("侥幸罢了。",
                       "这一击，竟撕裂了虚空。他发出的斗气波动，竟然比我还强。"), seed)
 
-    # 3) 惨胜险胜：血掉一半以下才赢，才有「神清气爽 / 想说一句猖狂」的反差。
-    if win and tier == _TIER_NARROW:
-        return _pick(("神清气爽。", "怎么很想说一句猖狂。"), seed)
+    # 3) 惨胜/大捷/败局的**通用情绪句**已在 2026-11-28 停用：它们只由战况档决定，
+    #    与「这场到底怎么赢/怎么输」无关，正是用户说的「莫名其妙」。这类场景改由
+    #    ``battle_verdict`` 的对局分析出句（目标更具体：越级、爆发、傀儡、嗑药…）。
+    #    梗池只在**有具体事实**时说话，见下。
 
     # 4) 傀儡助阵：本场真有傀儡出手才出召唤物梗。
     if has_puppet:
@@ -112,20 +112,12 @@ def _closing(ctx: dict) -> str:
         return "别急，我在卡点。"
 
     # 6) 斗宗及以上境界：作为无主旁白出，低境界绝不出。
-    #    放在大捷之前——「恐怖如斯」那批境界句不该被顺风局的普通梗抢走。
     if realm_idx >= _REALM_DOUZONG:
         if realm_idx >= _REALM_BANSHENG:
             return "半圣之下，皆为蝼蚁。"
         return "斗宗强者，恐怖如斯。"
 
-    # 7) 败局：真输了才有轻蔑旁白（不加引号，不冒认角色）。
-    if not win:
-        return _pick(("无奈地摇了摇头。", "别急，我在卡点。"), seed)
-
-    # 8) 大捷/无伤（仅低境界）：顺风局按种子轻描一句，梗味更足。
-    #    句子专属本池，不与傀儡池/惨胜池/越级池复用（避免门控串味）。
-    if win and tier in ("great", "sweep"):
-        return _pick(("恐怖如斯。", "这一场，赢得干净。"), seed)
+    return ""
 
     return ""
 
@@ -134,6 +126,11 @@ def flavor_lines(ctx: dict) -> list[str]:
     """返回至多两行梗味旁白：登场口吻 + 结算口吻，各自独立门控。
 
     任一槽不满足就少一行，绝不用通用句回填（禁兜底）。同 ctx 必得同结果。
+
+    🚨 2026-11-28 起生产链路**不再用这个入口**：胜局赞叹改由
+    ``battle_verdict.praise`` 出（对局分析驱动），旧的结算梗降级为它的兜底，
+    走 ``closing_line`` 单独取；败局改由活着的怪开口嘲讽。保留本函数只为
+    兼容既有单元测试与「一场两槽」的语义自证。
     """
     if not isinstance(ctx, dict):
         return []
@@ -147,6 +144,19 @@ def flavor_lines(ctx: dict) -> list[str]:
         if line:
             out.append(line)
     return out
+
+
+def closing_line(ctx: dict) -> str:
+    """只要「结算口吻」这一槽（生产链路用；见 ``flavor_lines`` 的 2026-11-28 注记）。
+
+    空 ctx 或判定字段全缺时返回空串——与 ``flavor_lines`` 同一道守卫，不另开口径。
+    """
+    if not isinstance(ctx, dict):
+        return ""
+    if not (_ctx_str(ctx, "tier") or _ctx_str(ctx, "foe_kind")
+            or _ctx_str(ctx, "move") or _ctx_int(ctx, "rounds")):
+        return ""
+    return _closing(ctx)
 
 
 def flavor_line(ctx: dict) -> str:
