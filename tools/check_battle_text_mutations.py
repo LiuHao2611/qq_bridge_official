@@ -294,7 +294,7 @@ MUTATIONS = [
     dict(
         mid="M31 人型反派丢掉身份称呼",
         path=VERDICT,
-        old=['    who = "你" if beast else "小子"'],
+        old=['    who = "" if beast else "小子，"'],
         new=['    who = "你"'],
         why="鹜护法那种「小子，乖乖的……本护法……」的身份感没了，人人一个口吻",
     ),

@@ -520,7 +520,7 @@ _SPEECH: dict[str, tuple[str, ...]] = {
     "no_mp": (
         "斗气都没有了，也敢来送死？",
         "哼，就这点斗气，也敢叫嚣？",
-        "回去炼丹吧，{you}不配用斗技。",
+        "{you}回去炼丹吧，不配用斗技。",
         "气都干了还往前撞？找死！",
         "靠两条胳膊硬凿，不知所谓！",
         "拳头砸了半晌，挠痒呢？",
@@ -528,7 +528,7 @@ _SPEECH: dict[str, tuple[str, ...]] = {
     "skill_short": (
         "你那手{skill}，火候还差得远！",
         "哼，这招也敢拿出来？",
-        "{you}，把招练熟了再来！",
+        "{you}把招练熟了再来！",
         "{skill}？挠痒都嫌软！",
         "不自量力，就凭这门破招？",
         "这点斗技，我闭着眼都能接！",
@@ -640,6 +640,6 @@ def taunt(case: str, seed: int = 0, foe: str = "", skill: str = "",
         return ""
     acts = _BEAST_ACTIONS if beast else _HUMAN_ACTIONS
     action = _pick(acts, (int(seed) ^ 0x85EBCA6B) & 0x7FFFFFFF)
-    who = "你" if beast else "小子"
+    who = "" if beast else "小子，"
     spoken = speech.replace("{skill}", str(skill or "")).replace("{you}", who)
     return f"{foe}{action}：「{spoken}」"
