@@ -574,11 +574,8 @@ def encounter_exp_share(budget: int, enemy_count: int, wins: int) -> int:
     return int(base * w + (rem if w >= 1 else 0))
 
 
-#: C3 离线收益封顶（2026-11-27）：被动修炼按真实时间累计，但**最多结算 8 小时**。
-#: 旧版挂机三天回来一次性领三天修为 —— 手离键盘也有全额产出，与「在线按分钟修」
-#: 的节奏完全割裂，连续打卡也失去意义（清单 C3「离线收益全满」）。
-#: 🚨 超出部分**直接丢弃**，不攒着下次领：攒着只是把封顶改成延迟发放，
-#: 玩家挂一周回来仍能一次性领满，等于没封。
+#: C3 离线收益封顶（2026-11-27）：被动修炼最多结算 8 小时。旧版挂机三天领三天。
+#: 🚨 超出部分**直接丢弃**，不攒着下次领 —— 攒着只是把封顶改成延迟发放，等于没封。
 CULTIVATE_OFFLINE_CAP_SEC = 8 * 3600
 
 
@@ -589,11 +586,15 @@ def settle(p, now_ts=None) -> dict:
     为 True 供文案层提示「只按八小时结算」。
     """
     now_ts = float(time.time() if now_ts is None else now_ts)
+    # 2026-11-28：塔中时间只由 alchemy_settle 付款，这里让位（同一段不许发两份）。
+    if p.get("__tower_in"):
+        p["last_settle"] = now_ts
+        return {"gain": 0, "minutes": 0, "offline_capped": False}
     elapsed = max(0.0, now_ts - float(p.get("last_settle", now_ts)))
     cap_sec = float(CULTIVATE_OFFLINE_CAP_SEC)
     capped = elapsed > cap_sec
     billable = min(elapsed, cap_sec)
-    # 2026-11-28 修炼平衡：速率按境界分档（前中期快、后期慢），见 cultivate_balance。
+    # 2026-11-28 速率按境界分档（前中期快、后期慢），见 cultivate_balance。
     # lv=1 精确等于 CULTIVATE_PER_MIN（既有测试锚点不变）；塔修同源，乘心火倍率。
     rate = _cult.cultivate_rate(int(p.get("lv", 1)))
     gain = int(billable / 60.0 * rate * flame_exp_mult(p))

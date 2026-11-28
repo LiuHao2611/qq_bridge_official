@@ -188,6 +188,55 @@ def test_no_energy_exits_instead_of_silently_burning_time():
     assert not int(st["in_tower"]), "火能耗尽还把玩家挂在塔里"
 
 
+# ---------------------------------------------------------------------------
+# 4. 塔中时间只由塔修付款（2026-11-28 实测双发）
+# ---------------------------------------------------------------------------
+def test_idle_settle_yields_while_in_tower():
+    """塔里待着时卡片渲染仍会走 core.settle —— 静修必须让位，否则同一段发两份。"""
+    p = _player(29)
+    p["exp"] = 0
+    p["last_settle"] = T0 - 30 * 60
+    p["__tower_in"] = 1
+    r = core.settle(p, T0)
+    assert r["gain"] == 0 and int(p["exp"]) == 0, "塔中还在发静修修为（双发）"
+    assert float(p["last_settle"]) == T0, "让位时没把静修时钟推到当下"
+
+
+def test_idle_settle_pays_outside_tower():
+    p = _player(29)
+    p["exp"] = 0
+    p["last_settle"] = T0 - 30 * 60
+    p["__tower_in"] = 0
+    r = core.settle(p, T0)
+    assert r["gain"] > 0 and int(p["exp"]) == r["gain"]
+
+
+def test_store_marks_tower_state_and_never_persists_mirror():
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="doupo_tower_")
+        path = os.path.join(tmp, "doupo.json")
+        store = Store(path)
+        qq = "100001"
+        await store.put_player(_player(29, qq=qq))
+        got = await store.get_player(qq)
+        assert got.get("__tower_in") == 0, "塔外却被标成塔中（静修会被冻结）"
+        await store.set_tower_state(qq, _st(energy=100, in_tower=1))
+        got = await store.get_player(qq)
+        assert got.get("__tower_in") == 1, "set_tower_state 没同步塔中标记"
+        await store.set_tower_state(qq, _st(energy=100, in_tower=0))
+        assert (await store.get_player(qq)).get("__tower_in") == 0
+        # 关键：拿着**带镜像键**的 p 再存一次，才能验出「镜像是否落库」
+        await store.put_player(await store.get_player(qq))
+        # 镜像键不许落库：进程重启后由权威表回填，落库只会变成过期副本
+        import sqlite3
+        con = sqlite3.connect(os.path.splitext(path)[0] + ".sqlite")
+        raw = con.execute("select data from players where qq=?", (qq,)).fetchone()[0]
+        con.close()
+        assert "__tower_in" not in raw, "内部镜像键被写进存档了"
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     fns = sorted(k for k in globals() if k.startswith("test_"))
     fails = 0

@@ -145,8 +145,13 @@ REGEN_NOTICE: dict[str, dict] = {}
 
 
 def _dumps(p: Dict[str, Any]) -> str:
-    """压缩序列化（稳定输出：同一份内容永远同一串，用于 diff 判等）。"""
-    return json.dumps(p, ensure_ascii=False, separators=(",", ":"))
+    """压缩序列化（稳定输出：同一份内容永远同一串，用于 diff 判等）。
+
+    ``__`` 开头的键是**进程内镜像**（如 ``__tower_in``），不进存档：它们由
+    ``get_player`` 每次从权威表回填，落库只会变成一份会过期的副本。
+    """
+    return json.dumps({k: v for k, v in p.items() if not str(k).startswith("__")},
+                      ensure_ascii=False, separators=(",", ":"))
 
 
 class Store:
@@ -160,6 +165,10 @@ class Store:
         self._data: Dict[str, Any] = {"players": {}, "groups": []}
         #: 与磁盘一致的快照（qq/group -> 序列化串），save() 用它算 diff
         self._snap: Dict[str, Dict[str, str]] = {"players": {}, "groups": {}}
+        #: 塔中标记缓存（2026-11-28）：`get_player` 要给「静修让位塔修」提供
+        #: 权威的 in_tower，但不能每条消息都查一次 alchemy_tower —— 这里按
+        #: qq 缓存，`set_tower_state` 写库时同步更新，进程重启后首次读取回填。
+        self._tower_in: Dict[str, int] = {}
         self._loaded = False
         self._db_ready = False
 
@@ -442,9 +451,26 @@ class Store:
         async with self._lock:
             p = self._data["players"].get(key)
         if p is not None:
+            p["__tower_in"] = await self.tower_in_cached(key)
             await self._maybe_regen(key, p)
             await self._sweep_buffs(p)
         return p
+
+    async def tower_in_cached(self, qq: str) -> int:
+        """这个玩家是否在塔中（1/0）。供 ``core.settle`` 让静修为塔修让位。
+
+        2026-11-28 事故：塔里待着的时候，卡片渲染仍会走 ``core.settle``，
+        把同一段时间按**静修**发一份，塔修结算再发一份 —— 实测 25 分钟被发了
+        两次（+1446 静修 +1692 塔修）。塔中时间只能有一个付款方。
+        """
+        key = str(qq)
+        if key not in self._tower_in:
+            try:
+                st = await self.tower_state(key)
+                self._tower_in[key] = 1 if int(st.get("in_tower") or 0) else 0
+            except Exception:  # noqa: BLE001 — 读不到就当不在塔（宁可多给，不冻结）
+                return 0
+        return int(self._tower_in.get(key) or 0)
 
     async def _sweep_buffs(self, p: dict) -> None:
         """限时增益到期清扫（2026-11-24，见 temp_buff 模块头）。
@@ -724,6 +750,8 @@ class Store:
             except Exception as e:  # noqa: BLE001
                 raise StoreError("塔修状态写入失败（%s）：%s"
                                  % (type(e).__name__, str(e)[:200])) from e
+        # 与库同步（2026-11-28）：静修让位判断只认这份缓存，别让它比库旧。
+        self._tower_in[str(qq)] = 1 if int(st.get("in_tower") or 0) else 0
 
     # ---- 自动调息的时间基准 ----
     async def regen_last(self, qq: str) -> float:
