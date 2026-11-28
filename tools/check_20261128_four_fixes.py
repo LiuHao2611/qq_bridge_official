@@ -146,6 +146,10 @@ def sec_c_cloud_skill() -> None:
     ys = book.SKILL_BOOK.get("风之极·陨杀", {})
     check("C5 风之极·陨杀 已补云山归属（原著为主）",
           "云山" in (str(ys.get("source", "")) + str(ys.get("novel", "")) + str(ys.get("desc", ""))))
+    # C7（2026-11-28 二次修）：陨杀必须真的挂进云岚宗归属表，否则「宗门斗技」看不到。
+    # 上轮只在 novel 补了文字、忘了挂表，用户当场抓到——这里钉死防回归。
+    check("C7 风之极·陨杀 挂在云岚宗表（宗门斗技可见）",
+          "风之极·陨杀" in book.FACTION_SKILLS["yunlanzong"])
     check("C6 云岚宗四门未破坏图鉴总数（原 195 → 199）", len(book.SKILL_BOOK) == 199, str(len(book.SKILL_BOOK)))
 
 
@@ -184,6 +188,13 @@ def selftest() -> None:
     book.FACTION_SKILLS["yunlanzong"] = [x for x in backup if x != "风壁"]
     try:
         cases.append(("C 撤掉风壁归属", not _probe(lambda: sec_c_cloud_skill())))
+    finally:
+        book.FACTION_SKILLS["yunlanzong"] = backup
+
+    # C7: 从 yunlanzong 撤掉陨杀（用户当场抓到的漏挂）
+    book.FACTION_SKILLS["yunlanzong"] = [x for x in backup if x != "风之极·陨杀"]
+    try:
+        cases.append(("C7 撤掉陨杀云岚宗归属", not _probe(lambda: sec_c_cloud_skill())))
     finally:
         book.FACTION_SKILLS["yunlanzong"] = backup
 

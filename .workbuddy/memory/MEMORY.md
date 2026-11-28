@@ -33,4 +33,5 @@
 - 菜单条数真值 **58**：`test_commands` 与 `test_duel` 两份断言必须同改。
 - `config.py` 贴 200KB 红线：pre-commit 按工作区 CRLF 字节算(3191 行)，新数值拆独立模块+re-export（如 `weapon_curve.py`）。
 - **斗技图鉴三文件**：`skill_book_schema.py`/`skill_book_data.py`(180KB)/`skill_book.py`。下一批扩斗技前先按宗门段拆 `skill_book_data_*.py`；改斗技只改 data，`BRIEFS` 漏登记→RuntimeError。
+- 🚨 **补斗技三处缺一不可**（11-28 陨杀漏挂教训）：`BOOK_ROWS` 定义一次 + `FACTION_SKILLS[宗门]` 挂表 + `BRIEFS` 短释。`cmd_faction_skills`→`core.skill_pool`→`skills.catalog` 只读 `FACTION_SKILLS`，**只在 novel 补归属文字不挂表 = 宗门斗技里看不到**。同名技可跨宗共享归属（BOOK_ROWS 不重复即可，FACTION_SKILLS 多宗收录合法）。守门 `tools/check_20261128_four_fixes.py` C7 钉死。
 - 游戏侧模块红线见 `MEMORY_REDLINES.md`；运维六类故障剧本/危险操作黑名单见 `docs/生产环境说明_手机服务器_2026-11-21.md`(13章唯一权威)。当日细节见 `YYYY-MM-DD.md`。
