@@ -39,7 +39,7 @@ _PLAN: dict[str, tuple[str, str, str]] = {
     # cmd               : (commands 函数,   参数形态,  card_key 或 "")
     "入道": ("cmd_enter", "enter", "enter_text"),  # 已在群中→返回提示；不重复建号
     "人物": ("cmd_panel", "qq", "panel"),
-    "修炼": ("cmd_cultivate", "qq", "cult_text"),
+    "修炼": ("cmd_furnace_enter", "qq", "cult_text"),  # 2026-11-28 修炼=入塔，不再静修+提示
     "突破": ("cmd_break", "qq", "cult_text"),
     "战斗": ("cmd_fight", "qq", "fight_text"),
     "战斗评价": ("cmd_battle_comment", "qq", "battle_text"),

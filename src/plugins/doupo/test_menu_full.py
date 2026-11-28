@@ -390,7 +390,7 @@ CASES = [
     dict(id="03_panel", text="人物", img="png", must=[], ban=[]),
     # 2026-11-16 卡片化：帮助=44 行全静态细则 → 玩法卡；文本断言移到 test_card.py 同源守门
     dict(id="04_help", text="帮助", img="png", must=[], ban=[]),
-    dict(id="05_cult", text="修炼", img=None, must=["修为"], ban=[]),
+    dict(id="05_cult", text="修炼", img=None, must=["火能"], ban=[]),  # 2026-11-28 修炼=入塔
     dict(id="06_break", text="突破", img=None, must=["突破成功", "境界突破", "成就【斗帝】"],
          ban=["修为不足"], prep="break"),
     dict(id="07_fight", text="战斗", img=None, must=["遭遇"], ban=["调息"], prep="fight"),

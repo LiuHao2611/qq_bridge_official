@@ -38,6 +38,7 @@ from . import skill_effects as fx
 from . import skill_rank as rank_mod
 from . import danwen as dw
 from . import flame_view as fview
+from . import flame_milestone as milestone
 
 log = logging.getLogger("qq_bridge.doupo.card")
 
@@ -868,6 +869,26 @@ def build_flames_data(p: dict) -> dict:
 
     rows: list[dict] = []
     owned: list[dict] = []
+
+    # 2026-11-28 用户「异火里程碑没显示在异火卡里，我怎么看里程」：
+    # 卡面顶部给一条里程碑进度行——当前等级总和、当前永久加成、下一档门槛与差距。
+    # 只显示「当前档 + 下一档」（用户「不用全部显示，知道进度就行」），不铺 8 档。
+    _ms_lv = milestone.milestone_level(p)
+    _gate, _pct = milestone.tier_of(_ms_lv)
+    _gap, _next_gate = milestone.next_tier(p)
+    if _gap:
+        _ms_note = ("距下一档还差 %d 级（%d 级 → 全属性 +%d%%）"
+                    % (_gap, _next_gate, int(round(dict(milestone.MILESTONE_TIERS)[_next_gate] * 100))))
+    else:
+        _ms_note = "已达最高里程碑"
+    rows.append({
+        "title": "🔥 火焰里程碑",
+        "right": "%d 级 · 全属性 +%d%%" % (_ms_lv, int(round(_pct * 100))),
+        "head": True,
+        "sub": "当前档 %d 级 → +%d%%　%s" % (
+            _gate, int(round(_pct * 100)), _ms_note),
+        "note": "",
+    })
 
     def _lv_right(lv: int) -> str:
         return f"{lv}/{cfg.FLAME_MAX_LV} 级" + ("（圆满）" if lv >= cfg.FLAME_MAX_LV else "")

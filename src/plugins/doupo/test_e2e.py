@@ -276,7 +276,7 @@ async def main():
     await fire("入道后 前缀 @机器人 → 人物卡", mk_group(A, "人物", prefix_at_bot=True), None, expect_image=True)
     await fire("入道后 前缀 # → 人物卡", mk_group(A, "#人物"), None, expect_image=True)
     await fire("入道后 前缀 空格 → 人物卡", mk_group(A, "  人物"), None, expect_image=True)
-    await fire("修炼", mk_group(A, "修炼"), "修为")
+    await fire("修炼=入塔", mk_group(A, "修炼"), "火能")  # 2026-11-28 修炼直接进天焚炼气塔
     await fire("突破（修为不足）", mk_group(A, "突破"), "修为不足")
     await fire("战斗", mk_group(A, "战斗"), "遭遇")
     await fire("战斗（CD 中）", mk_group(A, "战斗"), "调息")
@@ -368,7 +368,7 @@ async def main():
 
     # prove-it 自举：fire(expect_image=True) 必须真的拦住「只回纯文本却声称出图」。
     # 把 fire 放宽成旧写法，下面这条 STATIC 就会 FAIL —— 防止「假通过」悄悄回归。
-    # 用「修炼」（纯文本口令）做探针：帮助已改卡片，不能再用它当"纯文本"样本。
+    # 用「修炼」（=入塔，仍是纯文本口令）做探针：帮助已改卡片，不能再用它当"纯文本"样本。
     await fire("SELF 假出图", mk_group(A, "修炼"), None, expect_image=True)
     _label, _ok, _detail = RESULTS.pop()
     RESULTS.append(("STATIC expect_image 会拒绝纯文本回复",
@@ -385,7 +385,7 @@ async def main():
     await fire("私聊 斗破菜单（设模式）", mk_private(C, "斗破菜单"), None, expect_image=True)
     await fire("私聊 入道", mk_private(C, "入道"), "玄重尺")
     await fire("私聊 人物", mk_private(C, "人物"), None, expect_image=True)
-    await fire("私聊 修炼", mk_private(C, "修炼"), "修为")
+    await fire("私聊 修炼=入塔", mk_private(C, "修炼"), "火能")
     await fire("私聊 战斗", mk_private(C, "战斗"), "遭遇")
     await fire("私聊 帮助", mk_private(C, "帮助"), None, expect_image=True)  # 2026-11-16 玩法卡
     await fire("私聊 抢（无对象）", mk_private(C, "抢"), "用法")

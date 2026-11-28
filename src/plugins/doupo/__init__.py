@@ -295,7 +295,10 @@ cult = on_regex(_pat(r"(?:修炼|静修|打坐)"), priority=PRI, block=True, rul
 async def _(event: Event):
     event = view(event)  # 2026-11-16 双通道兼容（官方=openid/NapCat=QQ号）
     await _need_group(event, cult)
-    await cult.finish(await commands.cmd_cultivate(store, str(event.user_id)))
+    # 2026-11-28 用户第二次纠正：「我发修炼怎么还是没入塔，非要多此一举」。
+    # 「修炼 / 静修 / 打坐」直接进天焚炼气塔（=「入塔」），不再走静修+一句入塔提示。
+    # 照塔的规矩来：没火能就提示去领/战斗获取，不回落静修（用户拍板）。
+    await cult.finish(await commands.cmd_furnace_enter(store, str(event.user_id)))
 
 
 brk = on_regex(_pat(r"(?:突破|晋升|升星)"), priority=PRI, block=True, rule=_mode_is("doupo"))
